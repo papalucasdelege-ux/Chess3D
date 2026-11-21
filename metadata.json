@@ -1,0 +1,6 @@
+{
+  "name": "Chess3D",
+  "description": "3D chess studio featuring sculpted Staunton pieces, real-time WebSocket multiplayer, five procedural board skins, and an integrated multi-PV analysis engine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
