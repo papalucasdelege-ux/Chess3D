@@ -3,33 +3,37 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Chess3D — 3D Chess, Multiplayer & Analysis Engine</title>
+    <title>ChessAngel3D</title>
     <meta
       name="description"
-      content="3D chess studio featuring sculpted Staunton pieces, real-time WebSocket multiplayer, five procedural board skins, and an integrated multi-PV analysis engine."
+      content="3D wood-carved Staunton chess game featuring Chess Angel with sweet voice commentary, 3D calculation-tree previews, live hints, multiplayer, and replays."
     />
-    <meta property="og:title" content="Chess3D — 3D Chess, Multiplayer & Analysis Engine" />
+    <meta property="og:title" content="ChessAngel3D" />
     <meta
       property="og:description"
-      content="Play 3D chess with sculpted Staunton pieces, live multiplayer rooms, custom board skins, and real-time multi-PV engine analysis."
+      content="3D wood-carved Staunton chess game featuring Chess Angel with sweet voice commentary, 3D calculation-tree previews, live hints, multiplayer, and replays."
     />
     <meta property="og:type" content="website" />
+    <meta property="og:image" content="/assets/aistudio/chess3D-angel_414f5812.png" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="theme-color" content="#101318" />
+    <meta name="theme-color" content="#000000" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Chess3D" />
+    <meta name="apple-mobile-web-app-title" content="ChessAngel3D" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png" />
+    <link rel="shortcut icon" type="image/png" href="/assets/aistudio/chess3D-angel_414f5812.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
       rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
     />
   </head>
-  <body class="bg-[#0e1116] text-[#f3f1ec] antialiased selection:bg-[#c89d54]/30 selection:text-[#f8f5ef] overflow-hidden">
+  <body class="bg-black text-[#f3f1ec] antialiased selection:bg-[#c89d54]/30 selection:text-[#f8f5ef] overflow-hidden">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

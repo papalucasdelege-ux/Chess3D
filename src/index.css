@@ -21,6 +21,22 @@
   }
 }
 
+/* Explicit absolute viewport sizing for WebGL container (prevents 0x0 collapse on Android/mobile) */
+.webgl-viewport-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  min-width: 1px;
+  min-height: 1px;
+  background-color: #000000;
+  overflow: hidden;
+}
+
 .font-display {
   font-family: var(--font-display);
 }

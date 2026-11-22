@@ -1,0 +1,19 @@
+{
+  "idleVariants": {
+    "idle_2": "/assets/aistudio/angel_idle_idle_2.mp4",
+    "idle_3": "/assets/aistudio/angel_idle_idle_3.mp4?v=1795359075786",
+    "idle_4": "/assets/aistudio/angel_idle_idle_4.mp4?v=1795359471703"
+  },
+  "defaultSpeaking": "/assets/aistudio/angel_default_speaking_default.mp4",
+  "groups": {},
+  "cases": {
+    "intro": "/assets/aistudio/angel_case_intro.mp4",
+    "tree_browse": "/assets/aistudio/angel_case_tree_browse.mp4?v=1795359744782",
+    "castled": "/assets/aistudio/angel_case_castled.mp4"
+  },
+  "lipSync": {
+    "defaultEnabled": true,
+    "groups": {},
+    "cases": {}
+  }
+}

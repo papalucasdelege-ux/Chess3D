@@ -2,14 +2,14 @@ import * as THREE from 'three';
 import type { PieceColor, PieceType } from '../shared/types';
 
 export interface PieceMaterialSet {
-  body: THREE.MeshPhysicalMaterial;
-  collar: THREE.MeshPhysicalMaterial;
+  body: THREE.MeshStandardMaterial;
+  collar: THREE.MeshStandardMaterial;
   groove: THREE.MeshStandardMaterial;
   contactShadow: THREE.MeshBasicMaterial;
 }
 
 // Reusable cached geometries per piece type so draw efficiency stays optimal
-interface PieceGeometryCache {
+export interface PieceGeometryCache {
   contactShadow: THREE.PlaneGeometry;
 
   pawnBody: THREE.LatheGeometry;
@@ -431,9 +431,63 @@ function createCarvedQueenBody(): THREE.LatheGeometry {
   return geo;
 }
 
+const _shadeColor = new THREE.Color();
+
+/**
+ * Bakes subtle sculptural cavity & turning-cove contrast into vertex colors
+ * (read when `vertexColors: true` on `whitePieceMats`) so Staunton collars, neck coves,
+ * base plinth creases, Bishop mitre clefts, and Queen coronet scallops pop with crisp 3D definition.
+ */
+function bakePieceCreviceContrast(
+  geo: THREE.BufferGeometry,
+  mode: 'lathe' | 'carved',
+  outerRadiusRef = 0.26,
+): THREE.BufferGeometry {
+  const pos = geo.attributes.position;
+  const norm = geo.attributes.normal;
+  if (!pos || !norm) return geo;
+
+  const colors = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const ny = norm.getY(i);
+
+    // Smooth continuous underside & crown accent (zero step discontinuities on curved meshes)
+    const underHang = ny < 0 ? Math.pow(Math.min(1, -ny), 1.35) * 0.14 : 0;
+    const crownCatch = ny > 0.3 ? Math.pow((ny - 0.3) / 0.7, 1.2) * 0.045 : 0;
+
+    let cavityShade = 0;
+    if (mode === 'lathe') {
+      const r = Math.hypot(x, z);
+      const radialRatio = Math.min(1, r / Math.max(0.08, outerRadiusRef));
+      cavityShade = (1 - radialRatio) * 0.075;
+      if (y < 0.032 && r > 0.15) {
+        const t = 1 - y / 0.032;
+        cavityShade += t * t * 0.11;
+      }
+    }
+
+    const lum = Math.max(0.82, Math.min(1.02, 1.0 - underHang - cavityShade + crownCatch));
+    const shadowDepth = Math.max(0, 1.0 - lum);
+    const sR = lum;
+    const sG = Math.max(0.76, lum - shadowDepth * 0.08);
+    const sB = Math.max(0.7, lum - shadowDepth * 0.16);
+
+    _shadeColor.setRGB(sR, sG, sB, THREE.SRGBColorSpace);
+    colors[i * 3] = _shadeColor.r;
+    colors[i * 3 + 1] = _shadeColor.g;
+    colors[i * 3 + 2] = _shadeColor.b;
+  }
+
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return geo;
+}
+
 export function createPieceGeometryCache(): PieceGeometryCache {
-  return {
-    contactShadow: new THREE.PlaneGeometry(0.94, 0.94),
+  const cache: PieceGeometryCache = {
+    contactShadow: new THREE.PlaneGeometry(0.72, 0.72),
 
     // PAWN (height ~0.95) — continuous wood-turned Staunton silhouette with double base molding, concave stem, beveled collar, ovoid head
     pawnBody: makeTurnedWoodLathe([
@@ -551,6 +605,24 @@ export function createPieceGeometryCache(): PieceGeometryCache {
     ]),
     kingCross: createCarvedKingCross(),
   };
+
+  bakePieceCreviceContrast(cache.pawnBody, 'lathe', 0.24);
+  bakePieceCreviceContrast(cache.rookBody, 'lathe', 0.28);
+  bakePieceCreviceContrast(cache.rookMerlon, 'carved');
+  bakePieceCreviceContrast(cache.knightBase, 'lathe', 0.29);
+  bakePieceCreviceContrast(cache.knightNeckBody, 'carved');
+  bakePieceCreviceContrast(cache.knightCheek, 'carved');
+  bakePieceCreviceContrast(cache.knightMuzzle, 'carved');
+  bakePieceCreviceContrast(cache.knightNostril, 'carved');
+  bakePieceCreviceContrast(cache.knightBrow, 'carved');
+  bakePieceCreviceContrast(cache.knightManeRidge, 'carved');
+  bakePieceCreviceContrast(cache.knightEar, 'carved');
+  bakePieceCreviceContrast(cache.bishopBody, 'lathe', 0.26);
+  bakePieceCreviceContrast(cache.queenBody, 'lathe', 0.3);
+  bakePieceCreviceContrast(cache.kingBody, 'lathe', 0.31);
+  bakePieceCreviceContrast(cache.kingCross, 'carved');
+
+  return cache;
 }
 
 export function disposePieceGeometryCache(cache: PieceGeometryCache): void {
@@ -559,7 +631,7 @@ export function disposePieceGeometryCache(cache: PieceGeometryCache): void {
 
 function enableShadows(mesh: THREE.Mesh, castShadow: boolean): THREE.Mesh {
   mesh.castShadow = castShadow;
-  mesh.receiveShadow = true;
+  mesh.receiveShadow = castShadow;
   return mesh;
 }
 
@@ -577,12 +649,12 @@ export function buildSculptedPiece(
   group.name = `piece_${color}_${type}`;
   group.userData = { pieceType: type, pieceColor: color };
 
-  // Grounded soft ambient-occlusion contact shadow directly beneath the solid wood base
-  const baseScale = type === 'p' ? 0.93 : type === 'k' ? 1.18 : type === 'q' ? 1.12 : 1.05;
+  // Subtle physical base-crevice contact line tucked strictly beneath the turned wood base lip (never a dark halo around the piece)
+  const baseScale = type === 'p' ? 0.88 : type === 'k' ? 1.1 : type === 'q' ? 1.04 : 0.98;
   const aoDisc = new THREE.Mesh(cache.contactShadow, materials.contactShadow);
   aoDisc.rotation.x = -Math.PI / 2;
   aoDisc.scale.set(baseScale, baseScale, 1);
-  aoDisc.position.y = 0.004;
+  aoDisc.position.set(0, 0.003, 0);
   group.add(aoDisc);
 
   switch (type) {
@@ -637,10 +709,10 @@ export function buildSculptedPiece(
       nostrilR.position.set(0.044, 0.895, -0.288);
 
       // Sculpted brow ridges and subtle carved eyes
-      const browL = enableShadows(new THREE.Mesh(cache.knightBrow, materials.body), false);
+      const browL = enableShadows(new THREE.Mesh(cache.knightBrow, materials.body), castShadow);
       browL.scale.set(0.75, 0.65, 1.2);
       browL.position.set(-0.072, 1.045, -0.098);
-      const browR = enableShadows(new THREE.Mesh(cache.knightBrow, materials.body), false);
+      const browR = enableShadows(new THREE.Mesh(cache.knightBrow, materials.body), castShadow);
       browR.scale.set(0.75, 0.65, 1.2);
       browR.position.set(0.072, 1.045, -0.098);
 

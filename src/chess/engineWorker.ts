@@ -1,5 +1,5 @@
 import { ChessAnalysisEngine } from './engine';
-import type { EngineLevel, EngineLine } from '../shared/types';
+import type { BotSearchReport, EngineLevel, EngineLine, SearchTreeEdge } from '../shared/types';
 
 export type EngineWorkerRequest =
   | {
@@ -38,12 +38,23 @@ export type EngineWorkerResponse =
       nodes: number;
       timeMs: number;
       lines: EngineLine[];
+      allSimulations: EngineLine[];
+      treeEdges: SearchTreeEdge[];
+    }
+  | {
+      type: 'bot-tree-progress';
+      requestId: number;
+      fen: string;
+      depth: number;
+      nodes: number;
+      treeEdges: SearchTreeEdge[];
     }
   | {
       type: 'bot-move';
       requestId: number;
       fen: string;
       bestMoveUci: string | null;
+      report: BotSearchReport | null;
     };
 
 const engine = new ChessAnalysisEngine();
@@ -90,6 +101,8 @@ self.onmessage = (event: MessageEvent<EngineWorkerRequest>) => {
         nodes: result.nodes,
         timeMs: result.timeMs,
         lines: result.lines,
+        allSimulations: result.allSimulations,
+        treeEdges: result.treeEdges,
       };
       self.postMessage(doneMsg);
     }
@@ -97,12 +110,27 @@ self.onmessage = (event: MessageEvent<EngineWorkerRequest>) => {
   }
 
   if (msg.type === 'bot-move') {
-    const bestMoveUci = engine.pickBotMove(msg.fen, msg.level);
+    const report = engine.pickBotMoveWithReport(
+      msg.fen,
+      msg.level,
+      (edges, depth, nodes) => {
+        const prog: EngineWorkerResponse = {
+          type: 'bot-tree-progress',
+          requestId: msg.requestId,
+          fen: msg.fen,
+          depth,
+          nodes,
+          treeEdges: edges,
+        };
+        self.postMessage(prog);
+      },
+    );
     const resp: EngineWorkerResponse = {
       type: 'bot-move',
       requestId: msg.requestId,
       fen: msg.fen,
-      bestMoveUci,
+      bestMoveUci: report?.bestMoveUci ?? null,
+      report,
     };
     self.postMessage(resp);
   }

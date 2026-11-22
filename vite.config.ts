@@ -13,7 +13,8 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: [
-          'icon.svg',
+          'favicon.png',
+          'assets/aistudio/chess3D-angel_414f5812.png',
           'apple-touch-icon.png',
           'pwa-192x192.png',
           'pwa-512x512.png',
@@ -21,10 +22,10 @@ export default defineConfig(() => {
         ],
         manifest: {
           id: '/',
-          name: 'Chess3D',
-          short_name: 'Chess3D',
+          name: 'ChessAngel3D',
+          short_name: 'ChessAngel3D',
           description:
-            '3D wood-carved chess studio with AI opponent, real-time multiplayer, custom board skins, replays, and integrated analysis engine.',
+            '3D wood-carved Staunton chess game featuring the mathematical Chess Angel opponent with warm bundled voice commentary, 3D calculation-tree previews, live hints, multiplayer, and replays.',
           theme_color: '#000000',
           background_color: '#000000',
           display: 'standalone',
@@ -53,9 +54,58 @@ export default defineConfig(() => {
         },
         workbox: {
           maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,mp3}'],
-          navigateFallbackDenylist: [/^\/api\//, /^\/ws/],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          navigateFallbackDenylist: [
+            /^\/api\//,
+            /^\/ws/,
+            /^\/voices\//,
+            /^\/assets\//,
+            /\.(mp4|gif|jpg|jpeg|webm)$/i,
+          ],
           runtimeCaching: [
+            {
+              urlPattern: /\/voices\/.*\.mp3(\?.*)?$/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'chessangel-voices-v2',
+                expiration: {
+                  maxEntries: 200,
+                  maxAgeSeconds: 60 * 60 * 24 * 365,
+                },
+                cacheableResponse: {
+                  statuses: [200],
+                },
+              },
+            },
+            {
+              urlPattern: /\/assets\/aistudio\/.*\.(mp4|webm)(\?.*)?$/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'chessangel-portrait-videos-v1',
+                rangeRequests: true,
+                expiration: {
+                  maxEntries: 120,
+                  maxAgeSeconds: 60 * 60 * 24 * 365,
+                },
+                cacheableResponse: {
+                  statuses: [200],
+                },
+              },
+            },
+            {
+              urlPattern: /\/assets\/aistudio\/angel_video_map\.json(\?.*)?$/i,
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'chessangel-video-map-v1',
+                expiration: {
+                  maxEntries: 4,
+                  maxAgeSeconds: 60 * 60 * 24 * 365,
+                },
+                cacheableResponse: {
+                  statuses: [200],
+                },
+              },
+            },
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
               handler: 'CacheFirst',
@@ -87,8 +137,7 @@ export default defineConfig(() => {
           ],
         },
         devOptions: {
-          enabled: true,
-          type: 'module',
+          enabled: false,
         },
       }),
       // Copies src/assets into dist/ so root-relative URLs like

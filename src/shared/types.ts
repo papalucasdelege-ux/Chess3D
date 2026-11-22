@@ -1,14 +1,9 @@
 export type PieceColor = 'w' | 'b';
 export type PieceType = 'p' | 'n' | 'b' | 'r' | 'q' | 'k';
 
-export type BoardSkinId =
-  | 'walnut-maple'
-  | 'carrara-nero'
-  | 'obsidian-brass'
-  | 'emerald-ivory'
-  | 'arctic-glass';
+export type BoardSkinId = 'walnut-maple';
 
-export type LightingMood = 'warm-studio' | 'gallery-cool' | 'evening-amber';
+export type LightingMood = 'warm-studio';
 
 export type CameraPreset = 'white' | 'black' | 'top' | 'cinematic';
 
@@ -24,11 +19,11 @@ export interface EngineLevelSpec {
 }
 
 export const ENGINE_LEVELS: Record<EngineLevel, EngineLevelSpec> = {
-  beginner: { id: 'beginner', label: 'Beginner', elo: '800', description: 'Relaxed play with occasional slips' },
-  intermediate: { id: 'intermediate', label: 'Club', elo: '1200', description: 'Balanced tactical play' },
-  advanced: { id: 'advanced', label: 'Candidate', elo: '1600', description: 'Sharp tactics and solid development' },
-  master: { id: 'master', label: 'Master', elo: '2000', description: 'Deep calculation and positional accuracy' },
-  grandmaster: { id: 'grandmaster', label: 'Grandmaster', elo: '2400', description: 'Opening theory, deep PVS search, endgame precision' },
+  beginner: { id: 'beginner', label: 'Beginner', elo: '800', description: 'Shallow search depth with gentle tactical pacing' },
+  intermediate: { id: 'intermediate', label: 'Club', elo: '1200', description: 'Balanced tactical tree evaluation' },
+  advanced: { id: 'advanced', label: 'Candidate', elo: '1600', description: 'Sharp multi-branch alpha-beta search' },
+  master: { id: 'master', label: 'Master', elo: '2000', description: 'Deep PVS calculation and positional precision' },
+  grandmaster: { id: 'grandmaster', label: 'Grandmaster', elo: '2400', description: 'Full-depth search tree, transposition tables & endgame precision' },
 };
 
 export interface SavedGame {
@@ -95,6 +90,24 @@ export interface EngineLine {
   bestMoveUci: string;
 }
 
+export interface SearchTreeEdge {
+  from: string;
+  to: string;
+  ply: number;
+  chosen?: boolean;
+}
+
+export interface BotSearchReport {
+  rootFen: string;
+  bestMoveUci: string;
+  depth: number;
+  nodes: number;
+  timeMs: number;
+  triedLines: EngineLine[];
+  allSimulations?: EngineLine[];
+  treeEdges?: SearchTreeEdge[];
+}
+
 export interface AnalysisSnapshot {
   fen: string;
   depth: number;
@@ -102,6 +115,8 @@ export interface AnalysisSnapshot {
   nps: number;
   timeMs: number;
   lines: EngineLine[];
+  allSimulations?: EngineLine[];
+  treeEdges?: SearchTreeEdge[];
   isSearching: boolean;
 }
 

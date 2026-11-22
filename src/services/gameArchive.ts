@@ -9,7 +9,7 @@ export function buildPgnFromMoves(
 ): string {
   const datePart = meta.dateIso.slice(0, 10).replace(/-/g, '.');
   const headers = [
-    `[Event "Chess3D Match"]`,
+    `[Event "ChessAngel3D Match"]`,
     `[Date "${datePart}"]`,
     `[White "${meta.whiteName}"]`,
     `[Black "${meta.blackName}"]`,
@@ -106,7 +106,7 @@ export const CLASSIC_REPLAYS: SavedGame[] = [
     resultLabel: '0-1',
     reason: 'checkmate',
     mode: 'classic',
-    skinId: 'carrara-nero',
+    skinId: 'walnut-maple',
     timeControl: 'unlimited',
     dateIso: '1956-10-17T18:00:00.000Z',
     sanList: [

@@ -1,23 +1,23 @@
-import { RotateCcw, Save, Play } from 'lucide-react';
-import type { GameMode, PieceColor, RoomResult } from '../shared/types';
+import { RotateCcw, Save, Play, FastForward } from 'lucide-react';
+import type { PieceColor, RoomResult } from '../shared/types';
 
-export type DockTab = 'play' | 'multiplayer' | 'analysis' | 'replay' | 'skins';
+export type DockTab = 'play' | 'analysis' | 'replay';
 
 interface TopBarProps {
-  activeTab: DockTab;
-  onSelectTab: (tab: DockTab) => void;
-  gameMode: GameMode;
   whiteName: string;
   blackName: string;
   whiteClockMs: number;
   blackClockMs: number;
   isTimed: boolean;
   turn: PieceColor;
-  materialDiff: number; // positive = white ahead
+  materialDiff: number;
   isCheck: boolean;
   gameResult: RoomResult | null;
   statusNote: string | null;
+  angelCandidate: string | null;
   isThinkingAi: boolean;
+  treeHoldLabel?: string | null;
+  onSkipTreeHold?: () => void;
   isReplayMode: boolean;
   replayTitle?: string;
   onPrimaryAction: () => void;
@@ -50,18 +50,7 @@ export function formatResultBanner(result: RoomResult): string {
   return `${result.winner === 'w' ? 'White' : 'Black'} Wins · ${reasonText}`;
 }
 
-const NAV_TABS: { id: DockTab; label: string }[] = [
-  { id: 'play', label: 'Play' },
-  { id: 'multiplayer', label: 'Multiplayer' },
-  { id: 'analysis', label: 'Analysis' },
-  { id: 'replay', label: 'Replay' },
-  { id: 'skins', label: 'Skins' },
-];
-
 export function TopBar({
-  activeTab,
-  onSelectTab,
-  gameMode,
   whiteName,
   blackName,
   whiteClockMs,
@@ -72,7 +61,10 @@ export function TopBar({
   isCheck,
   gameResult,
   statusNote,
+  angelCandidate,
   isThinkingAi,
+  treeHoldLabel,
+  onSkipTreeHold,
   isReplayMode,
   replayTitle,
   onPrimaryAction,
@@ -82,164 +74,172 @@ export function TopBar({
   alreadySaved,
 }: TopBarProps) {
   return (
-    <div className="fixed top-0 left-0 right-0 z-30 pointer-events-none">
-      {/* Strict 3-Zone Top Bar Contract */}
-      <header className="pointer-events-auto flex items-center justify-between gap-8 px-6 h-14 bg-[#0f1319]/92 border-b border-white/10">
-        {/* Zone 1: Single text element wordmark */}
-        <span className="font-display text-lg font-medium tracking-tight text-[#f5f0e6] whitespace-nowrap shrink-0">
-          Chess3D
+    <div className="fixed top-1 sm:top-2.5 left-0 right-0 z-30 pointer-events-none flex flex-col items-center px-1.5 sm:px-3">
+      {/* Unboxed Transparent Chess Clock, Player Names & Chess Angel Candidate Readout */}
+      <div className="pointer-events-none flex flex-wrap items-center justify-center gap-x-2 sm:gap-x-3.5 gap-y-0.5 sm:gap-y-1 px-2 sm:px-3 py-0.5 sm:py-1 bg-transparent text-[10.5px] sm:text-xs text-[#d7dce5] [text-shadow:0_1px_5px_rgba(0,0,0,0.98)] max-w-[98vw] sm:max-w-[96vw]">
+        {/* White Player & Clock */}
+        <div className="flex items-center gap-2 whitespace-nowrap shrink-0">
+          <span
+            className={`w-2.5 h-2.5 rounded-[2px] border border-white/35 bg-[#dfc194] ${
+              turn === 'w' && !gameResult ? 'ring-1 ring-[#d6ae63]' : 'opacity-65'
+            }`}
+            aria-hidden="true"
+          />
+          <span
+            className={
+              turn === 'w' && !gameResult ? 'font-semibold text-[#f8f5ef]' : 'text-[#9aa3b2]'
+            }
+          >
+            {whiteName}
+          </span>
+          {materialDiff > 0 && (
+            <span className="font-mono-tabular text-[11px] text-[#c89d54]">
+              +{materialDiff}
+            </span>
+          )}
+          {isTimed && (
+            <span
+              className={`font-mono-tabular text-sm font-semibold tracking-tight ${
+                whiteClockMs < 30000 && turn === 'w'
+                  ? 'text-[#f87171]'
+                  : turn === 'w' && !gameResult
+                    ? 'text-[#ffffff]'
+                    : 'text-[#b9c1cf]'
+              }`}
+            >
+              {formatClock(whiteClockMs)}
+            </span>
+          )}
+        </div>
+
+        <span className="text-white/30" aria-hidden="true">
+          ·
         </span>
 
-        {/* Zone 2: 5 concise single-line text nav links */}
-        <nav className="hidden md:flex items-center gap-7 text-[13px] font-medium">
-          {NAV_TABS.map((tab) => {
-            const active = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => onSelectTab(tab.id)}
-                className={`relative py-4 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:text-[#e8c37c] ${
-                  active ? 'text-[#f6efe2]' : 'text-[#9aa3b2] hover:text-[#e5e0d5]'
-                }`}
-              >
-                {tab.label}
-                {active && (
-                  <span className="absolute left-0 right-0 bottom-0 h-[2px] bg-[#c89d54]" />
-                )}
-              </button>
-            );
-          })}
-        </nav>
+        {/* Center Status & Chess Angel Candidate */}
+        <div className="flex items-center gap-2 whitespace-nowrap shrink-0 text-[12px] font-medium">
+          {isReplayMode ? (
+            <span className="text-[#d6ae63]">{replayTitle || 'Game Replay'}</span>
+          ) : gameResult ? (
+            <span className="text-[#e3be78]">{formatResultBanner(gameResult)}</span>
+          ) : treeHoldLabel ? (
+            <span className="inline-flex items-center gap-2 text-[#7dd3fc]">
+              <span>{treeHoldLabel}</span>
+              {onSkipTreeHold && (
+                <button
+                  type="button"
+                  onClick={onSkipTreeHold}
+                  className="pointer-events-auto inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#141c28]/92 hover:bg-[#1e293b] border border-[#38bdf8]/45 text-[11px] font-medium text-[#e0f2fe] cursor-pointer"
+                >
+                  <FastForward className="w-3 h-3 text-[#38bdf8]" />
+                  {isThinkingAi ? 'Play Move' : 'Clear'}
+                </button>
+              )}
+            </span>
+          ) : isThinkingAi ? (
+            <span className="text-[#d6ae63]">Chess Angel calculating...</span>
+          ) : isCheck ? (
+            <span className="text-[#f87171]">
+              {turn === 'w' ? 'White' : 'Black'} in Check
+            </span>
+          ) : statusNote ? (
+            <span className="text-[#cbd2df]">{statusNote}</span>
+          ) : (
+            <span className="text-[#cbd2df]">
+              {turn === 'w' ? 'White to Move' : 'Black to Move'}
+            </span>
+          )}
 
-        {/* Zone 3: 1 primary action */}
-        <div className="flex items-center shrink-0">
+          {angelCandidate && !gameResult && !isThinkingAi && !treeHoldLabel && (
+            <>
+              <span className="text-white/30" aria-hidden="true">
+                ·
+              </span>
+              <span className="font-mono-tabular text-[11px] text-[#e8c784]">
+                {angelCandidate}
+              </span>
+            </>
+          )}
+        </div>
+
+        <span className="text-white/30" aria-hidden="true">
+          ·
+        </span>
+
+        {/* Black Clock & Player */}
+        <div className="flex items-center gap-2 whitespace-nowrap shrink-0">
+          {isTimed && (
+            <span
+              className={`font-mono-tabular text-sm font-semibold tracking-tight ${
+                blackClockMs < 30000 && turn === 'b'
+                  ? 'text-[#f87171]'
+                  : turn === 'b' && !gameResult
+                    ? 'text-[#ffffff]'
+                    : 'text-[#b9c1cf]'
+              }`}
+            >
+              {formatClock(blackClockMs)}
+            </span>
+          )}
+          {materialDiff < 0 && (
+            <span className="font-mono-tabular text-[11px] text-[#c89d54]">
+              +{Math.abs(materialDiff)}
+            </span>
+          )}
+          <span
+            className={
+              turn === 'b' && !gameResult ? 'font-semibold text-[#f8f5ef]' : 'text-[#9aa3b2]'
+            }
+          >
+            {blackName}
+          </span>
+          <span
+            className={`w-2.5 h-2.5 rounded-[2px] border border-white/35 bg-[#150d08] ${
+              turn === 'b' && !gameResult ? 'ring-1 ring-[#d6ae63]' : 'opacity-65'
+            }`}
+            aria-hidden="true"
+          />
+        </div>
+      </div>
+
+      {/* Compact Game Over Action Strip */}
+      {gameResult && !isReplayMode && (
+        <div className="pointer-events-auto mt-2 inline-flex items-center gap-3 px-4 py-2 rounded-md bg-[#141922]/95 border border-[#c89d54]/40 text-xs shadow-lg">
+          <span className="font-medium text-[#f5efe2] whitespace-nowrap">
+            {formatResultBanner(gameResult)}
+          </span>
+          <span className="text-white/20" aria-hidden="true">
+            |
+          </span>
+          {canSaveCurrent && (
+            <button
+              type="button"
+              onClick={onSaveCurrentGame}
+              disabled={alreadySaved}
+              className="inline-flex items-center gap-1.5 text-[#d6ae63] hover:text-[#ebd096] disabled:text-[#7f8a9c] font-medium transition-colors whitespace-nowrap cursor-pointer disabled:cursor-default"
+            >
+              <Save className="w-3.5 h-3.5" />
+              {alreadySaved ? 'Saved to Archive' : 'Save Game'}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onOpenReplayCurrent}
+            className="inline-flex items-center gap-1.5 text-[#e2e7f0] hover:text-white font-medium transition-colors whitespace-nowrap cursor-pointer"
+          >
+            <Play className="w-3.5 h-3.5" />
+            Review Replay
+          </button>
           <button
             type="button"
             onClick={onPrimaryAction}
-            className="px-4 py-1.5 text-xs font-semibold text-[#111419] bg-[#d6ae63] hover:bg-[#e3be78] rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#e3be78]"
+            className="inline-flex items-center gap-1.5 text-[#e2e7f0] hover:text-white font-medium transition-colors whitespace-nowrap cursor-pointer"
           >
-            {isReplayMode ? 'Exit Replay' : gameMode === 'multiplayer' ? 'Leave Room' : 'New Match'}
+            <RotateCcw className="w-3.5 h-3.5" />
+            Play Again
           </button>
         </div>
-      </header>
-
-      {/* Discreet Unboxed Match Clock & Turn Strip */}
-      <div className="flex flex-col items-center mt-2.5 px-4 gap-2">
-        <div className="pointer-events-auto inline-flex items-center gap-3 px-4 py-1.5 rounded-md bg-[#11151d]/90 border border-white/10 text-xs text-[#d7dce5] shadow-md max-w-[94vw] overflow-x-auto">
-          {/* White */}
-          <div className="flex items-center gap-2 whitespace-nowrap shrink-0">
-            <span
-              className={`w-2.5 h-2.5 rounded-[2px] border border-white/30 bg-[#f2ead9] ${
-                turn === 'w' && !gameResult ? 'ring-1 ring-[#d6ae63]' : 'opacity-65'
-              }`}
-              aria-hidden="true"
-            />
-            <span className={turn === 'w' && !gameResult ? 'font-semibold text-[#f8f5ef]' : 'text-[#9aa3b2]'}>
-              {whiteName}
-            </span>
-            {materialDiff > 0 && (
-              <span className="font-mono-tabular text-[11px] text-[#c89d54]">+{materialDiff}</span>
-            )}
-            {isTimed && (
-              <span
-                className={`font-mono-tabular font-semibold ${
-                  whiteClockMs < 30000 && turn === 'w' ? 'text-[#f87171]' : 'text-[#f3f1ec]'
-                }`}
-              >
-                {formatClock(whiteClockMs)}
-              </span>
-            )}
-          </div>
-
-          <span className="text-white/25" aria-hidden="true">·</span>
-
-          {/* Center Status */}
-          <div className="whitespace-nowrap shrink-0 text-[12px] font-medium">
-            {isReplayMode ? (
-              <span className="text-[#d6ae63]">{replayTitle || 'Game Replay'}</span>
-            ) : gameResult ? (
-              <span className="text-[#e3be78]">{formatResultBanner(gameResult)}</span>
-            ) : isThinkingAi ? (
-              <span className="text-[#c89d54]">Engine calculating...</span>
-            ) : isCheck ? (
-              <span className="text-[#f87171]">
-                {turn === 'w' ? 'White' : 'Black'} in Check
-              </span>
-            ) : statusNote ? (
-              <span className="text-[#cbd2df]">{statusNote}</span>
-            ) : (
-              <span className="text-[#cbd2df]">
-                {turn === 'w' ? 'White to Move' : 'Black to Move'}
-              </span>
-            )}
-          </div>
-
-          <span className="text-white/25" aria-hidden="true">·</span>
-
-          {/* Black */}
-          <div className="flex items-center gap-2 whitespace-nowrap shrink-0">
-            {isTimed && (
-              <span
-                className={`font-mono-tabular font-semibold ${
-                  blackClockMs < 30000 && turn === 'b' ? 'text-[#f87171]' : 'text-[#f3f1ec]'
-                }`}
-              >
-                {formatClock(blackClockMs)}
-              </span>
-            )}
-            {materialDiff < 0 && (
-              <span className="font-mono-tabular text-[11px] text-[#c89d54]">+{Math.abs(materialDiff)}</span>
-            )}
-            <span className={turn === 'b' && !gameResult ? 'font-semibold text-[#f8f5ef]' : 'text-[#9aa3b2]'}>
-              {blackName}
-            </span>
-            <span
-              className={`w-2.5 h-2.5 rounded-[2px] border border-white/30 bg-[#1c2028] ${
-                turn === 'b' && !gameResult ? 'ring-1 ring-[#d6ae63]' : 'opacity-65'
-              }`}
-              aria-hidden="true"
-            />
-          </div>
-        </div>
-
-        {/* Compact Game Over Action Strip (keeps center 3D board completely unobstructed) */}
-        {gameResult && !isReplayMode && (
-          <div className="pointer-events-auto inline-flex items-center gap-3 px-4 py-2 rounded-md bg-[#141922]/95 border border-[#c89d54]/40 text-xs shadow-lg">
-            <span className="font-medium text-[#f5efe2] whitespace-nowrap">
-              {formatResultBanner(gameResult)}
-            </span>
-            <span className="text-white/20" aria-hidden="true">|</span>
-            {canSaveCurrent && (
-              <button
-                type="button"
-                onClick={onSaveCurrentGame}
-                disabled={alreadySaved}
-                className="inline-flex items-center gap-1.5 text-[#d6ae63] hover:text-[#ebd096] disabled:text-[#7f8a9c] font-medium transition-colors whitespace-nowrap cursor-pointer disabled:cursor-default"
-              >
-                <Save className="w-3.5 h-3.5" />
-                {alreadySaved ? 'Saved to Archive' : 'Save Game'}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onOpenReplayCurrent}
-              className="inline-flex items-center gap-1.5 text-[#e2e7f0] hover:text-white font-medium transition-colors whitespace-nowrap cursor-pointer"
-            >
-              <Play className="w-3.5 h-3.5" />
-              Review Replay
-            </button>
-            <button
-              type="button"
-              onClick={onPrimaryAction}
-              className="inline-flex items-center gap-1.5 text-[#e2e7f0] hover:text-white font-medium transition-colors whitespace-nowrap cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Play Again
-            </button>
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }

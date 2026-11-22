@@ -1,5 +1,11 @@
 import { Chess, type Move } from 'chess.js';
-import type { EngineLevel, EngineLine, MoveQuality } from '../shared/types';
+import type {
+  BotSearchReport,
+  EngineLevel,
+  EngineLine,
+  MoveQuality,
+  SearchTreeEdge,
+} from '../shared/types';
 
 // PeSTO-inspired tapered middlegame & endgame material + piece-square tables (White perspective, rank 8 -> rank 1)
 const MG_VALUE: Record<string, number> = {
@@ -275,6 +281,7 @@ export interface SearchOptions {
   timeBudgetMs: number;
   multiPv: number;
   onProgress?: (depth: number, lines: EngineLine[], nodes: number, timeMs: number) => void;
+  onTreeProgress?: (edges: SearchTreeEdge[], depth: number, nodes: number) => void;
   shouldStop?: () => boolean;
 }
 
@@ -285,7 +292,37 @@ export class ChessAnalysisEngine {
   private startTime = 0;
   private deadline = 0;
   private aborted = false;
+  private currentIterDepth = 1;
   private shouldStopFn?: () => boolean;
+  private onTreeProgressFn?: (edges: SearchTreeEdge[], depth: number, nodes: number) => void;
+  private lastTreeEmitCount = 0;
+  private lastTreeEmitAt = 0;
+  private recordedEdges: SearchTreeEdge[] = [];
+  private recordedEdgeKeys = new Set<string>();
+  private plyEdgeCounts = [0, 0, 0, 0];
+
+  private recordTreeEdge(from: string, to: string, ply: number): void {
+    const bucket = Math.min(3, ply);
+    const caps = [48, 96, 88, 68];
+    if (this.plyEdgeCounts[bucket] >= caps[bucket]) return;
+    const key = `${bucket}:${from}${to}`;
+    if (this.recordedEdgeKeys.has(key)) return;
+    this.recordedEdgeKeys.add(key);
+    this.plyEdgeCounts[bucket]++;
+    this.recordedEdges.push({ from, to, ply: bucket });
+
+    if (
+      this.onTreeProgressFn &&
+      this.recordedEdges.length - this.lastTreeEmitCount >= 16
+    ) {
+      const now = performance.now();
+      if (now - this.lastTreeEmitAt >= 40) {
+        this.lastTreeEmitCount = this.recordedEdges.length;
+        this.lastTreeEmitAt = now;
+        this.onTreeProgressFn([...this.recordedEdges], this.currentIterDepth, this.nodes);
+      }
+    }
+  }
 
   private checkAbort(): boolean {
     if (this.aborted) return true;
@@ -304,7 +341,13 @@ export class ChessAnalysisEngine {
     return `${parts[0]} ${parts[1]} ${parts[2]} ${parts[3]}`;
   }
 
-  private quiescence(chess: Chess, alpha: number, beta: number, qDepth: number): number {
+  private quiescence(
+    chess: Chess,
+    alpha: number,
+    beta: number,
+    qDepth: number,
+    ply: number,
+  ): number {
     this.nodes++;
     if (this.checkAbort()) return 0;
 
@@ -318,8 +361,11 @@ export class ChessAnalysisEngine {
     moves.sort((a, b) => scoreMoveOrder(b) - scoreMoveOrder(a));
 
     for (const move of moves) {
+      if (ply <= 3) {
+        this.recordTreeEdge(move.from, move.to, ply);
+      }
       chess.move(move);
-      const score = -this.quiescence(chess, -beta, -alpha, qDepth - 1);
+      const score = -this.quiescence(chess, -beta, -alpha, qDepth - 1, ply + 1);
       chess.undo();
       if (this.aborted) return 0;
       if (score >= beta) return beta;
@@ -340,7 +386,7 @@ export class ChessAnalysisEngine {
     }
 
     if (depth <= 0) {
-      return this.quiescence(chess, alpha, beta, 4);
+      return this.quiescence(chess, alpha, beta, 4, ply);
     }
 
     const key = this.getKey(chess);
@@ -364,6 +410,9 @@ export class ChessAnalysisEngine {
 
     for (let i = 0; i < moves.length; i++) {
       const move = moves[i];
+      if (ply <= 3) {
+        this.recordTreeEdge(move.from, move.to, ply);
+      }
       chess.move(move);
       let score: number;
       if (i === 0) {
@@ -436,31 +485,52 @@ export class ChessAnalysisEngine {
     return { pvUci, pvSan };
   }
 
-  public analyze(fen: string, opts: SearchOptions): { depth: number; lines: EngineLine[]; nodes: number; timeMs: number } {
+  public analyze(
+    fen: string,
+    opts: SearchOptions,
+  ): {
+    depth: number;
+    lines: EngineLine[];
+    allSimulations: EngineLine[];
+    nodes: number;
+    timeMs: number;
+    treeEdges: SearchTreeEdge[];
+  } {
     const chess = new Chess(fen);
     const legalMoves = chess.moves({ verbose: true });
     this.startTime = performance.now();
     this.deadline = this.startTime + opts.timeBudgetMs;
     this.nodes = 0;
     this.aborted = false;
+    this.currentIterDepth = 1;
     this.shouldStopFn = opts.shouldStop;
+    this.onTreeProgressFn = opts.onTreeProgress;
+    this.lastTreeEmitCount = 0;
+    this.lastTreeEmitAt = this.startTime;
     this.killers.clear();
+    this.recordedEdges = [];
+    this.recordedEdgeKeys.clear();
+    this.plyEdgeCounts = [0, 0, 0, 0];
 
     if (legalMoves.length === 0) {
-      return { depth: 0, lines: [], nodes: 0, timeMs: 0 };
+      this.onTreeProgressFn = undefined;
+      return { depth: 0, lines: [], allSimulations: [], nodes: 0, timeMs: 0, treeEdges: [] };
     }
 
     const sideSign = chess.turn() === 'w' ? 1 : -1;
     let bestLines: EngineLine[] = [];
+    let allSimulations: EngineLine[] = [];
     let reachedDepth = 1;
 
     // Maintain root move ordering across iterations
     let orderedMoves = [...legalMoves];
 
     for (let depth = 1; depth <= opts.maxDepth; depth++) {
+      this.currentIterDepth = depth;
       const scored: { move: Move; scoreFromTurn: number }[] = [];
 
       for (const move of orderedMoves) {
+        this.recordTreeEdge(move.from, move.to, 0);
         chess.move(move);
         const score = -this.negamax(chess, depth - 1, -MATE_SCORE - 10, MATE_SCORE + 10, 1);
         chess.undo();
@@ -479,8 +549,7 @@ export class ChessAnalysisEngine {
           orderedMoves.filter((m) => !scored.some((s) => moveToUci(s.move) === moveToUci(m))),
         );
 
-        const topN = scored.slice(0, Math.max(1, opts.multiPv));
-        bestLines = topN.map((item, idx) => {
+        allSimulations = scored.map((item, idx) => {
           const scoreWhite = item.scoreFromTurn * sideSign;
           let mateIn: number | null = null;
           if (Math.abs(item.scoreFromTurn) >= MATE_THRESHOLD) {
@@ -488,7 +557,8 @@ export class ChessAnalysisEngine {
             const fullMoves = Math.max(1, Math.ceil(pliesToMate / 2));
             mateIn = scoreWhite > 0 ? fullMoves : -fullMoves;
           }
-          const { pvUci, pvSan } = this.extractPv(fen, item.move, 6);
+          const pvDepth = idx < Math.max(4, opts.multiPv) ? 6 : 4;
+          const { pvUci, pvSan } = this.extractPv(fen, item.move, pvDepth);
           return {
             multipv: idx + 1,
             scoreCp: scoreWhite,
@@ -498,10 +568,16 @@ export class ChessAnalysisEngine {
             bestMoveUci: moveToUci(item.move),
           };
         });
+        bestLines = allSimulations.slice(0, Math.max(1, opts.multiPv));
 
         reachedDepth = depth;
         const elapsed = Math.max(1, Math.round(performance.now() - this.startTime));
         opts.onProgress?.(reachedDepth, bestLines, this.nodes, elapsed);
+        if (this.recordedEdges.length > this.lastTreeEmitCount) {
+          this.lastTreeEmitCount = this.recordedEdges.length;
+          this.lastTreeEmitAt = performance.now();
+          this.onTreeProgressFn?.([...this.recordedEdges], reachedDepth, this.nodes);
+        }
       }
 
       if (this.aborted) break;
@@ -511,12 +587,75 @@ export class ChessAnalysisEngine {
       }
     }
 
+    // Ensure shallow depths still visualize 3-4 plies of candidate branches cleanly
+    if (this.plyEdgeCounts[2] < 12 && bestLines.length > 0) {
+      for (const line of bestLines.slice(0, 4)) {
+        const sim = new Chess(fen);
+        try {
+          const u0 = line.bestMoveUci;
+          const m0 = sim.move({
+            from: u0.slice(0, 2),
+            to: u0.slice(2, 4),
+            promotion: u0.slice(4) || undefined,
+          });
+          if (!m0) continue;
+          const replies = sim.moves({ verbose: true }).slice(0, 5);
+          for (const r1 of replies) {
+            this.recordTreeEdge(r1.from, r1.to, 1);
+            sim.move(r1);
+            const r2List = sim.moves({ verbose: true }).slice(0, 4);
+            for (const r2 of r2List) {
+              this.recordTreeEdge(r2.from, r2.to, 2);
+              sim.move(r2);
+              const r3List = sim.moves({ verbose: true }).slice(0, 2);
+              for (const r3 of r3List) {
+                this.recordTreeEdge(r3.from, r3.to, 3);
+              }
+              sim.undo();
+            }
+            sim.undo();
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    this.onTreeProgressFn = undefined;
+
+    const pvKeySet = new Set<string>();
+    const topPv = bestLines[0]?.pvUci ?? [];
+    for (let p = 0; p < topPv.length; p++) {
+      const u = topPv[p];
+      if (u.length >= 4) {
+        pvKeySet.add(`${Math.min(3, p)}:${u.slice(0, 4)}`);
+      }
+    }
+    const treeEdges = this.recordedEdges.map((edge) =>
+      pvKeySet.has(`${edge.ply}:${edge.from}${edge.to}`) ? { ...edge, chosen: true } : edge,
+    );
+
     const totalMs = Math.max(1, Math.round(performance.now() - this.startTime));
-    return { depth: reachedDepth, lines: bestLines, nodes: this.nodes, timeMs: totalMs };
+    return {
+      depth: reachedDepth,
+      lines: bestLines,
+      allSimulations,
+      nodes: this.nodes,
+      timeMs: totalMs,
+      treeEdges,
+    };
   }
 
-  public pickBotMove(fen: string, level: EngineLevel): string | null {
-    // Master & Grandmaster opening book (FEN piece+turn+castling prefix -> strong principled replies)
+  public pickBotMoveWithReport(
+    fen: string,
+    level: EngineLevel,
+    onTreeProgress?: (edges: SearchTreeEdge[], depth: number, nodes: number) => void,
+  ): BotSearchReport | null {
+    const chess = new Chess(fen);
+    const legalMoves = chess.moves({ verbose: true });
+    if (legalMoves.length === 0) return null;
+
+    // Master & Grandmaster opening book (FEN piece+turn+castling prefix -> principled replies)
     const bookKey = fen.split(' ').slice(0, 3).join(' ');
     const OPENING_BOOK: Record<string, string[]> = {
       'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq': ['e2e4', 'd2d4', 'c2c4', 'g1f3'],
@@ -531,54 +670,235 @@ export class ChessAnalysisEngine {
       'rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR w KQkq': ['c2c4', 'g1f3', 'c1f4'],
     };
 
+    let forcedBookUci: string | null = null;
     if ((level === 'master' || level === 'grandmaster') && OPENING_BOOK[bookKey]) {
       const choices = OPENING_BOOK[bookKey];
-      const chess = new Chess(fen);
-      const legalUcis = new Set(chess.moves({ verbose: true }).map(moveToUci));
+      const legalUcis = new Set(legalMoves.map(moveToUci));
       const validBook = choices.filter((u) => legalUcis.has(u));
       if (validBook.length > 0) {
-        return validBook[Math.floor(Math.random() * validBook.length)];
+        forcedBookUci = validBook[Math.floor(Math.random() * validBook.length)];
       }
     }
 
-    const chess = new Chess(fen);
-    const legalMoves = chess.moves({ verbose: true });
-    if (legalMoves.length === 0) return null;
-
     if (level === 'beginner') {
-      // Beginner: shallow depth-1 evaluation with frequent human-like inaccuracies, still avoids hanging everything blindly
-      const result = this.analyze(fen, { maxDepth: 1, timeBudgetMs: 120, multiPv: 6 });
-      if (result.lines.length === 0) return moveToUci(legalMoves[0]);
-      if (Math.random() < 0.28) {
-        return moveToUci(legalMoves[Math.floor(Math.random() * legalMoves.length)]);
+      const result = this.analyze(fen, {
+        maxDepth: 2,
+        timeBudgetMs: 180,
+        multiPv: 4,
+        onTreeProgress,
+      });
+      let chosenUci = moveToUci(legalMoves[0]);
+      if (result.lines.length > 0) {
+        if (Math.random() < 0.28) {
+          chosenUci = moveToUci(legalMoves[Math.floor(Math.random() * legalMoves.length)]);
+        } else {
+          const pool = result.lines.slice(0, Math.min(4, result.lines.length));
+          chosenUci = pool[Math.floor(Math.random() * pool.length)].bestMoveUci;
+        }
       }
-      const pool = result.lines.slice(0, Math.min(4, result.lines.length));
-      return pool[Math.floor(Math.random() * pool.length)].bestMoveUci;
+      const chosenLine = result.lines.find((l) => l.bestMoveUci === chosenUci) || result.lines[0];
+      const chosenKeys = new Set<string>();
+      if (chosenLine) {
+        chosenLine.pvUci.forEach((u, p) => {
+          if (u.length >= 4) chosenKeys.add(`${Math.min(3, p)}:${u.slice(0, 4)}`);
+        });
+      } else if (chosenUci.length >= 4) {
+        chosenKeys.add(`0:${chosenUci.slice(0, 4)}`);
+      }
+      const markedEdges = result.treeEdges.map((edge) => ({
+        from: edge.from,
+        to: edge.to,
+        ply: edge.ply,
+        chosen: chosenKeys.has(`${edge.ply}:${edge.from}${edge.to}`) || undefined,
+      }));
+      return {
+        rootFen: fen,
+        bestMoveUci: chosenUci,
+        depth: Math.max(1, result.depth),
+        nodes: Math.max(legalMoves.length, result.nodes),
+        timeMs: result.timeMs,
+        triedLines: result.lines.slice(0, 4),
+        allSimulations: result.allSimulations,
+        treeEdges: markedEdges,
+      };
     }
 
     const config =
       level === 'intermediate'
-        ? { maxDepth: 2, timeBudgetMs: 220, multiPv: 4, randomness: 0.42, toleranceCp: 120 }
+        ? { maxDepth: 2, timeBudgetMs: 240, multiPv: 4, randomness: 0.38, toleranceCp: 115 }
         : level === 'advanced'
-          ? { maxDepth: 3, timeBudgetMs: 420, multiPv: 3, randomness: 0.18, toleranceCp: 65 }
+          ? { maxDepth: 3, timeBudgetMs: 460, multiPv: 4, randomness: 0.16, toleranceCp: 60 }
           : level === 'master'
-            ? { maxDepth: 4, timeBudgetMs: 780, multiPv: 2, randomness: 0.06, toleranceCp: 22 }
-            : { maxDepth: 5, timeBudgetMs: 1350, multiPv: 1, randomness: 0.0, toleranceCp: 0 };
+            ? { maxDepth: 4, timeBudgetMs: 820, multiPv: 4, randomness: 0.05, toleranceCp: 22 }
+            : { maxDepth: 5, timeBudgetMs: 1380, multiPv: 4, randomness: 0.0, toleranceCp: 0 };
 
     const result = this.analyze(fen, {
-      maxDepth: config.maxDepth,
-      timeBudgetMs: config.timeBudgetMs,
+      maxDepth: forcedBookUci ? Math.min(3, config.maxDepth) : config.maxDepth,
+      timeBudgetMs: forcedBookUci ? 260 : config.timeBudgetMs,
       multiPv: config.multiPv,
+      onTreeProgress,
     });
 
-    if (result.lines.length === 0) return moveToUci(legalMoves[0]);
-    if (config.randomness > 0 && result.lines.length > 1 && Math.random() < config.randomness) {
-      const topScore = result.lines[0].scoreCp;
-      const candidates = result.lines.filter((l) => Math.abs(l.scoreCp - topScore) <= config.toleranceCp);
-      const chosen = candidates[Math.floor(Math.random() * candidates.length)] || result.lines[0];
-      return chosen.bestMoveUci;
+    let chosenUci = forcedBookUci;
+    if (!chosenUci) {
+      if (result.lines.length === 0) {
+        chosenUci = moveToUci(legalMoves[0]);
+      } else if (config.randomness > 0 && result.lines.length > 1 && Math.random() < config.randomness) {
+        const topScore = result.lines[0].scoreCp;
+        const candidates = result.lines.filter((l) => Math.abs(l.scoreCp - topScore) <= config.toleranceCp);
+        const chosen = candidates[Math.floor(Math.random() * candidates.length)] || result.lines[0];
+        chosenUci = chosen.bestMoveUci;
+      } else {
+        chosenUci = result.lines[0].bestMoveUci;
+      }
     }
-    return result.lines[0].bestMoveUci;
+
+    // Order triedLines so non-chosen alternatives and the chosen branch are all represented cleanly
+    const orderedLines = [...result.lines];
+    orderedLines.sort((a, b) => {
+      if (a.bestMoveUci === chosenUci) return -1;
+      if (b.bestMoveUci === chosenUci) return 1;
+      return a.multipv - b.multipv;
+    });
+
+    // Ensure the actually chosen move's PV spine is highlighted in treeEdges
+    const chosenLine = orderedLines.find((l) => l.bestMoveUci === chosenUci) || orderedLines[0];
+    const chosenKeys = new Set<string>();
+    if (chosenLine) {
+      chosenLine.pvUci.forEach((u, p) => {
+        if (u.length >= 4) chosenKeys.add(`${Math.min(3, p)}:${u.slice(0, 4)}`);
+      });
+    } else if (chosenUci && chosenUci.length >= 4) {
+      chosenKeys.add(`0:${chosenUci.slice(0, 4)}`);
+    }
+    const treeEdges = result.treeEdges.map((edge) => ({
+      from: edge.from,
+      to: edge.to,
+      ply: edge.ply,
+      chosen: chosenKeys.has(`${edge.ply}:${edge.from}${edge.to}`) || undefined,
+    }));
+
+    return {
+      rootFen: fen,
+      bestMoveUci: chosenUci,
+      depth: Math.max(1, result.depth),
+      nodes: Math.max(legalMoves.length, result.nodes),
+      timeMs: result.timeMs,
+      triedLines: orderedLines.slice(0, 4),
+      allSimulations: result.allSimulations,
+      treeEdges,
+    };
+  }
+
+  public pickBotMove(fen: string, level: EngineLevel): string | null {
+    return this.pickBotMoveWithReport(fen, level)?.bestMoveUci ?? null;
+  }
+}
+
+const quickCoachEngine = new ChessAnalysisEngine();
+
+export function buildQuickSearchTreeForPosition(fen: string): {
+  edges: SearchTreeEdge[];
+  allSimulations: EngineLine[];
+  nodes: number;
+  depth: number;
+} {
+  try {
+    const res = quickCoachEngine.analyze(fen, {
+      maxDepth: 3,
+      timeBudgetMs: 180,
+      multiPv: 4,
+    });
+    return {
+      edges: res.treeEdges,
+      allSimulations: res.allSimulations,
+      nodes: res.nodes,
+      depth: res.depth,
+    };
+  } catch {
+    return { edges: [], allSimulations: [], nodes: 0, depth: 0 };
+  }
+}
+
+export interface HumanMoveAudit {
+  cpLoss: number;
+  bestBeforeCp: number;
+  afterPlayedCp: number;
+  walkedIntoMate: boolean;
+  missedTacticalCapture: boolean;
+  alternatives: { uci: string; san: string; scoreCp: number }[];
+}
+
+/**
+ * Fast synchronous depth-2 mathematical audit of a human move so Chess Angel
+ * can immediately explain mistakes, quantify evaluation loss, and highlight
+ * stronger alternatives on the 3D board.
+ */
+export function quickEvaluateHumanMove(
+  preFen: string,
+  playedUci: string,
+  postFen: string,
+): HumanMoveAudit | null {
+  try {
+    const preChess = new Chess(preFen);
+    const mover = preChess.turn();
+    const sign = mover === 'w' ? 1 : -1;
+
+    const preRes = quickCoachEngine.analyze(preFen, {
+      maxDepth: 2,
+      timeBudgetMs: 90,
+      multiPv: 4,
+    });
+    if (preRes.lines.length === 0) return null;
+
+    const postRes = quickCoachEngine.analyze(postFen, {
+      maxDepth: 2,
+      timeBudgetMs: 70,
+      multiPv: 1,
+    });
+
+    const bestBeforeWhite = preRes.lines[0].scoreCp;
+    const afterWhite =
+      postRes.lines.length > 0
+        ? postRes.lines[0].scoreCp
+        : evaluatePositionWhitePerspective(new Chess(postFen));
+
+    const bestForMover = bestBeforeWhite * sign;
+    const afterForMover = afterWhite * sign;
+    const cpLoss = Math.max(0, Math.round(bestForMover - afterForMover));
+
+    const walkedIntoMate =
+      postRes.lines[0]?.mateIn !== null &&
+      postRes.lines[0]?.mateIn !== undefined &&
+      Math.sign(postRes.lines[0].mateIn) === -sign &&
+      Math.abs(postRes.lines[0].mateIn) <= 2;
+
+    const bestLine = preRes.lines[0];
+    const bestFirstSan = bestLine.pvSan[0] || '';
+    const missedTacticalCapture =
+      bestLine.bestMoveUci !== playedUci &&
+      cpLoss >= 145 &&
+      (bestFirstSan.includes('x') || bestFirstSan.includes('+'));
+
+    const alternatives = preRes.lines
+      .filter((l) => l.bestMoveUci !== playedUci && (l.scoreCp * sign - afterForMover >= 55 || l.multipv === 1))
+      .slice(0, 2)
+      .map((l) => ({
+        uci: l.bestMoveUci,
+        san: l.pvSan[0] || l.bestMoveUci,
+        scoreCp: l.scoreCp,
+      }));
+
+    return {
+      cpLoss,
+      bestBeforeCp: bestBeforeWhite,
+      afterPlayedCp: afterWhite,
+      walkedIntoMate,
+      missedTacticalCapture,
+      alternatives,
+    };
+  } catch {
+    return null;
   }
 }
 

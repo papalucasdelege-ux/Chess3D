@@ -1,7 +1,8 @@
 import { Chess, type PieceSymbol, type Square } from 'chess.js';
-import type { AnalysisSnapshot, MoveRecord, PieceColor } from '../shared/types';
+import type { HumanMoveAudit } from './engine';
+import type { AnalysisSnapshot, BotSearchReport, MoveRecord, PieceColor } from '../shared/types';
 
-export type OpponentVoiceGender = 'female' | 'male' | 'off';
+export type AngelVoiceMode = 'on' | 'off';
 
 export type CommentaryTone =
   | 'checkmate'
@@ -9,48 +10,81 @@ export type CommentaryTone =
   | 'warning'
   | 'threat'
   | 'capture'
+  | 'math'
+  | 'hint'
   | 'opening'
   | 'neutral';
 
-export type VoiceClipId =
+export type CommentaryCaseId =
   | 'intro'
-  | 'checkmate_win_1'
-  | 'checkmate_win_2'
-  | 'checkmate_win_3'
-  | 'checkmate_lose_1'
-  | 'checkmate_lose_2'
+  | 'checkmate_win'
+  | 'checkmate_lose'
   | 'stalemate'
   | 'draw'
   | 'check_knight'
   | 'check_queen'
-  | 'check_1'
-  | 'check_2'
-  | 'player_check_1'
-  | 'player_check_2'
-  | 'warn_mate_1'
-  | 'warn_mate_2'
-  | 'warn_mate_3'
-  | 'warn_double_1'
-  | 'warn_double_2'
-  | 'watch_queen_1'
-  | 'watch_queen_2'
-  | 'watch_rook'
-  | 'watch_bishop'
-  | 'watch_knight'
-  | 'blunder_queen'
+  | 'check_general'
+  | 'player_check'
+  | 'calc_offer'
+  | 'calc_showing'
+  | 'calc_pure'
+  | 'wrong_hang_queen'
+  | 'wrong_hang_rook'
+  | 'wrong_hang_minor'
+  | 'wrong_walk_mate'
+  | 'wrong_missed_tactic'
+  | 'wrong_positional'
+  | 'wrong_better_alt'
+  | 'undo_done'
+  | 'alt_shown'
+  | 'hesitate_hint'
+  | 'hint_shown'
+  | 'warn_mate'
+  | 'warn_double'
   | 'warn_fork_2step'
   | 'warn_pawn_promo'
   | 'warn_king_file'
+  | 'watch_queen'
+  | 'watch_rook'
+  | 'watch_bishop'
+  | 'watch_knight'
   | 'promotion'
   | 'capture_queen'
   | 'capture_rook'
   | 'capture_minor'
   | 'lost_queen'
   | 'castled'
-  | 'opening_1'
-  | 'opening_2'
-  | 'strategy_1'
-  | 'strategy_2';
+  | 'opening'
+  | 'trial_confirm_1'
+  | 'trial_confirm_2'
+  | 'wrong_distracted'
+  | 'tree_browse'
+  | 'seduction';
+
+export type VoiceClipId = `${CommentaryCaseId}_${'v1' | 'v2' | 'v3'}`;
+
+export type AngelInteractiveAction =
+  | {
+      kind: 'calc-preview';
+      report: BotSearchReport;
+    }
+  | {
+      kind: 'undo-offer';
+      preFen: string;
+      reasonNote: string;
+      alternatives: { uci: string; san: string }[];
+      isSevereDistraction?: boolean;
+    }
+  | {
+      kind: 'hint-offer';
+      bestMoveUci: string;
+      bestMoveSan: string;
+    };
+
+export interface SpeechFigureHighlight {
+  square: string;
+  role: 'danger' | 'attacker';
+}
 
 export interface OpponentMessage {
   id: number;
@@ -59,7 +93,10 @@ export interface OpponentMessage {
   tag: string;
   tone: CommentaryTone;
   speaker: string;
-  gender: 'female' | 'male';
+  mathSummary?: string;
+  action?: AngelInteractiveAction;
+  isStudioPreview?: boolean;
+  concernedFigures?: SpeechFigureHighlight[];
 }
 
 interface ClipEntry {
@@ -67,45 +104,358 @@ interface ClipEntry {
   text: string;
 }
 
-const CLIP_TEXT: Record<VoiceClipId, string> = {
-  intro: 'Elena here. Watch your pieces, and think two steps ahead.',
-  checkmate_win_1: 'Checkmate! Your King has nowhere left to run.',
-  checkmate_win_2: 'Checkmate. That final trap closed completely.',
-  checkmate_win_3: 'Checkmate! Every escape square is covered.',
-  checkmate_lose_1: 'Checkmate. Well played! I walked right into your net.',
-  checkmate_lose_2: 'Checkmate! You outcalculated me on that finish.',
-  stalemate: 'Stalemate! Not a single legal square left.',
-  draw: 'A draw on the board. Neither side gave an inch.',
-  check_knight: 'Check from the Knight! Remember, you cannot block a jumping horse.',
-  check_queen: 'Check from my Queen! Guard your King carefully.',
-  check_1: 'Check! Better tend to your King right away.',
-  check_2: 'Check! Think two steps ahead before you move that King.',
-  player_check_1: 'Check on my King? Bold. Let me answer that.',
-  player_check_2: 'A check! Alright, you have my full attention now.',
-  warn_mate_1: 'Watch out! Think two steps ahead, or it is checkmate next move.',
-  warn_mate_2: 'Careful now! Checkmate is only two steps away if you miss this.',
-  warn_mate_3: 'Warning two steps ahead! Protect your King before the trap closes.',
-  warn_double_1: 'Watch out! Two of your pieces are in danger at once.',
-  warn_double_2: 'Careful! You are facing a double attack. You may not save both.',
-  watch_queen_1: 'Watch your Queen! She is standing right in my sights.',
-  watch_queen_2: 'Careful with your Queen! Leave her there and she is mine.',
-  watch_rook: 'Watch your Rook! It is looking very exposed.',
-  watch_bishop: 'Watch your Bishop! It is right in my crosshairs.',
-  watch_knight: 'Watch your Knight! One step too slow and I take it.',
-  blunder_queen: 'Wait… did you just leave your Queen wide open?',
-  warn_fork_2step: 'Think two steps ahead! My pieces are eyeing a nasty fork next turn.',
-  warn_pawn_promo: 'Watch out! This pawn is only steps away from becoming a Queen.',
-  warn_king_file: 'Watch out along that file! My heavy pieces are lining up on your King.',
-  promotion: 'A fresh Queen enters the board! Watch out now.',
-  capture_queen: 'Your Queen is mine! That tilts the entire board.',
-  capture_rook: 'I will gladly pocket that Rook. Watch your remaining defenses.',
-  capture_minor: 'Cleanly captured! Stay sharp, your move.',
-  lost_queen: 'You took my Queen! Watch out, I am not done yet.',
-  castled: 'King tucked safely behind the pawns. Now the real battle begins.',
-  opening_1: 'A classic opening. Remember to think two steps ahead.',
-  opening_2: 'Good start. Watch the diagonals as the board opens up.',
-  strategy_1: 'A quiet move, or is it? Look two steps ahead.',
-  strategy_2: 'Careful. The quietest moves often hide the sharpest traps.',
+export const CLIP_TEXT: Record<VoiceClipId, string> = {
+  // 1. Intro / Greeting
+  intro_v1:
+    'Hi there... I am your Chess Angel, exploring thousands of possibilities with you on every move. Ready whenever you are.',
+  intro_v2:
+    'Again, welcome back... your Chess Angel is ready whenever you want to make the first move.',
+  intro_v3:
+    'Here we go again... make your move whenever you are ready.',
+
+  // 2. Checkmate (Chess Angel wins)
+  checkmate_win_v1:
+    'Checkmate... every last escape square around your King is gently sealed.',
+  checkmate_win_v2:
+    'Again, checkmate... every branch on the board led right to your King.',
+  checkmate_win_v3:
+    'Checkmate once more... nowhere left for your King to step.',
+
+  // 3. Checkmate (Player wins)
+  checkmate_lose_v1:
+    'Checkmate! Oh, bravo... you found a beautiful winning combination.',
+  checkmate_lose_v2:
+    'Checkmate again! Truly well played, you outcalculated every defense I had.',
+  checkmate_lose_v3:
+    'Another checkmate for you... crisp, fearless, and wonderfully played.',
+
+  // 4. Stalemate
+  stalemate_v1:
+    'Stalemate... zero legal moves and no check at all, so we share the point.',
+  stalemate_v2:
+    'Again, stalemate... no legal moves left, a clean tie on the board.',
+  stalemate_v3:
+    'Stalemate once again... completely locked in balance.',
+
+  // 5. Draw
+  draw_v1:
+    'A draw on the board... complete harmony between both sides today.',
+  draw_v2:
+    'As it stands, another draw... neither side gave an inch.',
+  draw_v3:
+    'Drawn again... a calm, even finish for both of us.',
+
+  // 6. Knight Check
+  check_knight_v1:
+    'Check from my Knight... remember, you cannot block a jumping Knight.',
+  check_knight_v2:
+    'As I said, you cannot block a Knight... check to your King.',
+  check_knight_v3:
+    'Again, Knight check... move your King or capture the Knight.',
+
+  // 7. Queen Check
+  check_queen_v1:
+    'Check from my Queen... step very carefully with your King.',
+  check_queen_v2:
+    'Again, check from my Queen... choose your safe square carefully.',
+  check_queen_v3:
+    'Queen check once more... watch every diagonal around your King.',
+
+  // 8. General Check
+  check_general_v1:
+    'Check... better protect your King right away.',
+  check_general_v2:
+    'Again, check... look two steps ahead before choosing your escape square.',
+  check_general_v3:
+    'As I said, keep your King safe... check!',
+
+  // 9. Player Checks Chess Angel
+  player_check_v1:
+    'Ooh, checking my King? Bold choice... let me answer that.',
+  player_check_v2:
+    'Again with a check? Alright, you have my full attention.',
+  player_check_v3:
+    'Another check on my King... sharp eyes, let me step out of danger.',
+
+  // 10. Offer to Show 3 Calculated Lines
+  calc_offer_v1:
+    'Mmm... I just explored thousands of positions and tested three tempting lines before choosing this move. Would you like to see what I tried out?',
+  calc_offer_v2:
+    'Again, I tested three sharp variations across my search tree just now. Want to see them on the board?',
+  calc_offer_v3:
+    'Three more candidate branches explored... tell me if you want a quick look.',
+
+  // 11. Showing the 3 Calculated Lines
+  calc_showing_v1:
+    'Watch closely... here are the three branches I tested, each marked with its own colored arrow.',
+  calc_showing_v2:
+    'As I said, watch the three colored arrows... here is what I tried out.',
+  calc_showing_v3:
+    'Again, here are the three lines I explored, one color for each trial.',
+
+  // 12. General Deep Search / Positional Calculation
+  calc_pure_v1:
+    'Thousands of quiet variations flowed through my search tree, and they all pointed to this square.',
+  calc_pure_v2:
+    'Again, every deep branch in my calculation favored this exact continuation.',
+  calc_pure_v3:
+    'Clean and steady... this square keeps all my best lines alive.',
+
+  // 13. Player Leaves Queen Undefended
+  wrong_hang_queen_v1:
+    'Oh no... were you not paying attention? You just left your Queen completely undefended! Would you like to undo your last move?',
+  wrong_hang_queen_v2:
+    'Again, watch your Queen! That move leaves her wide open... want to undo it?',
+  wrong_hang_queen_v3:
+    'As I said, keep an eye on your Queen... she is undefended! Undo if you want a safer move.',
+
+  // 14. Player Leaves Rook Undefended
+  wrong_hang_rook_v1:
+    'Wait a second... that move leaves your Rook wide open. Were your thoughts wandering? Tell me if you would like to undo your last move.',
+  wrong_hang_rook_v2:
+    'As I said, watch your Rooks... this one is completely undefended now. Want to undo?',
+  wrong_hang_rook_v3:
+    'Again, your Rook is hanging for free... touch Undo if you want that move back.',
+
+  // 15. Player Leaves Minor Piece Undefended
+  wrong_hang_minor_v1:
+    'Careful there... you just left a piece undefended for free. Want to undo your last move so I can show you a stronger choice?',
+  wrong_hang_minor_v2:
+    'Again, you left a piece unguarded... would you like to undo and see a safer square?',
+  wrong_hang_minor_v3:
+    'As I said, check your piece protection... that one is hanging. Undo if you like.',
+
+  // 16. Player Walks Into Forced Mate
+  wrong_walk_mate_v1:
+    'Oh my... were you not paying attention just now? That move walks straight into forced checkmate. Would you like to undo it?',
+  wrong_walk_mate_v2:
+    'Again, careful! That steps right into a checkmate net... want to undo it first?',
+  wrong_walk_mate_v3:
+    'As I said, watch your King safety... that allows forced mate! Undo right away if you want.',
+
+  // 17. Player Misses a Tactical Strike
+  wrong_missed_tactic_v1:
+    'Hmm... the evaluation just swung sharply my way because you missed a much stronger tactical strike. Want to undo your last move and see it?',
+  wrong_missed_tactic_v2:
+    'Again, there was a sharp tactical shot waiting for you there... want to undo and spot it?',
+  wrong_missed_tactic_v3:
+    'You missed a lovely tactic just now... undo if you want to play the winning line.',
+
+  // 18. Player Makes a Positional Mistake
+  wrong_positional_v1:
+    'That move loosens your position and hands me the initiative. Were you distracted, or would you like to undo for a stronger alternative?',
+  wrong_positional_v2:
+    'As I said, careful with loose moves... that gives away your edge. Want to undo?',
+  wrong_positional_v3:
+    'Again, a much steadier move was available... undo if you want to see it.',
+
+  // 19. Player Misses a Cleaner Continuation
+  wrong_better_alt_v1:
+    'Hmm... there was a much cleaner continuation on the board than that. Would you like to undo your last move and see the better alternative?',
+  wrong_better_alt_v2:
+    'Again, a cleaner continuation was right there... want to undo and try the stronger line?',
+  wrong_better_alt_v3:
+    'There was a simpler, stronger move here... touch Undo if you want to see it.',
+
+  // 20. Undo Confirmed
+  undo_done_v1:
+    'There we go... let us rewind that. Follow the flat arrow on the board, that is the stronger move you were looking for.',
+  undo_done_v2:
+    'Rewound again... just follow the highlighted arrow on the board.',
+  undo_done_v3:
+    'As I said, no worries... take it back and check the arrow.',
+
+  // 21. Keep Move & Show Stronger Alternative
+  alt_shown_v1:
+    'Look at the highlighted arrow on the board... my search tree rates that alternative much higher for you.',
+  alt_shown_v2:
+    'Again, check the flat arrow... that was the stronger option here.',
+  alt_shown_v3:
+    'Right there on the arrow... keep that idea in mind for next turn.',
+
+  // 22. Player Hesitates -> Offer Hint
+  hesitate_hint_v1:
+    'Taking your time? I can see you hesitating... I spot a lovely idea for you. Touch Show Hint if you want me to light it up.',
+  hesitate_hint_v2:
+    'Hesitating again? As I said, just touch Show Hint whenever you want a gentle nudge.',
+  hesitate_hint_v3:
+    'Still thinking deeply? Touch Show Hint if you want me to point out my top candidate.',
+
+  // 23. Hint Shown on Board
+  hint_shown_v1:
+    'Here is a little clue from my search tree... follow the flat arrow on the board.',
+  hint_shown_v2:
+    'As I said, follow the arrow on the board... that is your cleanest move.',
+  hint_shown_v3:
+    'Again, right along that arrow... a very strong square for you.',
+
+  // 24. Two-Step Mate Threat Warning
+  warn_mate_v1:
+    'Watch out... look two steps ahead, or I have checkmate on the very next turn.',
+  warn_mate_v2:
+    'As I said, watch your King closely... checkmate is right around the corner.',
+  warn_mate_v3:
+    'Again, mate is threatened... defend your King right now.',
+
+  // 25. Double Threat Warning
+  warn_double_v1:
+    'Ooh, careful... two of your pieces are caught in my sights at once.',
+  warn_double_v2:
+    'Again, a double attack... two of your pieces are under fire.',
+  warn_double_v3:
+    'Watch out... another double threat on two pieces at once.',
+
+  // 26. Two-Step Fork Warning
+  warn_fork_2step_v1:
+    'Think two steps ahead... my pieces are lining up a sneaky fork on the next turn.',
+  warn_fork_2step_v2:
+    'As I said, look two moves ahead... a fork is brewing.',
+  warn_fork_2step_v3:
+    'Again, watch for the fork on my next turn.',
+
+  // 27. Passed Pawn Close to Promotion
+  warn_pawn_promo_v1:
+    'Watch this little pawn... only a few steps left before she promotes into a new Queen.',
+  warn_pawn_promo_v2:
+    'As I said, keep watching that passed pawn... she is almost at the eighth rank.',
+  warn_pawn_promo_v3:
+    'Again, my passed pawn is marching closer to a new Queen.',
+
+  // 28. Open File Pressure on King
+  warn_king_file_v1:
+    'Feel that pressure along your King file? My heavy pieces are lining up.',
+  warn_king_file_v2:
+    'As I said, watch that open file toward your King.',
+  warn_king_file_v3:
+    'Again, heavy pressure building straight down your King file.',
+
+  // 29. Direct Threat on Player's Queen
+  watch_queen_v1:
+    'Watch your Queen... she is standing right in my line of fire.',
+  watch_queen_v2:
+    'As I said, careful with your Queen... I am attacking her.',
+  watch_queen_v3:
+    'Again, eyes on your Queen... she is targeted right now.',
+
+  // 30. Direct Threat on Player's Rook
+  watch_rook_v1:
+    'Watch your Rook... it is looking dangerously exposed right now.',
+  watch_rook_v2:
+    'Again, watch your Rook... my piece has it targeted.',
+  watch_rook_v3:
+    'As I said, protect that Rook before you lose it.',
+
+  // 31. Direct Threat on Player's Bishop
+  watch_bishop_v1:
+    'Careful with your Bishop... my pieces have it targeted.',
+  watch_bishop_v2:
+    'As I said, watch your Bishop... it is under attack.',
+  watch_bishop_v3:
+    'Again, your Bishop is in danger on that square.',
+
+  // 32. Direct Threat on Player's Knight
+  watch_knight_v1:
+    'Watch your Knight... one slow move and I will capture it.',
+  watch_knight_v2:
+    'Again, careful with your Knight... it is under attack right now.',
+  watch_knight_v3:
+    'As I said, save your Knight before my next move.',
+
+  // 33. Pawn Promotion
+  promotion_v1:
+    'Ooh, a brand new Queen joins the board... things just got much trickier for your King.',
+  promotion_v2:
+    'Again, another pawn promotes to a Queen!',
+  promotion_v3:
+    'A new Queen once more... watch your King closely now.',
+
+  // 34. Captured Player's Queen
+  capture_queen_v1:
+    'Your Queen is mine... that tilts the entire board in my favor.',
+  capture_queen_v2:
+    'Again, I take your Queen... a huge swing on the board.',
+  capture_queen_v3:
+    'Queen captured... now the endgame leans strongly my way.',
+
+  // 35. Captured Player's Rook
+  capture_rook_v1:
+    'I will happily take that Rook... keep a close eye on your remaining defenses.',
+  capture_rook_v2:
+    'Again, another Rook captured... tighten up your defense.',
+  capture_rook_v3:
+    'Rook off the board... your turn to respond.',
+
+  // 36. Captured Minor Piece
+  capture_minor_v1:
+    'Cleanly captured... your turn to move.',
+  capture_minor_v2:
+    'Again, a clean capture... over to you.',
+  capture_minor_v3:
+    'Piece taken... your move.',
+
+  // 37. Player Captured Chess Angel's Queen
+  lost_queen_v1:
+    'Ooh, you captured my Queen! Very clever... let us see if my remaining pieces can still outplay you.',
+  lost_queen_v2:
+    'My Queen again? Sharp tactics... I will have to fight extra resourcefully now.',
+  lost_queen_v3:
+    'You got my Queen... nicely spotted, play on!',
+
+  // 38. Castled
+  castled_v1:
+    'My King is tucked safely away... now I can focus purely on the attack.',
+  castled_v2:
+    'Castled again... safe King, active Rook.',
+  castled_v3:
+    'As I like to play it, King tucked safe first... your move.',
+
+  // 39. Opening Move
+  opening_v1:
+    'Ooh, a classic opening... thousands of bright possibilities are already unfolding between us.',
+  opening_v2:
+    'Lovely start again... watch the center squares open up.',
+  opening_v3:
+    'Fresh board, clean diagonals... let us see where this game leads.',
+
+  // 40. Confirm Branch 1 Seen & Understood Before Playing Branch 2
+  trial_confirm_1_v1:
+    'Have you seen and understood this first branch? Click to confirm whenever you are ready, and I will play the second one.',
+  trial_confirm_1_v2:
+    'As I said, click to confirm once you have seen and understood this first line, and I will show you the next.',
+  trial_confirm_1_v3:
+    'First branch shown... click to confirm when you are ready for the second.',
+
+  // 41. Confirm Branch 2 Seen & Understood Before Playing Branch 3
+  trial_confirm_2_v1:
+    'Have you seen and understood that second branch too? Click to confirm when you are ready, and I will play the third one.',
+  trial_confirm_2_v2:
+    'Again, click to confirm once you have seen and understood this second line, and I will show the third.',
+  trial_confirm_2_v3:
+    'Second branch complete... click to confirm and I will play the third.',
+
+  // 42. Player Makes a Very Bad Move Almost by Distraction -> Chess Angel Undo Modal
+  wrong_distracted_v1:
+    'Well, you were not concentrated there... Try to be more focused! Do you want us to replay the last one? Then click the Undo button, please.',
+  wrong_distracted_v2:
+    'Again, you were not concentrated there... Try to stay focused! If you want us to replay the last one, click the Undo button, please.',
+  wrong_distracted_v3:
+    'As I said, stay focused... you lost concentration there! Click the Undo button, please, if you want to replay that last move.',
+
+  // 43. Full Search Tree Shown -> Calm Simulation-by-Simulation Browser & 3 Best Evaluations Button
+  tree_browse_v1:
+    "Don't be shocked, I am a computer... if you want, you can now browse through all my simulations one by one before we go on... or if you want to, you can see only my three best evaluations by clicking on the button.",
+  tree_browse_v2:
+    "As I said, don't be shocked that I am a computer... feel free to browse calmly through all my simulations one by one before we go on, or click the button to see only my three best evaluations.",
+  tree_browse_v3:
+    'Again, browse calmly through all my simulations one by one before we go on, or click the button to see only my three best evaluations.',
+
+  // 44. Special Seduction / Distraction Video when the Player Plays Too Well (uses separated seduction.mp3)
+  seduction_v1:
+    'Oh, bravo... Very clever... Alright, you have my full attention.',
+  seduction_v2:
+    'Oh, bravo... Very clever... Alright, you have my full attention.',
+  seduction_v3:
+    'Oh, bravo... Very clever... Alright, you have my full attention.',
 };
 
 const PIECE_VALUES: Record<PieceSymbol, number> = {
@@ -118,38 +468,173 @@ const PIECE_VALUES: Record<PieceSymbol, number> = {
 };
 
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+const SPEAKER_NAME = 'Chess Angel';
 
-// Track recently played clips so the adversary stays varied and fresh
-const recentClips: VoiceClipId[] = [];
+// Tracks how many times each commentary case has occurred so:
+// - 1st occurrence plays _v1 (full primary phrasing)
+// - 2nd occurrence plays _v2 ("As I said..." / "Again..." / shorter secondary phrasing)
+// - 3rd occurrence plays _v3 (concise third-occurrence phrasing)
+// - 4th+ occurrences alternate cleanly between _v2 and _v3
+const caseOccurrenceCounts = new Map<CommentaryCaseId, number>();
 let messageSeq = 1;
 
-function pickFreshClip(candidates: VoiceClipId[]): ClipEntry {
-  const unseen = candidates.filter((id) => !recentClips.includes(id));
-  const pool = unseen.length > 0 ? unseen : candidates;
-  const clipId = pool[Math.floor(Math.random() * pool.length)];
-  recentClips.push(clipId);
-  if (recentClips.length > 10) recentClips.shift();
+type CaseMaxPlaysProvider = (caseId: CommentaryCaseId) => number | null;
+let caseMaxPlaysProvider: CaseMaxPlaysProvider = (caseId) =>
+  caseId === 'tree_browse' ? 2 : caseId === 'seduction' ? 1 : null;
+
+export function registerCaseMaxPlaysProvider(provider: CaseMaxPlaysProvider): void {
+  caseMaxPlaysProvider = provider;
+}
+
+export function getCaseMaxPlaysInGame(caseId: CommentaryCaseId): number | null {
+  return caseMaxPlaysProvider(caseId);
+}
+
+export function canPlayCaseInGame(caseId: CommentaryCaseId): boolean {
+  const maxPlays = getCaseMaxPlaysInGame(caseId);
+  if (maxPlays === null) return true;
+  if (maxPlays <= 0) return false;
+  const used = caseOccurrenceCounts.get(caseId) || 0;
+  return used < maxPlays;
+}
+
+export function resetGameCommentaryCounts(): void {
+  caseOccurrenceCounts.clear();
+}
+
+function tryPickCaseClip(caseId: CommentaryCaseId): ClipEntry | null {
+  if (!canPlayCaseInGame(caseId)) {
+    return null;
+  }
+  const count = (caseOccurrenceCounts.get(caseId) || 0) + 1;
+  caseOccurrenceCounts.set(caseId, count);
+  const variant: 'v1' | 'v2' | 'v3' =
+    count === 1
+      ? 'v1'
+      : count === 2
+        ? 'v2'
+        : caseId === 'tree_browse'
+          ? 'v3'
+          : count === 3
+            ? 'v3'
+            : count % 2 === 0
+              ? 'v2'
+              : 'v3';
+  const clipId = `${caseId}_${variant}` as VoiceClipId;
   return { clipId, text: CLIP_TEXT[clipId] };
 }
 
-export function getSpeakerName(gender: 'female' | 'male'): string {
-  return gender === 'female' ? 'Elena' : 'Viktor';
+export function getSpeakerName(): string {
+  return SPEAKER_NAME;
 }
 
-export function createIntroMessage(gender: 'female' | 'male'): OpponentMessage {
-  const speaker = getSpeakerName(gender);
-  const text =
-    gender === 'female'
-      ? 'Elena here. Watch your pieces, and think two steps ahead.'
-      : 'Viktor here. Set the wood, and see if you can spot my threats two moves ahead.';
+export function createIntroMessage(): OpponentMessage | null {
+  const entry = tryPickCaseClip('intro');
+  if (!entry) return null;
   return {
     id: messageSeq++,
-    clipId: 'intro',
-    text,
-    tag: 'VOICE ACTIVE',
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'WELCOME',
     tone: 'opening',
-    speaker,
-    gender,
+    speaker: SPEAKER_NAME,
+  };
+}
+
+export function createCalcShowingMessage(report: BotSearchReport): OpponentMessage | null {
+  const entry = tryPickCaseClip('calc_showing');
+  if (!entry) return null;
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'SEARCH TREE REPLAY',
+    tone: 'math',
+    speaker: SPEAKER_NAME,
+    mathSummary: `${report.nodes.toLocaleString()} nodes · Depth ${report.depth} · Animating ${Math.min(3, report.triedLines.length)} branches`,
+  };
+}
+
+export function createTrialConfirmMessage(
+  completedBranchIndex: 1 | 2,
+  pvSan: string[],
+): OpponentMessage | null {
+  const caseId: CommentaryCaseId =
+    completedBranchIndex === 1 ? 'trial_confirm_1' : 'trial_confirm_2';
+  const entry = tryPickCaseClip(caseId);
+  if (!entry) return null;
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: `BRANCH ${completedBranchIndex} · CLICK TO CONFIRM`,
+    tone: 'math',
+    speaker: SPEAKER_NAME,
+    mathSummary: pvSan.length > 0 ? `Branch ${completedBranchIndex}: ${pvSan.join(' → ')}` : undefined,
+  };
+}
+
+export function createTreeBrowseMessage(
+  totalSimulations: number,
+  depth?: number,
+  nodes?: number,
+): OpponentMessage | null {
+  const entry = tryPickCaseClip('tree_browse');
+  if (!entry) return null;
+  const summaryParts: string[] = [];
+  if (nodes && nodes > 0) summaryParts.push(`${nodes.toLocaleString()} nodes`);
+  if (depth && depth > 0) summaryParts.push(`Depth ${depth}`);
+  summaryParts.push(`${totalSimulations} simulations`);
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'FULL SEARCH TREE · BROWSE SIMULATIONS',
+    tone: 'math',
+    speaker: SPEAKER_NAME,
+    mathSummary: summaryParts.join(' · '),
+  };
+}
+
+export function createUndoConfirmedMessage(bestAltSan?: string): OpponentMessage | null {
+  const entry = tryPickCaseClip('undo_done');
+  if (!entry) return null;
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'REWIND & BETTER LINE',
+    tone: 'hint',
+    speaker: SPEAKER_NAME,
+    mathSummary: bestAltSan ? `Recommended continuation: ${bestAltSan}` : undefined,
+  };
+}
+
+export function createAltShownMessage(bestAltSan?: string): OpponentMessage | null {
+  const entry = tryPickCaseClip('alt_shown');
+  if (!entry) return null;
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'STRONGER ALTERNATIVE',
+    tone: 'hint',
+    speaker: SPEAKER_NAME,
+    mathSummary: bestAltSan ? `Higher-rated branch: ${bestAltSan}` : undefined,
+  };
+}
+
+export function createHintShownMessage(bestMoveSan?: string): OpponentMessage | null {
+  const entry = tryPickCaseClip('hint_shown');
+  if (!entry) return null;
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'CHESS ANGEL HINT',
+    tone: 'hint',
+    speaker: SPEAKER_NAME,
+    mathSummary: bestMoveSan ? `Top candidate: ${bestMoveSan}` : undefined,
   };
 }
 
@@ -190,25 +675,288 @@ function countThreatenedValuables(
   return list;
 }
 
+function findKingSquareOfColor(chess: Chess, color: PieceColor): Square | null {
+  const board = chess.board();
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const cell = board[r][c];
+      if (cell && cell.color === color && cell.type === 'k') {
+        return `${FILES[c]}${8 - r}` as Square;
+      }
+    }
+  }
+  return null;
+}
+
+function findPiecesOfType(chess: Chess, color: PieceColor, type: PieceSymbol): Square[] {
+  const board = chess.board();
+  const out: Square[] = [];
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const cell = board[r][c];
+      if (cell && cell.color === color && cell.type === type) {
+        out.push(`${FILES[c]}${8 - r}` as Square);
+      }
+    }
+  }
+  return out;
+}
+
 /**
- * Checks whether the adversary can deliver checkmate in 1 move if the player
- * makes a careless move (a true "watch out two steps ahead" mate threat!),
- * or if the adversary has a devastating Knight/Queen/Bishop fork one move away.
+ * Geometrically locates all squares containing pieces of `attackerColor` that currently
+ * attack `targetSq` (works regardless of whose turn is active in `chess`).
  */
+function findPiecesAttackingSquare(
+  chess: Chess,
+  targetSq: Square | null,
+  attackerColor: PieceColor,
+): Square[] {
+  if (!targetSq || targetSq.length < 2) return [];
+  const tc = targetSq.charCodeAt(0) - 97;
+  const tr = 8 - Number(targetSq[1]);
+  if (tc < 0 || tc > 7 || tr < 0 || tr > 7) return [];
+
+  const board = chess.board();
+  const attackers: Square[] = [];
+
+  // 1. Knights
+  const knightOffsets: ReadonlyArray<readonly [number, number]> = [
+    [-2, -1],
+    [-2, 1],
+    [-1, -2],
+    [-1, 2],
+    [1, -2],
+    [1, 2],
+    [2, -1],
+    [2, 1],
+  ];
+  for (const [dr, dc] of knightOffsets) {
+    const r = tr + dr;
+    const c = tc + dc;
+    if (r >= 0 && r < 8 && c >= 0 && c < 8) {
+      const cell = board[r][c];
+      if (cell && cell.color === attackerColor && cell.type === 'n') {
+        attackers.push(`${FILES[c]}${8 - r}` as Square);
+      }
+    }
+  }
+
+  // 2. Pawns (White attacks upward toward smaller r, so White pawn sits at tr + 1; Black at tr - 1)
+  const pawnRow = attackerColor === 'w' ? tr + 1 : tr - 1;
+  if (pawnRow >= 0 && pawnRow < 8) {
+    for (const dc of [-1, 1]) {
+      const c = tc + dc;
+      if (c >= 0 && c < 8) {
+        const cell = board[pawnRow][c];
+        if (cell && cell.color === attackerColor && cell.type === 'p') {
+          attackers.push(`${FILES[c]}${8 - pawnRow}` as Square);
+        }
+      }
+    }
+  }
+
+  // 3. Adjacent King
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (dr === 0 && dc === 0) continue;
+      const r = tr + dr;
+      const c = tc + dc;
+      if (r >= 0 && r < 8 && c >= 0 && c < 8) {
+        const cell = board[r][c];
+        if (cell && cell.color === attackerColor && cell.type === 'k') {
+          attackers.push(`${FILES[c]}${8 - r}` as Square);
+        }
+      }
+    }
+  }
+
+  // 4. Orthogonal rays (Rooks & Queens)
+  const orthoDirs: ReadonlyArray<readonly [number, number]> = [
+    [-1, 0],
+    [1, 0],
+    [0, -1],
+    [0, 1],
+  ];
+  for (const [dr, dc] of orthoDirs) {
+    let r = tr + dr;
+    let c = tc + dc;
+    while (r >= 0 && r < 8 && c >= 0 && c < 8) {
+      const cell = board[r][c];
+      if (cell) {
+        if (cell.color === attackerColor && (cell.type === 'r' || cell.type === 'q')) {
+          attackers.push(`${FILES[c]}${8 - r}` as Square);
+        }
+        break;
+      }
+      r += dr;
+      c += dc;
+    }
+  }
+
+  // 5. Diagonal rays (Bishops & Queens)
+  const diagDirs: ReadonlyArray<readonly [number, number]> = [
+    [-1, -1],
+    [-1, 1],
+    [1, -1],
+    [1, 1],
+  ];
+  for (const [dr, dc] of diagDirs) {
+    let r = tr + dr;
+    let c = tc + dc;
+    while (r >= 0 && r < 8 && c >= 0 && c < 8) {
+      const cell = board[r][c];
+      if (cell) {
+        if (cell.color === attackerColor && (cell.type === 'b' || cell.type === 'q')) {
+          attackers.push(`${FILES[c]}${8 - r}` as Square);
+        }
+        break;
+      }
+      r += dr;
+      c += dc;
+    }
+  }
+
+  return attackers;
+}
+
+function buildConcernedFigures(
+  dangerSqs: Iterable<string | null | undefined>,
+  attackerSqs: Iterable<string | null | undefined> = [],
+): SpeechFigureHighlight[] | undefined {
+  const bySquare = new Map<string, 'danger' | 'attacker'>();
+  for (const sq of dangerSqs) {
+    if (sq && sq.length === 2) {
+      bySquare.set(sq, 'danger');
+    }
+  }
+  for (const sq of attackerSqs) {
+    if (sq && sq.length === 2 && !bySquare.has(sq)) {
+      bySquare.set(sq, 'attacker');
+    }
+  }
+  if (bySquare.size === 0) return undefined;
+  return Array.from(bySquare.entries()).map(([square, role]) => ({ square, role }));
+}
+
+/**
+ * Resolves representative concerned 3D board figures when testing a warning/watch saying
+ * directly from Chess Angel Video Studio (`Test` button).
+ */
+export function resolvePreviewConcernedFigures(
+  caseId: CommentaryCaseId,
+  fen: string,
+  humanColor: PieceColor,
+): SpeechFigureHighlight[] | undefined {
+  const aiColor: PieceColor = humanColor === 'w' ? 'b' : 'w';
+  let chess: Chess;
+  try {
+    chess = new Chess(fen);
+  } catch {
+    return undefined;
+  }
+
+  const humanKing = findKingSquareOfColor(chess, humanColor);
+  const aiKing = findKingSquareOfColor(chess, aiColor);
+
+  switch (caseId) {
+    case 'watch_queen':
+    case 'wrong_hang_queen':
+      return buildConcernedFigures(
+        findPiecesOfType(chess, humanColor, 'q'),
+        findPiecesOfType(chess, aiColor, 'q').slice(0, 1),
+      );
+    case 'watch_rook':
+    case 'wrong_hang_rook':
+      return buildConcernedFigures(
+        findPiecesOfType(chess, humanColor, 'r').slice(0, 1),
+        findPiecesOfType(chess, aiColor, 'b').slice(0, 1),
+      );
+    case 'watch_bishop':
+      return buildConcernedFigures(
+        findPiecesOfType(chess, humanColor, 'b').slice(0, 1),
+        findPiecesOfType(chess, aiColor, 'n').slice(0, 1),
+      );
+    case 'watch_knight':
+    case 'wrong_hang_minor':
+      return buildConcernedFigures(
+        findPiecesOfType(chess, humanColor, 'n').slice(0, 1),
+        findPiecesOfType(chess, aiColor, 'b').slice(0, 1),
+      );
+    case 'warn_double':
+    case 'warn_fork_2step': {
+      const targets = [
+        ...findPiecesOfType(chess, humanColor, 'q'),
+        ...findPiecesOfType(chess, humanColor, 'r'),
+        ...findPiecesOfType(chess, humanColor, 'b'),
+      ].slice(0, 2);
+      const forkers = [
+        ...findPiecesOfType(chess, aiColor, 'n'),
+        ...findPiecesOfType(chess, aiColor, 'q'),
+      ].slice(0, 1);
+      return buildConcernedFigures(targets, forkers);
+    }
+    case 'warn_mate':
+    case 'wrong_walk_mate':
+    case 'check_queen':
+    case 'checkmate_win':
+      return buildConcernedFigures(
+        [humanKing],
+        findPiecesOfType(chess, aiColor, 'q').slice(0, 1),
+      );
+    case 'check_knight':
+      return buildConcernedFigures(
+        [humanKing],
+        findPiecesOfType(chess, aiColor, 'n').slice(0, 1),
+      );
+    case 'check_general':
+    case 'warn_king_file':
+      return buildConcernedFigures(
+        [humanKing],
+        [
+          ...findPiecesOfType(chess, aiColor, 'r'),
+          ...findPiecesOfType(chess, aiColor, 'q'),
+        ].slice(0, 1),
+      );
+    case 'warn_pawn_promo':
+      return buildConcernedFigures(
+        [humanKing],
+        findPiecesOfType(chess, aiColor, 'p').slice(0, 1),
+      );
+    case 'player_check':
+    case 'checkmate_lose':
+      return buildConcernedFigures(
+        [aiKing],
+        findPiecesOfType(chess, humanColor, 'q').slice(0, 1),
+      );
+    default:
+      return undefined;
+  }
+}
+
 function detectTwoStepThreats(
   fen: string,
   aiColor: PieceColor,
   humanColor: PieceColor,
 ): {
   hasMateThreat: boolean;
+  mateAttackerSqs: Square[];
   hasForkPreview: boolean;
+  forkAttackerSq: Square | null;
+  forkTargetSqs: Square[];
   passedPawnClose: boolean;
+  passedPawnSqs: Square[];
   openFileKingPressure: boolean;
+  kingFileAttackerSqs: Square[];
 } {
   let hasMateThreat = false;
+  const mateAttackerSqs: Square[] = [];
   let hasForkPreview = false;
+  let forkAttackerSq: Square | null = null;
+  let forkTargetSqs: Square[] = [];
   let passedPawnClose = false;
+  const passedPawnSqs: Square[] = [];
   let openFileKingPressure = false;
+  const kingFileAttackerSqs: Square[] = [];
 
   try {
     const parts = fen.split(' ');
@@ -221,6 +969,9 @@ function detectTwoStepThreats(
       aiTurnChess.move(m);
       if (aiTurnChess.isCheckmate()) {
         hasMateThreat = true;
+        if (!mateAttackerSqs.includes(m.from as Square)) {
+          mateAttackerSqs.push(m.from as Square);
+        }
         aiTurnChess.undo();
         break;
       }
@@ -228,12 +979,14 @@ function detectTwoStepThreats(
         const attackedValuables = countThreatenedValuables(aiTurnChess, aiColor, humanColor);
         if (attackedValuables.length >= 2) {
           hasForkPreview = true;
+          forkAttackerSq = m.from as Square;
+          forkTargetSqs = attackedValuables.slice(0, 3).map((t) => t.square);
         }
       }
       aiTurnChess.undo();
     }
   } catch {
-    // Hypothetical null-move FEN can be invalid when human is already in check — safely ignore
+    // Ignore invalid null-move FEN when King is already in check
   }
 
   const chess = new Chess(fen);
@@ -243,6 +996,7 @@ function detectTwoStepThreats(
     for (let c = 0; c < 8; c++) {
       const cell = board[r][c];
       if (!cell) continue;
+      const sq = `${FILES[c]}${8 - r}` as Square;
       if (cell.type === 'k' && cell.color === humanColor) {
         humanKingFile = c;
       }
@@ -250,6 +1004,7 @@ function detectTwoStepThreats(
         const rank = 8 - r;
         if ((aiColor === 'w' && rank >= 6) || (aiColor === 'b' && rank <= 3)) {
           passedPawnClose = true;
+          passedPawnSqs.push(sq);
         }
       }
     }
@@ -266,99 +1021,484 @@ function detectTwoStepThreats(
           Math.abs(c - humanKingFile) <= 1
         ) {
           openFileKingPressure = true;
+          kingFileAttackerSqs.push(`${FILES[c]}${8 - r}` as Square);
         }
       }
     }
   }
 
-  return { hasMateThreat, hasForkPreview, passedPawnClose, openFileKingPressure };
+  return {
+    hasMateThreat,
+    mateAttackerSqs,
+    hasForkPreview,
+    forkAttackerSq,
+    forkTargetSqs,
+    passedPawnClose,
+    passedPawnSqs,
+    openFileKingPressure,
+    kingFileAttackerSqs,
+  };
 }
 
-export interface ComposeContext {
+export interface HumanCommentaryContext {
+  preFen: string;
+  postFen: string;
+  lastMove: MoveRecord;
+  aiColor: PieceColor;
+  humanColor: PieceColor;
+  audit: HumanMoveAudit | null;
+  plyCount?: number;
+  humanGoodStreak?: number;
+  humanEvalAdvantageCp?: number;
+  canTriggerSeductionNow?: boolean;
+  seductionTriggerMode?: SeductionTriggerMode;
+}
+
+export type SeductionTriggerMode = 'balanced' | 'frequent' | 'dominant' | 'tactical';
+
+/**
+ * Evaluates the player's move immediately after it is played:
+ * - Detects checkmate/draw/check/Queen capture
+ * - Detects blunders/mistakes (hanging Queen/Rook/minor piece, walking into mate,
+ *   missing a tactic, or dropping >= 110 cp), explains why, lists stronger
+ *   alternatives, and asks if the player wants to undo the move.
+ * - Uses 1st -> 2nd -> 3rd occurrence variants for every single message case.
+ */
+export function evaluateHumanMoveCommentary(ctx: HumanCommentaryContext): OpponentMessage | null {
+  const { preFen, postFen, lastMove, aiColor, humanColor, audit } = ctx;
+  const postChess = new Chess(postFen);
+
+  const humanKingSq = findKingSquareOfColor(postChess, humanColor);
+  const aiKingSq = findKingSquareOfColor(postChess, aiColor);
+
+  if (postChess.isCheckmate()) {
+    const entry = tryPickCaseClip('checkmate_lose');
+    if (!entry) return null;
+    return {
+      id: messageSeq++,
+      clipId: entry.clipId,
+      text: entry.text,
+      tag: 'CHECKMATE',
+      tone: 'checkmate',
+      speaker: SPEAKER_NAME,
+      concernedFigures: buildConcernedFigures(
+        [aiKingSq],
+        findPiecesAttackingSquare(postChess, aiKingSq, humanColor),
+      ),
+    };
+  }
+
+  if (postChess.isStalemate()) {
+    const entry = tryPickCaseClip('stalemate');
+    if (!entry) return null;
+    return {
+      id: messageSeq++,
+      clipId: entry.clipId,
+      text: entry.text,
+      tag: 'STALEMATE',
+      tone: 'neutral',
+      speaker: SPEAKER_NAME,
+    };
+  }
+
+  if (postChess.isDraw()) {
+    const entry = tryPickCaseClip('draw');
+    if (!entry) return null;
+    return {
+      id: messageSeq++,
+      clipId: entry.clipId,
+      text: entry.text,
+      tag: 'DRAW',
+      tone: 'neutral',
+      speaker: SPEAKER_NAME,
+    };
+  }
+
+  // Check if player walked straight into a mate-in-1 or forced mate-in-2
+  const mateReplyFromSqs: Square[] = [];
+  const aiCanMateImmediately = (() => {
+    const replies = postChess.moves({ verbose: true });
+    for (const r of replies) {
+      postChess.move(r);
+      const mate = postChess.isCheckmate();
+      postChess.undo();
+      if (mate) {
+        mateReplyFromSqs.push(r.from as Square);
+        return true;
+      }
+    }
+    return false;
+  })();
+
+  const alts = (audit?.alternatives || []).map((a) => ({ uci: a.uci, san: a.san }));
+  const altLabel = alts.length > 0 ? `Better: ${alts.map((a) => a.san).join(' or ')}` : '';
+
+  // Check newly undefended or hanging valuable pieces after human's move
+  const preChess = new Chess(preFen);
+  const preHanging = new Set(
+    countThreatenedValuables(preChess, aiColor, humanColor)
+      .filter((p) => p.undefended)
+      .map((p) => `${p.type}@${p.square}`),
+  );
+  const postHanging = countThreatenedValuables(postChess, aiColor, humanColor).filter(
+    (p) => p.undefended,
+  );
+  const newlyExposed =
+    postHanging.find((p) => !preHanging.has(`${p.type}@${p.square}`)) || postHanging[0];
+
+  const movedDestAttacked = postChess.isAttacked(lastMove.to as Square, aiColor);
+  const cpLossVal = audit?.cpLoss ?? 0;
+
+  // Severe blunder ("almost by distraction"): walking into forced mate, leaving Queen/Rook/minor
+  // completely en prise, moving a piece straight into a losing capture, or dropping >= 240 cp.
+  const isSevereDistractionBlunder =
+    aiCanMateImmediately ||
+    Boolean(audit?.walkedIntoMate) ||
+    (Boolean(newlyExposed) &&
+      (newlyExposed!.type === 'q' ||
+        (newlyExposed!.type === 'r' && (audit === null || cpLossVal >= 130)) ||
+        ((newlyExposed!.type === 'b' || newlyExposed!.type === 'n') &&
+          (audit === null || cpLossVal >= 210)))) ||
+    (movedDestAttacked && cpLossVal >= 220) ||
+    cpLossVal >= 240;
+
+  if (isSevereDistractionBlunder) {
+    const entry = tryPickCaseClip('wrong_distracted');
+    if (entry) {
+      let reasonNote = 'Severe loss of material or king safety';
+      let summaryCore = '';
+      let blunderFigures: SpeechFigureHighlight[] | undefined;
+
+      if (aiCanMateImmediately || audit?.walkedIntoMate) {
+        reasonNote = 'Walks straight into forced checkmate';
+        summaryCore = 'Allows forced mate';
+        blunderFigures = buildConcernedFigures([humanKingSq, lastMove.to], mateReplyFromSqs);
+      } else if (newlyExposed?.type === 'q') {
+        reasonNote = `Queen left undefended on ${newlyExposed.square}`;
+        summaryCore = `Queen undefended on ${newlyExposed.square}`;
+        blunderFigures = buildConcernedFigures(
+          [newlyExposed.square],
+          findPiecesAttackingSquare(postChess, newlyExposed.square, aiColor),
+        );
+      } else if (newlyExposed?.type === 'r') {
+        reasonNote = `Rook left undefended on ${newlyExposed.square}`;
+        summaryCore = `Rook undefended on ${newlyExposed.square}`;
+        blunderFigures = buildConcernedFigures(
+          [newlyExposed.square],
+          findPiecesAttackingSquare(postChess, newlyExposed.square, aiColor),
+        );
+      } else if (newlyExposed && (newlyExposed.type === 'b' || newlyExposed.type === 'n')) {
+        const pieceWord = newlyExposed.type === 'b' ? 'Bishop' : 'Knight';
+        reasonNote = `${pieceWord} left undefended on ${newlyExposed.square}`;
+        summaryCore = `${pieceWord} undefended on ${newlyExposed.square}`;
+        blunderFigures = buildConcernedFigures(
+          [newlyExposed.square],
+          findPiecesAttackingSquare(postChess, newlyExposed.square, aiColor),
+        );
+      } else if (cpLossVal > 0) {
+        const pawnsLost = (cpLossVal / 100).toFixed(1);
+        reasonNote = `Blunder (−${pawnsLost} pawns)`;
+        summaryCore = `−${pawnsLost} eval swing`;
+        blunderFigures = buildConcernedFigures(
+          [lastMove.to],
+          movedDestAttacked
+            ? findPiecesAttackingSquare(postChess, lastMove.to as Square, aiColor)
+            : [],
+        );
+      }
+
+      const mathSummary = [summaryCore, altLabel].filter(Boolean).join(' · ') || undefined;
+
+      return {
+        id: messageSeq++,
+        clipId: entry.clipId,
+        text: entry.text,
+        tag: 'LOST FOCUS · UNDO?',
+        tone: 'warning',
+        speaker: SPEAKER_NAME,
+        mathSummary,
+        concernedFigures: blunderFigures,
+        action: {
+          kind: 'undo-offer',
+          preFen,
+          reasonNote,
+          alternatives: alts,
+          isSevereDistraction: true,
+        },
+      };
+    }
+  }
+
+  if (newlyExposed && (audit === null || audit.cpLoss >= 95)) {
+    if (
+      (newlyExposed.type === 'b' || newlyExposed.type === 'n') &&
+      (audit?.cpLoss ?? 200) >= 135
+    ) {
+      const pieceWord = newlyExposed.type === 'b' ? 'Bishop' : 'Knight';
+      const entry = tryPickCaseClip('wrong_hang_minor');
+      if (entry) {
+        return {
+          id: messageSeq++,
+          clipId: entry.clipId,
+          text: entry.text,
+          tag: `${pieceWord.toUpperCase()} HANGING · UNDO?`,
+          tone: 'warning',
+          speaker: SPEAKER_NAME,
+          mathSummary: `${pieceWord} undefended on ${newlyExposed.square}${altLabel ? ` · ${altLabel}` : ''}`,
+          concernedFigures: buildConcernedFigures(
+            [newlyExposed.square],
+            findPiecesAttackingSquare(postChess, newlyExposed.square, aiColor),
+          ),
+          action: {
+            kind: 'undo-offer',
+            preFen,
+            reasonNote: `${pieceWord} left undefended on ${newlyExposed.square}`,
+            alternatives: alts,
+          },
+        };
+      }
+    }
+  }
+
+  // Audit evaluation swings (missed tactic, positional mistake, or clear inaccuracy)
+  if (audit && alts.length > 0) {
+    const pawnsLost = (audit.cpLoss / 100).toFixed(1);
+    const altOriginSq =
+      alts[0].uci.length >= 4 && postChess.get(alts[0].uci.slice(0, 2) as Square)?.color === humanColor
+        ? alts[0].uci.slice(0, 2)
+        : null;
+    const mistakeFigures = buildConcernedFigures(
+      [lastMove.to],
+      movedDestAttacked
+        ? findPiecesAttackingSquare(postChess, lastMove.to as Square, aiColor)
+        : [altOriginSq],
+    );
+
+    if (audit.missedTacticalCapture) {
+      const entry = tryPickCaseClip('wrong_missed_tactic');
+      if (entry) {
+        return {
+          id: messageSeq++,
+          clipId: entry.clipId,
+          text: entry.text,
+          tag: 'MISSED TACTIC · UNDO?',
+          tone: 'warning',
+          speaker: SPEAKER_NAME,
+          mathSummary: `−${pawnsLost} eval swing · ${altLabel}`,
+          concernedFigures: mistakeFigures,
+          action: {
+            kind: 'undo-offer',
+            preFen,
+            reasonNote: `Missed stronger tactical strike (${alts[0].san})`,
+            alternatives: alts,
+          },
+        };
+      }
+    }
+    if (audit.cpLoss >= 175) {
+      const entry = tryPickCaseClip('wrong_positional');
+      if (entry) {
+        return {
+          id: messageSeq++,
+          clipId: entry.clipId,
+          text: entry.text,
+          tag: 'MISTAKE · UNDO?',
+          tone: 'warning',
+          speaker: SPEAKER_NAME,
+          mathSummary: `−${pawnsLost} pawns · ${altLabel}`,
+          concernedFigures: mistakeFigures,
+          action: {
+            kind: 'undo-offer',
+            preFen,
+            reasonNote: `Drops ${pawnsLost} pawns of evaluation`,
+            alternatives: alts,
+          },
+        };
+      }
+    }
+    if (audit.cpLoss >= 110) {
+      const entry = tryPickCaseClip('wrong_better_alt');
+      if (entry) {
+        return {
+          id: messageSeq++,
+          clipId: entry.clipId,
+          text: entry.text,
+          tag: 'BETTER LINE · UNDO?',
+          tone: 'hint',
+          speaker: SPEAKER_NAME,
+          mathSummary: `−${pawnsLost} pawns · ${altLabel}`,
+          concernedFigures: mistakeFigures,
+          action: {
+            kind: 'undo-offer',
+            preFen,
+            reasonNote: `${alts[0].san} kept a cleaner edge`,
+            alternatives: alts,
+          },
+        };
+      }
+    }
+  }
+
+  // Positive / neutral reactions to sharp human moves
+  if (postChess.inCheck()) {
+    const entry = tryPickCaseClip('player_check');
+    if (!entry) return null;
+    return {
+      id: messageSeq++,
+      clipId: entry.clipId,
+      text: entry.text,
+      tag: 'CHECK',
+      tone: 'check',
+      speaker: SPEAKER_NAME,
+      concernedFigures: buildConcernedFigures(
+        [aiKingSq],
+        findPiecesAttackingSquare(postChess, aiKingSq, humanColor),
+      ),
+    };
+  }
+
+  if (lastMove.captured === 'q') {
+    const entry = tryPickCaseClip('lost_queen');
+    if (!entry) return null;
+    return {
+      id: messageSeq++,
+      clipId: entry.clipId,
+      text: entry.text,
+      tag: 'CAPTURE',
+      tone: 'capture',
+      speaker: SPEAKER_NAME,
+    };
+  }
+
+  // Special Seduction / Distraction trigger when the player is playing too well!
+  const ply = ctx.plyCount ?? lastMove.ply ?? 0;
+  const goodStreak = ctx.humanGoodStreak ?? 0;
+  const humanAdvCp = ctx.humanEvalAdvantageCp ?? 0;
+  const cleanAccuracy = audit === null || audit.cpLoss <= 28;
+  const sharpMaterialGain =
+    (lastMove.captured === 'r' || lastMove.captured === 'n' || lastMove.captured === 'b') &&
+    (audit?.cpLoss ?? 0) <= 20 &&
+    humanAdvCp >= 75;
+  const triggerMode: SeductionTriggerMode = ctx.seductionTriggerMode || 'balanced';
+
+  const modeMatched =
+    triggerMode === 'frequent'
+      ? goodStreak >= 2 || humanAdvCp >= 90 || sharpMaterialGain
+      : triggerMode === 'dominant'
+        ? (goodStreak >= 4 && humanAdvCp >= 110) || humanAdvCp >= 230
+        : triggerMode === 'tactical'
+          ? sharpMaterialGain || (Boolean(lastMove.captured) && cleanAccuracy && humanAdvCp >= 60)
+          : humanAdvCp >= 145 || (goodStreak >= 3 && humanAdvCp >= 35) || sharpMaterialGain;
+
+  const minPlyForMode = triggerMode === 'frequent' ? 4 : 6;
+  const playingTooWell = ply >= minPlyForMode && !newlyExposed && cleanAccuracy && modeMatched;
+
+  if (playingTooWell && ctx.canTriggerSeductionNow !== false && canPlayCaseInGame('seduction')) {
+    const entry = tryPickCaseClip('seduction');
+    if (entry) {
+      return {
+        id: messageSeq++,
+        clipId: entry.clipId,
+        text: entry.text,
+        tag: 'PLAYING TOO WELL · DISTRACTION',
+        tone: 'opening',
+        speaker: SPEAKER_NAME,
+      };
+    }
+  }
+
+  return null;
+}
+
+export interface BotCommentaryContext {
   fen: string;
   lastMove: MoveRecord;
   aiColor: PieceColor;
   humanColor: PieceColor;
   plyCount: number;
-  gender: 'female' | 'male';
   analysis: AnalysisSnapshot | null;
+  report: BotSearchReport | null;
+  allowCalcProposal?: boolean;
 }
 
 /**
- * Selects an integrated pre-recorded MP3 clip + matching caption based on
- * real board tactics: checkmate, check, 2-step mate/fork warnings, hanging
- * piece callouts ("Watch your Queen / Rook / Bishop / Knight!"), promotions,
- * captures, castling, and openings.
+ * Composes Chess Angel's commentary after completing a move, progressing naturally
+ * through 1st, 2nd ("As I said..." / "Again..."), and 3rd occurrence phrasings.
  */
-export function composeOpponentMessage(ctx: ComposeContext): OpponentMessage | null {
-  const { fen, lastMove, aiColor, humanColor, plyCount, gender, analysis } = ctx;
-  const speaker = getSpeakerName(gender);
+export function composeBotMoveCommentary(ctx: BotCommentaryContext): OpponentMessage | null {
+  const { fen, lastMove, aiColor, humanColor, plyCount, analysis, report } = ctx;
+  const allowCalc = ctx.allowCalcProposal !== false;
   const chess = new Chess(fen);
-  const aiJustMoved = lastMove.color === aiColor;
 
-  const make = (entry: ClipEntry, tag: string, tone: CommentaryTone): OpponentMessage => ({
-    id: messageSeq++,
-    clipId: entry.clipId,
-    text: entry.text,
-    tag,
-    tone,
-    speaker,
-    gender,
-  });
+  const mathBadge = report
+    ? `${report.nodes.toLocaleString()} nodes · Depth ${report.depth} · ${report.triedLines.length} branches`
+    : undefined;
+
+  const calcAction: AngelInteractiveAction | undefined =
+    allowCalc && report && report.triedLines.length >= 2
+      ? { kind: 'calc-preview', report }
+      : undefined;
+
+  const humanKingSq = findKingSquareOfColor(chess, humanColor);
+
+  const make = (
+    caseId: CommentaryCaseId,
+    tag: string,
+    tone: CommentaryTone,
+    withCalcOffer = false,
+    concernedFigures?: SpeechFigureHighlight[],
+  ): OpponentMessage | null => {
+    const entry = tryPickCaseClip(caseId);
+    if (!entry) return null;
+    return {
+      id: messageSeq++,
+      clipId: entry.clipId,
+      text: entry.text,
+      tag,
+      tone,
+      speaker: SPEAKER_NAME,
+      mathSummary: mathBadge,
+      action: withCalcOffer ? calcAction : undefined,
+      concernedFigures,
+    };
+  };
 
   // 1. CHECKMATE
   if (chess.isCheckmate()) {
-    if (aiJustMoved) {
-      return make(
-        pickFreshClip(['checkmate_win_1', 'checkmate_win_2', 'checkmate_win_3']),
-        'CHECKMATE',
-        'checkmate',
-      );
-    }
+    const checkers = findPiecesAttackingSquare(chess, humanKingSq, aiColor);
     return make(
-      pickFreshClip(['checkmate_lose_1', 'checkmate_lose_2']),
+      'checkmate_win',
       'CHECKMATE',
       'checkmate',
+      false,
+      buildConcernedFigures([humanKingSq], checkers.length > 0 ? checkers : [lastMove.to]),
     );
   }
 
-  // 2. DRAW / STALEMATE
+  // 2. STALEMATE / DRAW
   if (chess.isStalemate()) {
-    return make(pickFreshClip(['stalemate']), 'STALEMATE', 'neutral');
+    return make('stalemate', 'STALEMATE', 'neutral');
   }
   if (chess.isDraw()) {
-    return make(pickFreshClip(['draw']), 'DRAW', 'neutral');
+    return make('draw', 'DRAW', 'neutral');
   }
 
   // 3. DIRECT CHECK
   if (chess.inCheck()) {
-    if (aiJustMoved) {
-      if (lastMove.piece === 'n') {
-        return make(pickFreshClip(['check_knight']), 'CHECK', 'check');
-      }
-      if (lastMove.piece === 'q') {
-        return make(pickFreshClip(['check_queen']), 'CHECK', 'check');
-      }
-      return make(pickFreshClip(['check_1', 'check_2']), 'CHECK', 'check');
-    }
-    return make(pickFreshClip(['player_check_1', 'player_check_2']), 'CHECK', 'check');
-  }
-
-  // Human-turn reactions (Queen capture or leaving Queen hanging)
-  if (!aiJustMoved) {
-    if (lastMove.captured === 'q') {
-      return make(pickFreshClip(['lost_queen']), 'CAPTURE', 'capture');
-    }
-    const hangingQueens = countThreatenedValuables(chess, aiColor, humanColor).filter(
-      (p) => p.type === 'q' && p.undefended,
+    const checkers = findPiecesAttackingSquare(chess, humanKingSq, aiColor);
+    const checkFigures = buildConcernedFigures(
+      [humanKingSq],
+      checkers.length > 0 ? checkers : [lastMove.to],
     );
-    if (hangingQueens.length > 0) {
-      return make(pickFreshClip(['blunder_queen']), 'BLUNDER', 'warning');
+    if (lastMove.piece === 'n' && canPlayCaseInGame('check_knight')) {
+      return make('check_knight', 'CHECK', 'check', false, checkFigures);
     }
-    return null;
+    if (lastMove.piece === 'q' && canPlayCaseInGame('check_queen')) {
+      return make('check_queen', 'CHECK', 'check', false, checkFigures);
+    }
+    return make('check_general', 'CHECK', 'check', false, checkFigures);
   }
 
-  // ===== AI JUST MOVED — SCAN REAL BOARD TACTICS =====
   const topLine = analysis?.lines[0];
   const aiSign = aiColor === 'w' ? 1 : -1;
   const aiMateIn =
@@ -369,116 +1509,254 @@ export function composeOpponentMessage(ctx: ComposeContext): OpponentMessage | n
   const twoStep = detectTwoStepThreats(fen, aiColor, humanColor);
   const threatenedHuman = countThreatenedValuables(chess, aiColor, humanColor);
 
-  // 4. FORCED MATE OR DIRECT 2-STEP MATE THREAT
-  if ((aiMateIn !== null && aiMateIn <= 3) || twoStep.hasMateThreat) {
+  // 4. FORCED MATE OR 2-STEP MATE THREAT
+  if (((aiMateIn !== null && aiMateIn <= 3) || twoStep.hasMateThreat) && canPlayCaseInGame('warn_mate')) {
+    const mateAttackers =
+      twoStep.mateAttackerSqs.length > 0 ? twoStep.mateAttackerSqs : [lastMove.to];
     return make(
-      pickFreshClip(['warn_mate_1', 'warn_mate_2', 'warn_mate_3']),
-      '2-STEP WARNING',
+      'warn_mate',
+      '2-STEP MATE THREAT',
       'warning',
+      true,
+      buildConcernedFigures([humanKingSq], mateAttackers),
     );
   }
 
-  // 5. PROMOTION BY AI
-  if (lastMove.promotion) {
-    return make(pickFreshClip(['promotion']), 'PROMOTION', 'threat');
+  // 5. PROMOTION
+  if (lastMove.promotion && canPlayCaseInGame('promotion')) {
+    return make(
+      'promotion',
+      'PROMOTION',
+      'threat',
+      false,
+      buildConcernedFigures([humanKingSq], [lastMove.to]),
+    );
   }
 
-  // 6. DOUBLE ATTACK / FORK WARNING
-  if (threatenedHuman.length >= 2) {
+  // 6. HIGH-VALUE CAPTURE
+  if (lastMove.captured === 'q' && canPlayCaseInGame('capture_queen')) {
+    return make('capture_queen', 'QUEEN CAPTURED', 'capture');
+  }
+  if (lastMove.captured === 'r' && canPlayCaseInGame('capture_rook')) {
+    return make('capture_rook', 'ROOK CAPTURED', 'capture');
+  }
+
+  // 7. DOUBLE ATTACK
+  if (threatenedHuman.length >= 2 && canPlayCaseInGame('warn_double')) {
+    const dangerSqs = threatenedHuman.map((t) => t.square);
+    const attackerSet = new Set<string>([lastMove.to]);
+    for (const t of threatenedHuman) {
+      for (const aSq of findPiecesAttackingSquare(chess, t.square, aiColor)) {
+        attackerSet.add(aSq);
+      }
+    }
     return make(
-      pickFreshClip(['warn_double_1', 'warn_double_2']),
+      'warn_double',
       'DOUBLE THREAT',
       'warning',
+      true,
+      buildConcernedFigures(dangerSqs, attackerSet),
     );
   }
 
-  // 7. DIRECT PIECE THREAT ("Watch your Queen / Rook / Bishop / Knight!")
+  // 8. DIRECT PIECE THREAT
   if (threatenedHuman.length === 1) {
     const target = threatenedHuman[0];
-    if (target.type === 'q') {
-      return make(
-        pickFreshClip(['watch_queen_1', 'watch_queen_2']),
-        'WATCH YOUR QUEEN',
-        'threat',
-      );
+    const targetAttackers = findPiecesAttackingSquare(chess, target.square, aiColor);
+    const watchFigures = buildConcernedFigures(
+      [target.square],
+      targetAttackers.length > 0 ? targetAttackers : [lastMove.to],
+    );
+    if (target.type === 'q' && canPlayCaseInGame('watch_queen')) {
+      return make('watch_queen', 'WATCH YOUR QUEEN', 'threat', true, watchFigures);
     }
     if (target.undefended || target.value >= 5) {
-      if (target.type === 'r') {
-        return make(pickFreshClip(['watch_rook']), 'WATCH YOUR ROOK', 'threat');
+      if (target.type === 'r' && canPlayCaseInGame('watch_rook')) {
+        return make('watch_rook', 'WATCH YOUR ROOK', 'threat', true, watchFigures);
       }
-      if (target.type === 'b') {
-        return make(pickFreshClip(['watch_bishop']), 'WATCH YOUR BISHOP', 'threat');
+      if (target.type === 'b' && canPlayCaseInGame('watch_bishop')) {
+        return make('watch_bishop', 'WATCH YOUR BISHOP', 'threat', true, watchFigures);
       }
-      if (target.type === 'n') {
-        return make(pickFreshClip(['watch_knight']), 'WATCH YOUR KNIGHT', 'threat');
+      if (target.type === 'n' && canPlayCaseInGame('watch_knight')) {
+        return make('watch_knight', 'WATCH YOUR KNIGHT', 'threat', true, watchFigures);
       }
     }
   }
 
-  // 8. TWO-STEP TACTICAL LOOKAHEAD WARNINGS
-  if (twoStep.hasForkPreview && Math.random() < 0.72) {
-    return make(pickFreshClip(['warn_fork_2step']), '2-STEP WARNING', 'warning');
+  // 9. OPENING (first move pair)
+  if (plyCount <= 2 && canPlayCaseInGame('opening')) {
+    return make('opening', 'OPENING', 'opening', Boolean(calcAction));
   }
 
-  if (twoStep.passedPawnClose && lastMove.piece === 'p') {
-    return make(pickFreshClip(['warn_pawn_promo']), 'PROMOTION THREAT', 'warning');
+  // 10. SEARCH TREE OFFER (shows tried possibilities on the board)
+  if (
+    calcAction &&
+    canPlayCaseInGame('calc_offer') &&
+    (plyCount % 4 === 0 || Math.random() < 0.58)
+  ) {
+    return make('calc_offer', 'SEARCH TREE · SHOW LINES?', 'math', true);
   }
 
-  // 9. CAPTURE BY AI
-  if (lastMove.captured) {
-    if (lastMove.captured === 'q') {
-      return make(pickFreshClip(['capture_queen']), 'QUEEN CAPTURED', 'capture');
-    }
-    if (lastMove.captured === 'r') {
-      return make(pickFreshClip(['capture_rook']), 'CAPTURE', 'capture');
-    }
-    if (lastMove.captured === 'n' || lastMove.captured === 'b') {
-      return make(pickFreshClip(['capture_minor']), 'CAPTURE', 'capture');
-    }
+  // 11. CASTLING / FORK / PAWN / MINOR CAPTURE / SEARCH TREE
+  if ((lastMove.san === 'O-O' || lastMove.san === 'O-O-O') && canPlayCaseInGame('castled')) {
+    return make('castled', 'CASTLED', 'opening', Boolean(calcAction));
   }
 
-  // 10. CASTLING
-  if (lastMove.san === 'O-O' || lastMove.san === 'O-O-O') {
-    return make(pickFreshClip(['castled']), 'CASTLED', 'opening');
+  if (twoStep.hasForkPreview && canPlayCaseInGame('warn_fork_2step') && Math.random() < 0.65) {
+    return make(
+      'warn_fork_2step',
+      '2-STEP FORK',
+      'warning',
+      Boolean(calcAction),
+      buildConcernedFigures(twoStep.forkTargetSqs, [twoStep.forkAttackerSq || lastMove.to]),
+    );
   }
 
-  // 11. OPENING REMARKS
-  if (plyCount <= 4) {
-    return make(pickFreshClip(['opening_1', 'opening_2']), 'OPENING', 'opening');
+  if (twoStep.passedPawnClose && lastMove.piece === 'p' && canPlayCaseInGame('warn_pawn_promo')) {
+    const promoPawns =
+      twoStep.passedPawnSqs.length > 0 ? twoStep.passedPawnSqs : [lastMove.to];
+    return make(
+      'warn_pawn_promo',
+      'PASSED PAWN',
+      'warning',
+      false,
+      buildConcernedFigures([humanKingSq], promoPawns),
+    );
   }
 
-  // 12. KING PRESSURE OR QUIET STRATEGY
-  if (twoStep.openFileKingPressure && Math.random() < 0.5) {
-    return make(pickFreshClip(['warn_king_file']), 'PRESSURE', 'warning');
+  if ((lastMove.captured === 'n' || lastMove.captured === 'b') && canPlayCaseInGame('capture_minor')) {
+    return make('capture_minor', 'CAPTURE', 'capture');
   }
 
-  if (Math.random() < 0.35) {
-    return make(pickFreshClip(['strategy_1', 'strategy_2']), 'STRATEGY', 'neutral');
+  if (twoStep.openFileKingPressure && canPlayCaseInGame('warn_king_file') && Math.random() < 0.45) {
+    return make(
+      'warn_king_file',
+      'FILE PRESSURE',
+      'warning',
+      false,
+      buildConcernedFigures(
+        [humanKingSq],
+        twoStep.kingFileAttackerSqs.length > 0 ? twoStep.kingFileAttackerSqs : [lastMove.to],
+      ),
+    );
   }
 
-  return null;
+  if (!allowCalc) {
+    return null;
+  }
+
+  return make('calc_pure', 'SEARCH TREE', 'math', Boolean(calcAction));
 }
 
-export type VoicePlaybackState = 'idle' | 'speaking';
+/**
+ * Triggered by the independent 100ms ticker when Chess Angel detects the player
+ * hesitating on their turn, offering a gentle spoken hint + flat board arrow.
+ */
+export function composeHesitationCommentary(
+  fen: string,
+  analysis: AnalysisSnapshot | null,
+): OpponentMessage | null {
+  if (!canPlayCaseInGame('hesitate_hint')) return null;
+
+  const chess = new Chess(fen);
+  const legalMoves = chess.moves({ verbose: true });
+  if (legalMoves.length === 0) return null;
+
+  let bestMoveUci = '';
+  let bestMoveSan = '';
+
+  if (analysis && analysis.fen === fen && analysis.lines.length > 0) {
+    bestMoveUci = analysis.lines[0].bestMoveUci;
+    bestMoveSan = analysis.lines[0].pvSan[0] || bestMoveUci;
+  } else {
+    const captures = legalMoves.filter((m) => m.captured);
+    const chosen = captures[0] || legalMoves[0];
+    bestMoveUci = `${chosen.from}${chosen.to}${chosen.promotion || ''}`;
+    bestMoveSan = chosen.san;
+  }
+
+  const entry = tryPickCaseClip('hesitate_hint');
+  if (!entry) return null;
+
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'HESITATION · HINT?',
+    tone: 'hint',
+    speaker: SPEAKER_NAME,
+    mathSummary: `Top candidate ready`,
+    action: {
+      kind: 'hint-offer',
+      bestMoveUci,
+      bestMoveSan,
+    },
+  };
+}
+
+export type VoicePlaybackState = 'idle' | 'speaking' | 'awaiting-gesture';
 
 type StateListener = (state: VoicePlaybackState) => void;
 
+const VOICE_ASSET_VERSION = 'angel7';
+let seductionCustomAudioUrl: string | null = null;
+let nextSeductionSlotAudioUrl: string | null = null;
+
+export function setNextSeductionPlaybackAudio(url?: string | null): void {
+  nextSeductionSlotAudioUrl = url && url.trim().length > 0 ? url : null;
+}
+
+function buildVoiceUrl(clipId: VoiceClipId): string {
+  if (clipId.startsWith('seduction_')) {
+    return (
+      nextSeductionSlotAudioUrl ||
+      seductionCustomAudioUrl ||
+      `/voices/female/seduction.mp3?v=${VOICE_ASSET_VERSION}`
+    );
+  }
+  return `/voices/female/${clipId}.mp3?v=${VOICE_ASSET_VERSION}`;
+}
+
 /**
- * 100% self-contained integrated MP3 voice player.
- * Loads pre-recorded studio MP3 clips bundled directly inside /public/voices/{female|male}/*.mp3
- * and decodes/plays them through a user-unlocked Web Audio AudioContext (with instant in-memory
- * buffer caching and HTMLAudioElement fallback). Zero external AI APIs, zero OS voice drivers.
+ * 100% self-contained integrated MP3 voice player for Chess Angel.
+ * - Preloads core sweet female studio MP3 clips into RAM on startup.
+ * - Attaches capture-phase user-activation listeners ('click', 'pointerup', 'touchend',
+ *   'mouseup', 'mousedown', 'pointerdown', 'keydown') so Web Audio & HTMLAudioElement
+ *   unlock reliably across Chrome, Safari, Firefox, Edge, Android, iOS, and iframes.
+ * - Never hangs on AudioContext.resume() (guarded by a strict 150ms timeout + HTMLAudio fallback).
+ * - Routes decoded audio through an airy presence filter + makeup gain + dynamics limiter
+ *   so her voice is clear and immediately audible.
  */
 class OpponentSpeechController {
   private audioCtx: AudioContext | null = null;
+  private masterInput: AudioNode | null = null;
   private activeSource: AudioBufferSourceNode | null = null;
   private activeHtmlAudio: HTMLAudioElement | null = null;
   private activeAbort: AbortController | null = null;
+  private rawBytesCache = new Map<string, ArrayBuffer>();
   private bufferCache = new Map<string, AudioBuffer>();
   private speakSeq = 0;
+  private sourceStartedAtCtxTime = 0;
+  private sourceDurationSec = 0;
+
+  private pendingGestureClip: {
+    clipId: VoiceClipId;
+    voiceMode: AngelVoiceMode;
+    soundEnabled: boolean;
+  } | null = null;
 
   private playbackState: VoicePlaybackState = 'idle';
   private listeners = new Set<StateListener>();
+  private gestureListenersAttached = false;
+
+  constructor() {
+    if (typeof window !== 'undefined') {
+      this.attachGlobalGestureUnlock();
+      window.setTimeout(() => {
+        this.preloadCoreClips();
+      }, 60);
+    }
+  }
 
   public subscribe(listener: StateListener): () => void {
     this.listeners.add(listener);
@@ -496,31 +1774,125 @@ class OpponentSpeechController {
     }
   }
 
-  private ensureAudioContext(): AudioContext | null {
+  private attachGlobalGestureUnlock(): void {
+    if (this.gestureListenersAttached || typeof window === 'undefined') return;
+    this.gestureListenersAttached = true;
+
+    const handleActivation = () => {
+      this.unlock();
+      if (this.pendingGestureClip) {
+        const queued = this.pendingGestureClip;
+        this.pendingGestureClip = null;
+        this.playClip(queued.clipId, queued.voiceMode, queued.soundEnabled);
+      }
+    };
+
+    const events = [
+      'click',
+      'pointerup',
+      'touchend',
+      'mouseup',
+      'mousedown',
+      'pointerdown',
+      'keydown',
+    ] as const;
+
+    for (const evt of events) {
+      window.addEventListener(evt, handleActivation, { capture: true, passive: true });
+    }
+  }
+
+  public preloadCoreClips(): void {
+    const coreIds: VoiceClipId[] = [
+      'intro_v1',
+      'opening_v1',
+      'calc_offer_v1',
+      'calc_pure_v1',
+      'wrong_distracted_v1',
+      'tree_browse_v1',
+      'wrong_hang_minor_v1',
+      'wrong_better_alt_v1',
+      'hesitate_hint_v1',
+    ];
+    for (const id of coreIds) {
+      void this.fetchMp3Bytes(buildVoiceUrl(id));
+    }
+  }
+
+  private async fetchMp3Bytes(url: string, signal?: AbortSignal): Promise<ArrayBuffer | null> {
+    const existing = this.rawBytesCache.get(url);
+    if (existing) return existing;
+
+    try {
+      const res = await fetch(url, { signal });
+      if (!res.ok) return null;
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+      if (contentType.includes('text/html')) return null;
+      const bytes = await res.arrayBuffer();
+      if (bytes.byteLength < 256) return null;
+      this.rawBytesCache.set(url, bytes);
+      return bytes;
+    } catch {
+      return null;
+    }
+  }
+
+  private ensureAudioGraph(): { ctx: AudioContext; input: AudioNode } | null {
     if (typeof window === 'undefined') return null;
     if (!this.audioCtx) {
       const Ctx =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!Ctx) return null;
-      this.audioCtx = new Ctx();
+      try {
+        this.audioCtx = new Ctx();
+      } catch {
+        return null;
+      }
     }
-    if (this.audioCtx.state === 'suspended') {
-      void this.audioCtx.resume().catch(() => {});
-    }
-    return this.audioCtx;
-  }
 
-  /**
-   * Unlocks the shared Web AudioContext inside any user pointer/key gesture so
-   * integrated MP3 voice lines play immediately after AI moves inside iframes.
-   */
-  public unlock(): void {
-    const ctx = this.ensureAudioContext();
-    if (ctx && ctx.state === 'suspended') {
+    const ctx = this.audioCtx;
+    if (!this.masterInput) {
+      const highpass = ctx.createBiquadFilter();
+      highpass.type = 'highpass';
+      highpass.frequency.value = 90;
+
+      const sweetness = ctx.createBiquadFilter();
+      sweetness.type = 'highshelf';
+      sweetness.frequency.value = 3400;
+      sweetness.gain.value = 2.2;
+
+      const makeupGain = ctx.createGain();
+      makeupGain.gain.value = 1.45;
+
+      const limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = -4.5;
+      limiter.knee.value = 10.0;
+      limiter.ratio.value = 5.0;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.14;
+
+      highpass.connect(sweetness);
+      sweetness.connect(makeupGain);
+      makeupGain.connect(limiter);
+      limiter.connect(ctx.destination);
+      this.masterInput = highpass;
+    }
+
+    if (ctx.state === 'suspended') {
       void ctx.resume().catch(() => {});
     }
-    if (ctx && ctx.state === 'running') {
+    return { ctx, input: this.masterInput };
+  }
+
+  public unlock(): void {
+    const graph = this.ensureAudioGraph();
+    if (!graph) return;
+    const { ctx } = graph;
+    if (ctx.state === 'suspended') {
+      void ctx.resume().catch(() => {});
+    }
+    if ((ctx.state as string) === 'running') {
       try {
         const buf = ctx.createBuffer(1, 1, 22050);
         const src = ctx.createBufferSource();
@@ -531,6 +1903,19 @@ class OpponentSpeechController {
         // ignore
       }
     }
+  }
+
+  private async tryResumeWithTimeout(ctx: AudioContext, timeoutMs = 150): Promise<boolean> {
+    if ((ctx.state as string) === 'running') return true;
+    try {
+      await Promise.race([
+        ctx.resume(),
+        new Promise<void>((resolve) => window.setTimeout(resolve, timeoutMs)),
+      ]);
+    } catch {
+      return false;
+    }
+    return (ctx.state as string) === 'running';
   }
 
   private stopActivePlayback(): void {
@@ -548,8 +1933,12 @@ class OpponentSpeechController {
       }
       this.activeSource = null;
     }
+    this.sourceStartedAtCtxTime = 0;
+    this.sourceDurationSec = 0;
     if (this.activeHtmlAudio) {
       try {
+        this.activeHtmlAudio.onended = null;
+        this.activeHtmlAudio.onerror = null;
         this.activeHtmlAudio.pause();
         this.activeHtmlAudio.currentTime = 0;
       } catch {
@@ -561,29 +1950,24 @@ class OpponentSpeechController {
 
   private async playDecodedBuffer(buffer: AudioBuffer, seq: number): Promise<boolean> {
     if (seq !== this.speakSeq) return false;
-    const ctx = this.ensureAudioContext();
-    if (!ctx) return false;
+    const graph = this.ensureAudioGraph();
+    if (!graph) return false;
 
-    if (ctx.state === 'suspended') {
-      try {
-        await ctx.resume();
-      } catch {
-        return false;
-      }
+    const { ctx, input } = graph;
+    const running = await this.tryResumeWithTimeout(ctx, 150);
+    if (!running || seq !== this.speakSeq) {
+      return false;
     }
-    if (seq !== this.speakSeq) return false;
 
     const source = ctx.createBufferSource();
     source.buffer = buffer;
-
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(1.0, ctx.currentTime);
-    source.connect(gain);
-    gain.connect(ctx.destination);
+    source.connect(input);
 
     source.onended = () => {
       if (this.activeSource === source) {
         this.activeSource = null;
+        this.sourceStartedAtCtxTime = 0;
+        this.sourceDurationSec = 0;
         if (seq === this.speakSeq) {
           this.setPlaybackState('idle');
         }
@@ -591,14 +1975,22 @@ class OpponentSpeechController {
     };
 
     this.activeSource = source;
+    this.sourceStartedAtCtxTime = ctx.currentTime;
+    this.sourceDurationSec = buffer.duration;
+    this.pendingGestureClip = null;
     this.setPlaybackState('speaking');
     source.start(0);
     return true;
   }
 
-  private async playViaHtmlAudio(url: string, seq: number): Promise<void> {
+  private async playViaHtmlAudio(
+    url: string,
+    seq: number,
+    clipInfo: { clipId: VoiceClipId; voiceMode: AngelVoiceMode; soundEnabled: boolean },
+  ): Promise<void> {
     if (seq !== this.speakSeq) return;
     const audio = new Audio(url);
+    audio.preload = 'auto';
     audio.volume = 1.0;
     this.activeHtmlAudio = audio;
 
@@ -620,35 +2012,51 @@ class OpponentSpeechController {
     };
 
     try {
-      this.setPlaybackState('speaking');
-      await audio.play();
-    } catch {
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        await playPromise;
+      }
+      if (seq === this.speakSeq) {
+        this.pendingGestureClip = null;
+        this.setPlaybackState('speaking');
+      }
+    } catch (err) {
       if (this.activeHtmlAudio === audio) {
         this.activeHtmlAudio = null;
       }
+      const isAutoplayBlocked =
+        err instanceof DOMException && err.name === 'NotAllowedError';
       if (seq === this.speakSeq) {
-        this.setPlaybackState('idle');
+        if (isAutoplayBlocked) {
+          this.pendingGestureClip = clipInfo;
+          this.setPlaybackState('awaiting-gesture');
+        } else {
+          this.setPlaybackState('idle');
+        }
       }
     }
   }
 
   public playClip(
     clipId: VoiceClipId,
-    gender: OpponentVoiceGender,
+    voiceMode: AngelVoiceMode,
     soundEnabled: boolean,
   ): void {
-    if (!soundEnabled || gender === 'off') return;
+    if (!soundEnabled || voiceMode === 'off') {
+      this.pendingGestureClip = null;
+      return;
+    }
 
     this.stopActivePlayback();
     const seq = ++this.speakSeq;
-    const url = `/voices/${gender}/${clipId}.mp3`;
+    const url = buildVoiceUrl(clipId);
+    const clipInfo = { clipId, voiceMode, soundEnabled };
 
-    // Ensure AudioContext is unlocked/resumed synchronously when triggered by a click
-    const ctx = this.ensureAudioContext();
+    const graph = this.ensureAudioGraph();
+    const cachedBuffer = this.bufferCache.get(url);
 
-    const cached = this.bufferCache.get(url);
-    if (cached && ctx) {
-      void this.playDecodedBuffer(cached, seq);
+    if (cachedBuffer && graph && (graph.ctx.state as string) === 'running') {
+      void this.playDecodedBuffer(cachedBuffer, seq);
       return;
     }
 
@@ -657,24 +2065,25 @@ class OpponentSpeechController {
 
     void (async () => {
       try {
-        const res = await fetch(url, { signal: controller.signal });
-        if (seq !== this.speakSeq || !res.ok) return;
-        const mp3Bytes = await res.arrayBuffer();
-        if (seq !== this.speakSeq || mp3Bytes.byteLength < 128) return;
+        const mp3Bytes = await this.fetchMp3Bytes(url, controller.signal);
+        if (seq !== this.speakSeq) return;
 
-        const audioCtx = this.ensureAudioContext();
-        if (audioCtx) {
+        if (mp3Bytes && graph) {
           try {
-            const decoded = await audioCtx.decodeAudioData(mp3Bytes.slice(0));
+            let decoded = this.bufferCache.get(url);
+            if (!decoded) {
+              decoded = await graph.ctx.decodeAudioData(mp3Bytes.slice(0));
+              this.bufferCache.set(url, decoded);
+            }
             if (seq !== this.speakSeq) return;
-            this.bufferCache.set(url, decoded);
-            const played = await this.playDecodedBuffer(decoded, seq);
-            if (played) return;
+            const playedViaWebAudio = await this.playDecodedBuffer(decoded, seq);
+            if (playedViaWebAudio) return;
           } catch {
-            // Fall back to direct HTMLAudioElement playback
+            // Fall through to HTMLAudioElement playback
           }
         }
-        await this.playViaHtmlAudio(url, seq);
+
+        await this.playViaHtmlAudio(url, seq, clipInfo);
       } catch {
         if (!controller.signal.aborted && seq === this.speakSeq) {
           this.setPlaybackState('idle');
@@ -687,11 +2096,74 @@ class OpponentSpeechController {
     })();
   }
 
+  /**
+   * Returns exact elapsed spoken audio time in seconds for the currently playing voice line,
+   * or 0 when Chess Angel is silent.
+   */
+  public getElapsedSpeechSeconds(): number {
+    if (this.playbackState !== 'speaking') return 0;
+
+    if (this.activeSource && this.audioCtx && this.sourceDurationSec > 0) {
+      const elapsed = Math.max(0, this.audioCtx.currentTime - this.sourceStartedAtCtxTime);
+      return Math.min(this.sourceDurationSec, elapsed);
+    }
+
+    if (this.activeHtmlAudio && !this.activeHtmlAudio.paused && !this.activeHtmlAudio.ended) {
+      return Math.max(0, this.activeHtmlAudio.currentTime);
+    }
+
+    return 0;
+  }
+
+  /**
+   * Returns exact remaining spoken audio time in seconds for the currently playing voice line,
+   * or 0 when Chess Angel is silent.
+   */
+  public getRemainingSpeechSeconds(): number {
+    if (this.playbackState !== 'speaking') return 0;
+
+    if (this.activeSource && this.audioCtx && this.sourceDurationSec > 0) {
+      const elapsed = Math.max(0, this.audioCtx.currentTime - this.sourceStartedAtCtxTime);
+      return Math.max(0, this.sourceDurationSec - elapsed);
+    }
+
+    if (this.activeHtmlAudio && !this.activeHtmlAudio.paused && !this.activeHtmlAudio.ended) {
+      const dur = this.activeHtmlAudio.duration;
+      if (Number.isFinite(dur) && dur > 0) {
+        return Math.max(0, dur - this.activeHtmlAudio.currentTime);
+      }
+    }
+
+    return 0;
+  }
+
+  public invalidateSeductionCache(): void {
+    for (const k of Array.from(this.rawBytesCache.keys())) {
+      if (k.includes('seduction.mp3')) {
+        this.rawBytesCache.delete(k);
+      }
+    }
+    for (const k of Array.from(this.bufferCache.keys())) {
+      if (k.includes('seduction.mp3')) {
+        this.bufferCache.delete(k);
+      }
+    }
+  }
+
   public stop(): void {
     this.speakSeq++;
+    this.pendingGestureClip = null;
     this.stopActivePlayback();
     this.setPlaybackState('idle');
   }
 }
 
 export const opponentSpeech = new OpponentSpeechController();
+
+export function setSeductionAudioUrlOverride(url?: string | null): void {
+  const next = url && url.length > 0 ? url : null;
+  if (next !== seductionCustomAudioUrl) {
+    seductionCustomAudioUrl = next;
+    opponentSpeech.invalidateSeductionCache();
+  }
+}

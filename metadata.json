@@ -1,6 +1,6 @@
 {
-  "name": "Chess3D",
-  "description": "3D chess studio featuring sculpted Staunton pieces, real-time WebSocket multiplayer, five procedural board skins, and an integrated multi-PV analysis engine.",
+  "name": "ChessAngel3D",
+  "description": "3D wood-carved Staunton chess game featuring Chess Angel with sweet voice commentary, 3D calculation-tree previews, live hints, multiplayer, and replays.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
