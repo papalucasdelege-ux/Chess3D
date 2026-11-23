@@ -81,7 +81,13 @@ export type CommentaryCaseId =
   | 'angel_modal_on'
   | 'angel_modal_off';
 
-export type VoiceClipId = `${CommentaryCaseId}_${'v1' | 'v2' | 'v3'}`;
+export type ExtendedSequentialClipId =
+  | `hesitate_hint_${'v4' | 'v5' | 'v6'}`
+  | `tree_browse_${'v4' | 'v5' | 'v6'}`;
+
+export type VoiceClipId =
+  | `${CommentaryCaseId}_${'v1' | 'v2' | 'v3'}`
+  | ExtendedSequentialClipId;
 
 export type AngelInteractiveAction =
   | {
@@ -293,13 +299,19 @@ export const CLIP_TEXT: Record<VoiceClipId, string> = {
   alt_shown_v3:
     'Right there on the arrow... keep that idea in mind for next turn.',
 
-  // 22. Player Hesitates -> Offer Hint
+  // 22. Player Hesitates -> Offer Hint (6 sequential shorter stages, then stops asking)
   hesitate_hint_v1:
     'Taking your time? I can see you hesitating... I spot a lovely idea for you. Touch Show Hint if you want me to light it up.',
   hesitate_hint_v2:
     'Hesitating again? As I said, just touch Show Hint whenever you want a gentle nudge.',
   hesitate_hint_v3:
     'Still thinking deeply? Touch Show Hint if you want me to point out my top candidate.',
+  hesitate_hint_v4:
+    'Just touch Show Hint whenever you want a gentle nudge.',
+  hesitate_hint_v5:
+    'Make your move whenever you are ready.',
+  hesitate_hint_v6:
+    'Ready whenever you are.',
 
   // 23. Hint Shown on Board
   hint_shown_v1:
@@ -461,13 +473,19 @@ export const CLIP_TEXT: Record<VoiceClipId, string> = {
   wrong_distracted_v3:
     'As I said, stay focused... you lost concentration there! Click the Undo button, please, if you want to replay that last move.',
 
-  // 43. Full Search Tree Shown -> Calm Simulation-by-Simulation Browser & 3 Best Evaluations Button
+  // 43. Full Search Tree Shown -> 6 sequential shorter stages, then does not repeat anymore
   tree_browse_v1:
     "Don't be shocked, I am a computer... if you want, you can now browse through all my simulations one by one before we go on... or if you want to, you can see only my three best evaluations by clicking on the button.",
   tree_browse_v2:
     "As I said, don't be shocked that I am a computer... feel free to browse calmly through all my simulations one by one before we go on, or click the button to see only my three best evaluations.",
   tree_browse_v3:
     'Again, browse calmly through all my simulations one by one before we go on, or click the button to see only my three best evaluations.',
+  tree_browse_v4:
+    'Feel free to browse calmly through all my simulations one by one before we go on.',
+  tree_browse_v5:
+    'Three more candidate branches explored.',
+  tree_browse_v6:
+    'Watch closely.',
 
   // 44. Special Seduction / Distraction Video when the Player Plays Too Well (uses separated seduction.mp3)
   seduction_v1:
@@ -596,7 +614,11 @@ let messageSeq = 1;
 
 type CaseMaxPlaysProvider = (caseId: CommentaryCaseId) => number | null;
 let caseMaxPlaysProvider: CaseMaxPlaysProvider = (caseId) =>
-  caseId === 'tree_browse' ? 2 : caseId === 'seduction' ? 1 : null;
+  caseId === 'tree_browse' || caseId === 'hesitate_hint'
+    ? 6
+    : caseId === 'seduction'
+      ? 1
+      : null;
 
 export function registerCaseMaxPlaysProvider(provider: CaseMaxPlaysProvider): void {
   caseMaxPlaysProvider = provider;
@@ -624,18 +646,23 @@ function tryPickCaseClip(caseId: CommentaryCaseId): ClipEntry | null {
   }
   const count = (caseOccurrenceCounts.get(caseId) || 0) + 1;
   caseOccurrenceCounts.set(caseId, count);
+
+  if (caseId === 'hesitate_hint' || caseId === 'tree_browse') {
+    const seqStage = Math.min(6, Math.max(1, count)) as 1 | 2 | 3 | 4 | 5 | 6;
+    const clipId = `${caseId}_v${seqStage}` as VoiceClipId;
+    return { clipId, text: CLIP_TEXT[clipId] };
+  }
+
   const variant: 'v1' | 'v2' | 'v3' =
     count === 1
       ? 'v1'
       : count === 2
         ? 'v2'
-        : caseId === 'tree_browse'
+        : count === 3
           ? 'v3'
-          : count === 3
-            ? 'v3'
-            : count % 2 === 0
-              ? 'v2'
-              : 'v3';
+          : count % 2 === 0
+            ? 'v2'
+            : 'v3';
   const clipId = `${caseId}_${variant}` as VoiceClipId;
   return { clipId, text: CLIP_TEXT[clipId] };
 }
@@ -1945,7 +1972,7 @@ export type VoicePlaybackState = 'idle' | 'speaking' | 'awaiting-gesture';
 
 type StateListener = (state: VoicePlaybackState) => void;
 
-const VOICE_ASSET_VERSION = 'angel9';
+const VOICE_ASSET_VERSION = 'angel10';
 let seductionCustomAudioUrl: string | null = null;
 let nextSeductionSlotAudioUrl: string | null = null;
 
@@ -2102,25 +2129,35 @@ class OpponentSpeechController {
     if (!this.masterInput) {
       const highpass = ctx.createBiquadFilter();
       highpass.type = 'highpass';
-      highpass.frequency.value = 90;
+      highpass.frequency.value = 80;
+      highpass.Q.value = 0.707;
 
-      const sweetness = ctx.createBiquadFilter();
-      sweetness.type = 'highshelf';
-      sweetness.frequency.value = 3400;
-      sweetness.gain.value = 2.2;
+      const warmthClarity = ctx.createBiquadFilter();
+      warmthClarity.type = 'peaking';
+      warmthClarity.frequency.value = 300;
+      warmthClarity.Q.value = 1.1;
+      warmthClarity.gain.value = -1.2;
+
+      const silkAir = ctx.createBiquadFilter();
+      silkAir.type = 'highshelf';
+      silkAir.frequency.value = 5200;
+      silkAir.gain.value = 0.8;
 
       const makeupGain = ctx.createGain();
-      makeupGain.gain.value = 1.45;
+      makeupGain.gain.value = 1.08;
 
+      // Transparent true-peak ceiling only (16ms attack > 5ms female F0 period so individual
+      // glottal cycles are never wave-shaped or intermodulated)
       const limiter = ctx.createDynamicsCompressor();
-      limiter.threshold.value = -4.5;
-      limiter.knee.value = 10.0;
-      limiter.ratio.value = 5.0;
-      limiter.attack.value = 0.003;
-      limiter.release.value = 0.14;
+      limiter.threshold.value = -1.0;
+      limiter.knee.value = 2.5;
+      limiter.ratio.value = 12.0;
+      limiter.attack.value = 0.016;
+      limiter.release.value = 0.16;
 
-      highpass.connect(sweetness);
-      sweetness.connect(makeupGain);
+      highpass.connect(warmthClarity);
+      warmthClarity.connect(silkAir);
+      silkAir.connect(makeupGain);
       makeupGain.connect(limiter);
       limiter.connect(ctx.destination);
       this.masterInput = highpass;

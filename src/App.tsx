@@ -601,6 +601,7 @@ export default function App() {
   const lastRenderedRoomSecRef = useRef<{ w: number; b: number }>({ w: 0, b: 0 });
   const turnStartedAtRef = useRef<number>(performance.now());
   const hesitationStageRef = useRef<number>(0);
+  const prevHesitateSelectedSqRef = useRef<string | null>(null);
   const holdBotUntilRef = useRef<number>(0);
   const awaitingDistractionModalRef = useRef<boolean>(false);
   const goodMoveStreakRef = useRef<number>(0);
@@ -688,6 +689,11 @@ export default function App() {
     soundEnabled,
     analysis,
     activeRoom,
+    dockCollapsed,
+    videoStudioOpen,
+    angelModalEnabled,
+    selectedSquare,
+    treeBrowserOpen: treeBrowser !== null,
   });
   simSnapshotRef.current = {
     gameMode,
@@ -703,6 +709,11 @@ export default function App() {
     soundEnabled,
     analysis,
     activeRoom,
+    dockCollapsed,
+    videoStudioOpen,
+    angelModalEnabled,
+    selectedSquare,
+    treeBrowserOpen: treeBrowser !== null,
   };
   calcPreviewActiveRef.current = calcPreview !== null || calcShowingPending;
   showSearchTreeRef.current = showSearchTree;
@@ -1484,30 +1495,56 @@ export default function App() {
         }
       }
 
-      // 4. Player Hesitation Detection -> Chess Angel Spoken Hint & 3D Candidate Offer
+      // 4. Player Hesitation Detection -> Chess Angel Sequential Shorter Hints (stops after stage 6)
       if (
         snap.gameMode === 'engine' &&
         !snap.localResult &&
         snap.isViewingLatest &&
         !snap.isThinkingAi &&
         !isPausedForShowcaseOrModal &&
-        snap.angelVoice === 'on'
+        snap.angelVoice === 'on' &&
+        snap.angelModalEnabled &&
+        snap.dockCollapsed &&
+        !snap.videoStudioOpen &&
+        !snap.treeBrowserOpen
       ) {
-        const turn = new Chess(snap.localFen).turn() as PieceColor;
-        if (turn === snap.humanColorActual) {
-          const idleMs = now - turnStartedAtRef.current;
-          if (
-            (hesitationStageRef.current === 0 && idleMs >= 18000) ||
-            (hesitationStageRef.current === 1 && idleMs >= 44000)
-          ) {
-            hesitationStageRef.current += 1;
-            const hintMsg = composeHesitationCommentary(snap.localFen, snap.analysis);
-            if (hintMsg) {
-              setOpponentMessage(hintMsg);
-              opponentSpeech.playClip(hintMsg.clipId, 'on', snap.soundEnabled);
+        // Do not count Chess Angel's own speaking duration as player hesitation
+        if (voiceStateRef.current === 'speaking') {
+          turnStartedAtRef.current = now;
+        } else {
+          const turn = new Chess(snap.localFen).turn() as PieceColor;
+          if (turn !== snap.humanColorActual) {
+            turnStartedAtRef.current = now;
+          } else {
+            // Give a gentle grace cushion when the player actively selects a piece before stage 0
+            if (snap.selectedSquare !== prevHesitateSelectedSqRef.current) {
+              prevHesitateSelectedSqRef.current = snap.selectedSquare;
+              if (snap.selectedSquare && hesitationStageRef.current === 0) {
+                turnStartedAtRef.current = Math.max(turnStartedAtRef.current, now - 10_000);
+              }
+            }
+
+            const idleMs = now - turnStartedAtRef.current;
+            const stageThresholdsMs =
+              snap.localMovesLen === 0
+                ? [65_000, 115_000]
+                : snap.localMovesLen < 6
+                  ? [40_000, 78_000, 118_000]
+                  : [28_000, 62_000, 98_000, 138_000];
+            const nextThresholdMs = stageThresholdsMs[hesitationStageRef.current];
+
+            if (nextThresholdMs !== undefined && idleMs >= nextThresholdMs) {
+              hesitationStageRef.current += 1;
+              const hintMsg = composeHesitationCommentary(snap.localFen, snap.analysis);
+              if (hintMsg) {
+                setOpponentMessage(hintMsg);
+                opponentSpeech.playClip(hintMsg.clipId, 'on', snap.soundEnabled);
+              }
             }
           }
         }
+      } else {
+        turnStartedAtRef.current = now;
       }
     }, 100);
 
@@ -2323,11 +2360,14 @@ export default function App() {
       if (!scene) return;
       setCalcShowingPending(false);
       setCoachArrows([]);
-      setOpponentMessage((prev) =>
-        prev?.isStudioPreview ? { ...prev, isStudioPreview: false } : prev,
-      );
+      opponentSpeech.stop();
+      setOpponentMessage(null);
       scene.playCalculationPreview(validReport, restoreFen, {
         onBranchChange: (branchIndex, totalBranches, pvSan, waitingForConfirm) => {
+          if (!waitingForConfirm) {
+            opponentSpeech.stop();
+            setOpponentMessage(null);
+          }
           setCalcPreview({ branchIndex, totalBranches, pvSan, waitingForConfirm });
         },
         onWaitForBranchConfirm: (completedBranchIndex, _totalBranches, pvSan) => {
@@ -2347,6 +2387,7 @@ export default function App() {
         },
         onComplete: () => {
           setCalcPreview(null);
+          setOpponentMessage(null);
           turnStartedAtRef.current = performance.now();
         },
       });
@@ -2416,6 +2457,7 @@ export default function App() {
 
   const handleConfirmNextBranch = useCallback(() => {
     opponentSpeech.stop();
+    setOpponentMessage(null);
     sceneRef.current?.confirmNextCalculationBranch();
   }, []);
 
@@ -2426,6 +2468,7 @@ export default function App() {
     }
     setCalcShowingPending(false);
     opponentSpeech.stop();
+    setOpponentMessage(null);
     sceneRef.current?.stopCalculationPreview(true);
     if (!pendingBotMoveRef.current) {
       sceneRef.current?.stopSearchTreeThinLines();
@@ -2727,6 +2770,71 @@ export default function App() {
       }
     }
   }, [flushPendingBotMove, handleShowFullSearchTree]);
+
+  const hasBestMoveArrowProjected = Boolean(
+    analysisEnabled &&
+      showBestMoveArrow &&
+      analysis?.fen === displayedFen &&
+      (analysis.lines[0]?.bestMoveUci?.length ?? 0) >= 4,
+  );
+
+  const thinkingLinesProjected =
+    treeStatusMode !== 'idle' ||
+    treeBrowser !== null ||
+    calcPreview !== null ||
+    calcShowingPending ||
+    coachArrows.length > 0 ||
+    hasBestMoveArrowProjected ||
+    frontalTreeViewOpen;
+
+  const handleSwitchOffThinkingLines = useCallback(() => {
+    if (calcShowingTimerRef.current !== null) {
+      window.clearTimeout(calcShowingTimerRef.current);
+      calcShowingTimerRef.current = null;
+    }
+    setCalcShowingPending(false);
+
+    sceneRef.current?.stopCalculationPreview(true);
+    setCalcPreview(null);
+
+    const hadTreeLines =
+      treeStatusMode !== 'idle' || treeBrowser !== null || treeActiveOnScreenRef.current;
+
+    if (hadTreeLines) {
+      showSearchTreeRef.current = false;
+      setShowSearchTree(false);
+      suppressTreeAndThreeMovesRef.current = true;
+      setSuppressTreeAndThreeMoves(true);
+    }
+
+    const activeClip = opponentMessageRef.current?.clipId ?? '';
+    const isLineSpecificPrompt =
+      activeClip.startsWith('tree_browse_') ||
+      activeClip.startsWith('calc_showing_') ||
+      activeClip.startsWith('trial_confirm_');
+
+    if (isLineSpecificPrompt) {
+      opponentSpeech.stop();
+      setOpponentMessage(null);
+    }
+
+    if (pendingBotMoveRef.current) {
+      if (!isLineSpecificPrompt && opponentMessageRef.current) {
+        preserveMessageOnBotCommitRef.current = true;
+      }
+      flushPendingBotMove(true);
+    } else {
+      sceneRef.current?.stopSearchTreeThinLines();
+      treeActiveOnScreenRef.current = false;
+      setTreeStatusMode('idle');
+      setTreeBrowser(null);
+    }
+
+    setCoachArrows([]);
+    setShowBestMoveArrow(false);
+    setFrontalTreeViewOpen(false);
+    turnStartedAtRef.current = performance.now();
+  }, [treeStatusMode, treeBrowser, flushPendingBotMove]);
 
   // 2) Undo the player's blunder (from Chess Angel modal or banner) and light up stronger alternatives on the 3D board
   const handleUndoAndShowBetter = useCallback(
@@ -3255,15 +3363,11 @@ export default function App() {
         </button>
 
         <span
-          aria-label="ChessAngel 3D Version 3.0"
-          className="inline-flex items-baseline gap-1.5 px-2 py-0.5 rounded-md bg-transparent text-[#e6e1d7]/75 [text-shadow:0_1px_6px_rgba(0,0,0,0.95)] whitespace-nowrap"
+          aria-label="ChessAngel 3D v3.1"
+          className="inline-flex items-baseline px-1.5 py-0.5 bg-transparent font-display text-sm sm:text-base font-medium tracking-tight text-[#f5f0e6]/85 [text-shadow:0_1px_6px_rgba(0,0,0,0.95)] whitespace-nowrap"
         >
-          <span className="hidden sm:inline font-display text-xs tracking-tight text-[#d7cfbf]/80">
-            ChessAngel 3D
-          </span>
-          <span className="font-mono-tabular text-base sm:text-lg font-bold tracking-tight text-[#f3cf83]">
-            v3.0
-          </span>
+          <span className="hidden sm:inline">ChessAngel 3D&nbsp;</span>
+          <span>v3.1</span>
         </span>
       </div>
 
@@ -3517,6 +3621,8 @@ export default function App() {
         onContinueFromTree={handleContinueFromTree}
         onExportTreeJpg={handleToggleFrontalTreeView}
         frontalTreeViewOpen={frontalTreeViewOpen}
+        thinkingLinesProjected={thinkingLinesProjected}
+        onSwitchOffThinkingLines={handleSwitchOffThinkingLines}
         proposeThreeMoves={
           !suppressTreeAndThreeMoves || Boolean(treeBrowser) || frontalTreeViewOpen
         }

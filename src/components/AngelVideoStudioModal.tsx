@@ -681,7 +681,7 @@ export function AngelVideoStudioModal({
                 ChessAngel 3D Video Studio
               </h2>
               <span className="font-mono-tabular text-xs font-bold px-1.5 py-0.5 rounded border border-[#d6ae63]/65 bg-[#261d0e] text-[#fde68a] whitespace-nowrap">
-                v3.0
+                v3.1
               </span>
               <span
                 title="Opened via 5 clicks on the game title; hidden from regular players. All attached .mp4 files, Play-per-Game quotas, and No-Cut flags are bundled into the deployed app."
@@ -1054,6 +1054,126 @@ export function AngelVideoStudioModal({
             Saying below to activate Default Lip-Sync on some and keep calm Idle Listening on others.
           </div>
         </div>
+
+        {/* Angel & Modal — On / Off Dedicated Studio Points (Pinned Near Top) */}
+        {(() => {
+          const modalToggleSlots: ReadonlyArray<{
+            caseId: 'angel_modal_on' | 'angel_modal_off';
+            title: string;
+            subtitle: string;
+            sampleClipId: VoiceClipId;
+            badgeColorClass: string;
+          }> = [
+            {
+              caseId: 'angel_modal_on',
+              title: 'Angel & Modal — Turned ON',
+              subtitle:
+                'Played when the player switches "Angel & Modal" ON in the HUD dock.',
+              sampleClipId: 'angel_modal_on_v1',
+              badgeColorClass: 'border-emerald-400/50 bg-emerald-950/40 text-emerald-200',
+            },
+            {
+              caseId: 'angel_modal_off',
+              title: 'Angel & Modal — Turned OFF',
+              subtitle:
+                'Played as Chess Angel’s farewell right before her portrait & modal hide when switched OFF.',
+              sampleClipId: 'angel_modal_off_v1',
+              badgeColorClass: 'border-amber-400/50 bg-amber-950/40 text-amber-200',
+            },
+          ];
+
+          return (
+            <div className="rounded-xl border border-[#38bdf8]/55 bg-[#0a111a] overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#0e1724] border-b border-[#38bdf8]/25">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Film className="w-3.5 h-3.5 text-[#7dd3fc] shrink-0" />
+                    <span className="text-xs font-semibold text-[#e0f2fe]">
+                      Angel &amp; Modal — On / Off Videos (angel_modal_on · angel_modal_off)
+                    </span>
+                    <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/45 bg-emerald-950/40 text-emerald-300 font-medium">
+                      2 Active (.mp4)
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#94a3b8] mt-0.5">
+                    Custom .mp4 videos permanently bundled for turning Chess Angel &amp; her modal ON or OFF.
+                  </p>
+                </div>
+              </div>
+
+              <div className="divide-y divide-white/10">
+                {modalToggleSlots.map((slot) => {
+                  const customUrl = overrides.cases[slot.caseId];
+                  const builtInUrl = ANGEL_CASE_VIDEO_MAP[slot.caseId];
+                  const activeUrl = customUrl || builtInUrl;
+                  const clipSec = getVideoFileDurationSec(activeUrl, overrides);
+                  const sampleText = CLIP_TEXT[slot.sampleClipId];
+                  const previewSlot = () =>
+                    onPreviewCase(slot.sampleClipId, sampleText, slot.caseId.toUpperCase());
+
+                  return (
+                    <div
+                      key={slot.caseId}
+                      {...makeDropHandlers('case', slot.caseId, previewSlot)}
+                      className={`px-3 py-2.5 transition-colors ${
+                        dragOverSlot === `case:${slot.caseId}` ? 'bg-[#162538]' : 'bg-black'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-xs font-semibold text-[#f7f1e5]">
+                              {slot.title}
+                            </span>
+                            <span
+                              className={`font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border ${slot.badgeColorClass}`}
+                            >
+                              {slot.caseId}
+                            </span>
+                            <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/45 bg-emerald-950/40 text-emerald-300 font-medium">
+                              {customUrl ? '✓ Active (Custom .mp4)' : '✓ Active (.mp4)'}
+                            </span>
+                            {clipSec !== null && (
+                              <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200">
+                                Video: {formatSec(clipSec)}
+                              </span>
+                            )}
+                            {renderVideoSizeBadge(activeUrl, slot.title)}
+                          </div>
+                          {activeUrl && (
+                            <div className="font-mono-tabular text-[10px] text-emerald-300/90 truncate mt-0.5">
+                              {activeUrl.split('?')[0]}
+                            </div>
+                          )}
+                          <div className="text-[11px] text-[#8e98a8] mt-0.5">
+                            {slot.subtitle}
+                          </div>
+                          <div className="text-[11px] text-[#cbd5e1] italic mt-0.5">
+                            &ldquo;{sampleText}&rdquo;
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                          {renderMaxPlaysControl(`case:${slot.caseId}`, slot.title)}
+                          {renderPlayToEndFlagButton(`case:${slot.caseId}`, slot.title)}
+                          <button
+                            type="button"
+                            onClick={previewSlot}
+                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#151c28] border border-white/16 text-[11px] text-[#cbd5e1] cursor-pointer"
+                          >
+                            <Play className="w-3 h-3 text-[#7dd3fc]" />
+                            Test
+                          </button>
+                          {renderUploadButton('case', slot.caseId, Boolean(customUrl), previewSlot)}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Special Word-Triggered Escape Overlay Videos ("you", "me", & "push a button") */}
         <div className="rounded-xl border border-[#c084fc]/45 bg-black overflow-hidden">
@@ -1529,121 +1649,6 @@ export function AngelVideoStudioModal({
           );
         })()}
 
-        {/* Angel & Modal — On / Off Dedicated Studio Points */}
-        {(() => {
-          const modalToggleSlots: ReadonlyArray<{
-            caseId: 'angel_modal_on' | 'angel_modal_off';
-            title: string;
-            subtitle: string;
-            sampleClipId: VoiceClipId;
-            badgeColorClass: string;
-          }> = [
-            {
-              caseId: 'angel_modal_on',
-              title: 'Angel & Modal — Turned ON',
-              subtitle:
-                'Played when the player switches "Angel & Modal" ON in the HUD dock.',
-              sampleClipId: 'angel_modal_on_v1',
-              badgeColorClass: 'border-emerald-400/50 bg-emerald-950/40 text-emerald-200',
-            },
-            {
-              caseId: 'angel_modal_off',
-              title: 'Angel & Modal — Turned OFF',
-              subtitle:
-                'Played as Chess Angel’s farewell right before her portrait & modal hide when switched OFF.',
-              sampleClipId: 'angel_modal_off_v1',
-              badgeColorClass: 'border-amber-400/50 bg-amber-950/40 text-amber-200',
-            },
-          ];
-
-          return (
-            <div className="rounded-xl border border-[#38bdf8]/45 bg-[#0a111a] overflow-hidden">
-              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#0e1724] border-b border-[#38bdf8]/25">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <Film className="w-3.5 h-3.5 text-[#7dd3fc] shrink-0" />
-                    <span className="text-xs font-semibold text-[#e0f2fe]">
-                      Angel &amp; Modal — On / Off Videos
-                    </span>
-                    <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-[#38bdf8]/40 bg-[#122234] text-[#bae6fd]">
-                      2 Studio Points
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-[#94a3b8] mt-0.5">
-                    Assign custom .mp4 videos for turning Chess Angel &amp; her modal ON or OFF (or keep the built-in #000000 studio clips).
-                  </p>
-                </div>
-              </div>
-
-              <div className="divide-y divide-white/10">
-                {modalToggleSlots.map((slot) => {
-                  const customUrl = overrides.cases[slot.caseId];
-                  const builtInUrl = ANGEL_CASE_VIDEO_MAP[slot.caseId];
-                  const activeUrl = customUrl || builtInUrl;
-                  const clipSec = getVideoFileDurationSec(activeUrl, overrides);
-                  const sampleText = CLIP_TEXT[slot.sampleClipId];
-                  const previewSlot = () =>
-                    onPreviewCase(slot.sampleClipId, sampleText, slot.caseId.toUpperCase());
-
-                  return (
-                    <div
-                      key={slot.caseId}
-                      {...makeDropHandlers('case', slot.caseId, previewSlot)}
-                      className={`px-3 py-2.5 transition-colors ${
-                        dragOverSlot === `case:${slot.caseId}` ? 'bg-[#162538]' : 'bg-black'
-                      }`}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="text-xs font-semibold text-[#f7f1e5]">
-                              {slot.title}
-                            </span>
-                            <span
-                              className={`font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border ${slot.badgeColorClass}`}
-                            >
-                              {slot.caseId}
-                            </span>
-                            <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-white/15 bg-[#121722] text-[#cbd5e1]">
-                              {customUrl ? '✓ Custom .mp4' : '✓ Built-in (.mp4)'}
-                            </span>
-                            {clipSec !== null && (
-                              <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200">
-                                Video: {formatSec(clipSec)}
-                              </span>
-                            )}
-                            {renderVideoSizeBadge(activeUrl, slot.title)}
-                          </div>
-                          <div className="text-[11px] text-[#8e98a8] mt-0.5">
-                            {slot.subtitle}
-                          </div>
-                          <div className="text-[11px] text-[#cbd5e1] italic mt-0.5">
-                            &ldquo;{sampleText}&rdquo;
-                          </div>
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-                          {renderMaxPlaysControl(`case:${slot.caseId}`, slot.title)}
-                          {renderPlayToEndFlagButton(`case:${slot.caseId}`, slot.title)}
-                          <button
-                            type="button"
-                            onClick={previewSlot}
-                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#151c28] border border-white/16 text-[11px] text-[#cbd5e1] cursor-pointer"
-                          >
-                            <Play className="w-3 h-3 text-[#7dd3fc]" />
-                            Test
-                          </button>
-                          {renderUploadButton('case', slot.caseId, Boolean(customUrl), previewSlot)}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })()}
-
         {/* Groups 1–9 & Individual Sayings */}
         {ANGEL_VIDEO_STUDIO_GROUPS.map((grp) => {
           const isOpen = Boolean(expandedGroups[grp.id]);
@@ -1990,6 +1995,11 @@ export function AngelVideoStudioModal({
                                 );
                               })}
                             </div>
+                            {!hasAltSlots && activeCaseUrl && (
+                              <div className="font-mono-tabular text-[10px] text-[#8e98a8] truncate mt-0.5">
+                                {activeCaseUrl.split('?')[0]}
+                              </div>
+                            )}
                             <p className="mt-1 text-[11px] leading-snug text-[#d9d4c7]">
                               &ldquo;{item.sampleText}&rdquo;
                             </p>

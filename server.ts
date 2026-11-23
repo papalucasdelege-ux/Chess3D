@@ -850,11 +850,15 @@ async function startServer(): Promise<void> {
     res.json({ rooms: getPublicRooms() });
   });
 
-  // Serve bundled MP3 voice clips directly so they never fall through to SPA HTML
+  // Serve bundled MP3 voice clips directly (resolving public/voices or dist/voices in production)
+  const resolvedVoicesDir = fs.existsSync(path.resolve(__dirname, 'public', 'voices'))
+    ? path.resolve(__dirname, 'public', 'voices')
+    : path.resolve(__dirname, 'dist', 'voices');
   app.use(
     '/voices',
-    express.static(path.resolve(__dirname, 'public', 'voices'), {
+    express.static(resolvedVoicesDir, {
       maxAge: '7d',
+      acceptRanges: true,
       fallthrough: false,
     }),
   );
@@ -933,10 +937,14 @@ async function startServer(): Promise<void> {
     }
   };
 
-  const publicAssetsDir = path.resolve(__dirname, 'public', 'assets');
-  const publicVoicesFemaleDir = path.resolve(__dirname, 'public', 'voices', 'female');
+  const publicAssetsDir = fs.existsSync(path.resolve(__dirname, 'public', 'assets'))
+    ? path.resolve(__dirname, 'public', 'assets')
+    : path.resolve(__dirname, 'dist', 'assets');
+  const publicVoicesFemaleDir = path.join(resolvedVoicesDir, 'female');
   const seductionVoiceMp3Path = path.join(publicVoicesFemaleDir, 'seduction.mp3');
-  const seductionRootMp3Path = path.resolve(__dirname, 'public', 'seduction.mp3');
+  const seductionRootMp3Path = fs.existsSync(path.resolve(__dirname, 'public', 'seduction.mp3'))
+    ? path.resolve(__dirname, 'public', 'seduction.mp3')
+    : path.resolve(__dirname, 'dist', 'seduction.mp3');
   const sanitizeAllAssetVideosRecursive = (dir: string): void => {
     if (!fs.existsSync(dir)) return;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -952,7 +960,7 @@ async function startServer(): Promise<void> {
     sanitizeAllAssetVideosRecursive(publicAssetsDir);
   }
 
-  // Serve public media assets (including Chess Angel 3:4 portrait MP4 videos, guaranteed audio-free) with Range support
+  // Serve public media assets (including Chess Angel 3:4 portrait MP4 videos, guaranteed audio-free) with HTTP 206 Range support
   app.use('/assets', (req, _res, next) => {
     if (!IS_PROD && /\.(mp4|webm|mov|m4v)$/i.test(req.path)) {
       const candidate = path.resolve(publicAssetsDir, '.' + req.path);
@@ -966,6 +974,7 @@ async function startServer(): Promise<void> {
     '/assets',
     express.static(publicAssetsDir, {
       maxAge: '7d',
+      acceptRanges: true,
       fallthrough: true,
     }),
   );
@@ -1281,6 +1290,10 @@ async function startServer(): Promise<void> {
         'slow',
         '-crf',
         String(effectiveCrf),
+        '-profile:v',
+        'main',
+        '-level',
+        '3.1',
         '-pix_fmt',
         'yuv420p',
         '-color_range',
@@ -1591,7 +1604,8 @@ async function startServer(): Promise<void> {
       compressionPreset: 'lossless_21',
       escapeApexes: {},
       videoMaxPlays: {
-        'case:tree_browse': 2,
+        'case:tree_browse': 6,
+        'case:hesitate_hint': 6,
       },
       videoPlayToEnd: {
         'case:seduction': true,
@@ -2039,7 +2053,8 @@ async function startServer(): Promise<void> {
       compressionPreset: data.compressionPreset || 'lossless_21',
       escapeApexes: data.escapeApexes || {},
       videoMaxPlays: data.videoMaxPlays || {
-        'case:tree_browse': 2,
+        'case:tree_browse': 6,
+        'case:hesitate_hint': 6,
       },
       videoPlayToEnd: data.videoPlayToEnd || { 'case:seduction': true },
       seductionAudioUrl: data.seductionAudioUrl,
@@ -2237,7 +2252,7 @@ async function startServer(): Promise<void> {
     const intMax = Math.floor(rawMax);
     const map = readAngelVideoMap();
     if (!map.videoMaxPlays) {
-      map.videoMaxPlays = { 'case:tree_browse': 2 };
+      map.videoMaxPlays = { 'case:tree_browse': 6, 'case:hesitate_hint': 6 };
     }
 
     if (intMax === -1) {
@@ -2889,21 +2904,13 @@ async function startServer(): Promise<void> {
   });
 
   // Serve extracted frontal top-view Chess Angel thinking tree JPEG & mid-game video animation with cross-origin headers
-  const thinkingTreeJpgPath = path.resolve(
-    __dirname,
-    'public',
-    'chess_angel_thinking_tree_top_view.jpg',
-  );
-  const thinkingTreeMp4Path = path.resolve(
-    __dirname,
-    'public',
-    'chess_angel_midgame_tree_animation.mp4',
-  );
-  const thinkingTreeGifPath = path.resolve(
-    __dirname,
-    'public',
-    'chess_angel_midgame_tree_animation.gif',
-  );
+  const resolvePublicOrDistFile = (fileName: string): string => {
+    const pubPath = path.resolve(__dirname, 'public', fileName);
+    return fs.existsSync(pubPath) ? pubPath : path.resolve(__dirname, 'dist', fileName);
+  };
+  const thinkingTreeJpgPath = resolvePublicOrDistFile('chess_angel_thinking_tree_top_view.jpg');
+  const thinkingTreeMp4Path = resolvePublicOrDistFile('chess_angel_midgame_tree_animation.mp4');
+  const thinkingTreeGifPath = resolvePublicOrDistFile('chess_angel_midgame_tree_animation.gif');
 
   app.get('/chess_angel_thinking_tree_top_view.jpg', (_req, res) => {
     if (!fs.existsSync(thinkingTreeJpgPath)) {

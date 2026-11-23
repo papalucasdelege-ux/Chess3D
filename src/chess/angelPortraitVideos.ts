@@ -7,6 +7,7 @@ import {
   type SeductionTriggerMode,
   type VoiceClipId,
 } from './opponentVoice';
+import bundledAngelVideoMapJson from '../../public/assets/aistudio/angel_video_map.json';
 
 /**
  * True ONLY inside the AI Studio / local Vite development environment (`import.meta.env.DEV`)
@@ -119,11 +120,15 @@ export const MULTI_SLOT_CASE_IDS: ReadonlySet<CommentaryCaseId> = new Set<Commen
 ]);
 
 export const DEFAULT_VIDEO_MAX_PLAYS: Readonly<Record<string, number>> = {
-  'case:tree_browse': 2,
+  'case:tree_browse': 6,
+  'case:hesitate_hint': 6,
 };
 
 export const DEFAULT_VIDEO_PLAY_TO_END: Readonly<Record<string, boolean>> = {
   'case:seduction': true,
+  'case:angel_modal_on': true,
+  'case:angel_modal_off': true,
+  'case:tree_browse': false,
 };
 
 /**
@@ -233,6 +238,9 @@ export const VOICE_CLIP_DURATION_SEC: Record<VoiceClipId, number> = {
   hesitate_hint_v1: 8.1,
   hesitate_hint_v2: 5.8,
   hesitate_hint_v3: 5.4,
+  hesitate_hint_v4: 3.1,
+  hesitate_hint_v5: 2.1,
+  hesitate_hint_v6: 1.6,
   hint_shown_v1: 4.9,
   hint_shown_v2: 4.5,
   hint_shown_v3: 4.4,
@@ -257,9 +265,12 @@ export const VOICE_CLIP_DURATION_SEC: Record<VoiceClipId, number> = {
   stalemate_v1: 5.3,
   stalemate_v2: 4.9,
   stalemate_v3: 3.9,
-  tree_browse_v1: 11.7,
-  tree_browse_v2: 11.4,
-  tree_browse_v3: 8.6,
+  tree_browse_v1: 9.7,
+  tree_browse_v2: 9.6,
+  tree_browse_v3: 7.3,
+  tree_browse_v4: 4.3,
+  tree_browse_v5: 2.5,
+  tree_browse_v6: 1.2,
   trial_confirm_1_v1: 7.2,
   trial_confirm_1_v2: 6.3,
   trial_confirm_1_v3: 4.6,
@@ -408,6 +419,9 @@ export const ACOUSTIC_CLIP_CUE_WORDS: Partial<
   hesitate_hint_v1: { point_me: 1.27, point_you: 1.97, push_button: 5.86 },
   hesitate_hint_v2: { point_me: 1.53, push_button: 3.19, point_you: 4.22 },
   hesitate_hint_v3: { push_button: 2.0, point_you: 2.66, point_me: 3.05 },
+  hesitate_hint_v4: { push_button: 0.65, point_you: 1.68 },
+  hesitate_hint_v5: { point_you: 1.48 },
+  hesitate_hint_v6: { point_you: 0.96 },
   hint_shown_v2: { point_me: 0.31 },
   hint_shown_v3: { point_you: 3.84 },
   warn_mate_v1: { point_me: 2.67 },
@@ -437,9 +451,9 @@ export const ACOUSTIC_CLIP_CUE_WORDS: Partial<
   wrong_distracted_v1: { point_you: 0.41, push_button: 7.38 },
   wrong_distracted_v2: { point_you: 0.61, push_button: 6.78 },
   wrong_distracted_v3: { point_me: 0.31, point_you: 1.51, push_button: 4.62 },
-  tree_browse_v1: { point_me: 1.06, point_you: 2.62, push_button: 11.02 },
-  tree_browse_v2: { point_me: 1.97, push_button: 8.58 },
-  tree_browse_v3: { push_button: 5.57 },
+  tree_browse_v1: { point_me: 0.85, push_button: 9.12 },
+  tree_browse_v2: { point_me: 1.35, push_button: 7.08 },
+  tree_browse_v3: { push_button: 4.65 },
   new_match_v1: { point_me: 4.01, point_you: 5.01 },
   new_match_v2: { point_me: 1.61, point_you: 3.57 },
   new_match_v3: { point_you: 2.08 },
@@ -494,8 +508,8 @@ export const ANGEL_CASE_VIDEO_MAP: Partial<Record<CommentaryCaseId, string>> = {
   level_master: '/assets/aistudio/builtin_level_master.mp4',
   level_grandmaster: '/assets/aistudio/builtin_level_grandmaster.mp4',
   clock_timeout: '/assets/aistudio/builtin_clock_timeout.mp4',
-  angel_modal_on: '/assets/aistudio/builtin_angel_modal_on.mp4',
-  angel_modal_off: '/assets/aistudio/builtin_angel_modal_off.mp4',
+  angel_modal_on: '/assets/aistudio/angel_case_angel_modal_on.mp4',
+  angel_modal_off: '/assets/aistudio/angel_case_angel_modal_off.mp4',
 };
 
 const CASE_TO_GROUP: Record<CommentaryCaseId, AngelExpressionGroup> = {
@@ -703,8 +717,8 @@ export const ANGEL_VIDEO_STUDIO_GROUPS: AngelStudioGroupSpec[] = [
 
 const LIP_SYNC_STORAGE_KEY = 'chess_angel_lipsync_rules_v1';
 const CASE_CUE_STORAGE_KEY = 'chess_angel_case_cues_v1';
-const VIDEO_MAX_PLAYS_STORAGE_KEY = 'chess_angel_video_max_plays_v1';
-const VIDEO_PLAY_TO_END_STORAGE_KEY = 'chess_angel_video_play_to_end_v1';
+const VIDEO_MAX_PLAYS_STORAGE_KEY = 'chess_angel_video_max_plays_v2';
+const VIDEO_PLAY_TO_END_STORAGE_KEY = 'chess_angel_video_play_to_end_v2';
 
 // In-memory Video Studio unlock flag (unlocked by 5-click gesture on game title — hidden from regular players)
 let studioSessionUnlocked = false;
@@ -868,7 +882,7 @@ function saveStoredVideoPlayToEndFallback(playToEndMap: Record<string, boolean>)
   }
 }
 
-// Pre-bundled video registry & calibrated metadata (overridden dynamically by /api/angel-videos or static /assets/aistudio/angel_video_map.json)
+// Pre-bundled video registry & calibrated metadata (baked directly into the JS bundle and kept in sync via /api/angel-videos & /assets/aistudio/angel_video_map.json)
 let runtimeOverrides: AngelVideoMapPayload = {
   idleVariants: {
     idle_2: '/assets/aistudio/angel_idle_idle_2.mp4',
@@ -884,9 +898,15 @@ let runtimeOverrides: AngelVideoMapPayload = {
     intro: '/assets/aistudio/angel_case_intro.mp4',
     tree_browse: '/assets/aistudio/angel_case_tree_browse.mp4',
     castled: '/assets/aistudio/angel_case_castled.mp4',
-    calc_showing: '/assets/aistudio/angel_case_calc_showing.mp4',
     calc_pure: '/assets/aistudio/angel_case_calc_pure.mp4',
+    calc_showing: '/assets/aistudio/angel_case_calc_showing.mp4',
+    checkmate_win: '/assets/aistudio/angel_case_checkmate_win.mp4',
+    draw: '/assets/aistudio/angel_case_draw.mp4',
     lost_queen: '/assets/aistudio/angel_case_lost_queen.mp4',
+    seduction: '/assets/aistudio/angel_case_seduction.mp4',
+    seduction_2: '/assets/aistudio/angel_case_seduction_2.mp4',
+    seduction_3: '/assets/aistudio/angel_case_seduction_3.mp4',
+    stalemate: '/assets/aistudio/angel_case_stalemate.mp4',
     trial_confirm_1: '/assets/aistudio/angel_case_trial_confirm_1.mp4',
     trial_confirm_2: '/assets/aistudio/angel_case_trial_confirm_2.mp4',
     undo_done: '/assets/aistudio/angel_case_undo_done.mp4',
@@ -896,10 +916,15 @@ let runtimeOverrides: AngelVideoMapPayload = {
     warn_king_file: '/assets/aistudio/angel_case_warn_king_file.mp4',
     warn_pawn_promo: '/assets/aistudio/angel_case_warn_pawn_promo.mp4',
     watch_bishop: '/assets/aistudio/angel_case_watch_bishop.mp4',
+    calc_offer: '/assets/aistudio/angel_case_calc_offer.mp4',
+    angel_modal_on: '/assets/aistudio/angel_case_angel_modal_on.mp4',
+    angel_modal_off: '/assets/aistudio/angel_case_angel_modal_off.mp4',
   },
   escapes: {
     point_you: '/assets/aistudio/angel_escape_point_you.mp4',
     point_you_2: '/assets/aistudio/angel_escape_point_you_2.mp4',
+    point_you_5: '/assets/aistudio/angel_escape_point_you_5.mp4',
+    point_you_6: '/assets/aistudio/angel_escape_point_you_6.mp4',
     point_me: '/assets/aistudio/angel_escape_point_me.mp4',
     point_me_2: '/assets/aistudio/angel_escape_point_me_2.mp4',
     push_button: '/assets/aistudio/angel_escape_push_button.mp4',
@@ -907,24 +932,56 @@ let runtimeOverrides: AngelVideoMapPayload = {
   },
   escapeEnabled: { point_you: true, point_me: true, push_button: true },
   caseEscapeCues: {
-    lost_queen: { point_you: 'off' },
+    lost_queen: { point_you: 'off', point_me: 'off' },
+    trial_confirm_1: { point_you: 'off', point_me: 'off' },
+    trial_confirm_2: { point_you: 'off', point_me: 'off' },
+    tree_browse: { point_you: 'off', point_me: 'off' },
+    calc_showing: { point_me: 'off' },
+    warn_mate: { point_me: 'off' },
+    checkmate_lose: { point_you: 'off', point_me: 'off' },
     seduction: { point_you: 'off', point_me: 'off', push_button: 'off' },
     ...readStoredCaseCuesFallback(),
   },
   videoMaxPlays: readStoredVideoMaxPlaysFallback(),
-  videoPlayToEnd: readStoredVideoPlayToEndFallback(),
+  videoPlayToEnd: {
+    'case:seduction': true,
+    'case:checkmate_lose': true,
+    'case:lost_queen': true,
+    'case:trial_confirm_1': true,
+    'case:trial_confirm_2': true,
+    'case:calc_pure': true,
+    'case:intro': true,
+    'case:castled': true,
+    'case:tree_browse': false,
+    'case:calc_showing': true,
+    'case:warn_mate': true,
+    'case:angel_modal_on': true,
+    'case:angel_modal_off': true,
+    'case:wrong_distracted': true,
+    'case:wrong_missed_tactic': true,
+    ...readStoredVideoPlayToEndFallback(),
+  },
   lipSync: {
     defaultEnabled: true,
     groups: {},
-    cases: { calc_pure: 'off', lost_queen: 'off', seduction: 'off' },
+    cases: { calc_showing: 'off', lost_queen: 'off', seduction: 'off' },
   },
   videoDurations: {
+    '/assets/aistudio/angel_case_angel_modal_off.mp4': 12,
+    '/assets/aistudio/angel_case_angel_modal_on.mp4': 9,
+    '/assets/aistudio/angel_case_calc_offer.mp4': 9,
     '/assets/aistudio/angel_case_calc_pure.mp4': 8,
     '/assets/aistudio/angel_case_calc_showing.mp4': 5,
     '/assets/aistudio/angel_case_castled.mp4': 5,
+    '/assets/aistudio/angel_case_checkmate_win.mp4': 7,
+    '/assets/aistudio/angel_case_draw.mp4': 7,
     '/assets/aistudio/angel_case_intro.mp4': 5,
     '/assets/aistudio/angel_case_lost_queen.mp4': 8,
-    '/assets/aistudio/angel_case_tree_browse.mp4': 6,
+    '/assets/aistudio/angel_case_seduction.mp4': 5,
+    '/assets/aistudio/angel_case_seduction_2.mp4': 20,
+    '/assets/aistudio/angel_case_seduction_3.mp4': 15,
+    '/assets/aistudio/angel_case_stalemate.mp4': 5,
+    '/assets/aistudio/angel_case_tree_browse.mp4': 5.2,
     '/assets/aistudio/angel_case_trial_confirm_1.mp4': 5,
     '/assets/aistudio/angel_case_trial_confirm_2.mp4': 5,
     '/assets/aistudio/angel_case_undo_done.mp4': 5,
@@ -934,11 +991,13 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/angel_case_warn_king_file.mp4': 5,
     '/assets/aistudio/angel_case_warn_pawn_promo.mp4': 5,
     '/assets/aistudio/angel_case_watch_bishop.mp4': 5,
-    '/assets/aistudio/angel_default_speaking_default.mp4': 5.6,
+    '/assets/aistudio/angel_default_speaking_default.mp4': 5.3,
     '/assets/aistudio/angel_escape_point_you.mp4': 5,
     '/assets/aistudio/angel_escape_point_you_2.mp4': 5,
+    '/assets/aistudio/angel_escape_point_you_5.mp4': 5,
+    '/assets/aistudio/angel_escape_point_you_6.mp4': 5,
     '/assets/aistudio/angel_escape_point_me.mp4': 5,
-    '/assets/aistudio/angel_escape_point_me_2.mp4': 5,
+    '/assets/aistudio/angel_escape_point_me_2.mp4': 4,
     '/assets/aistudio/angel_escape_push_button.mp4': 4,
     '/assets/aistudio/angel_escape_push_button_2.mp4': 3,
     '/assets/aistudio/angel_idle_idle_2.mp4': 5,
@@ -960,12 +1019,18 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/builtin_level_master.mp4': 6.8,
     '/assets/aistudio/builtin_level_grandmaster.mp4': 7.4,
     '/assets/aistudio/builtin_clock_timeout.mp4': 6.8,
-    '/assets/aistudio/builtin_angel_modal_on.mp4': 6.8,
-    '/assets/aistudio/builtin_angel_modal_off.mp4': 6.8,
+    '/assets/aistudio/builtin_angel_modal_on.mp4': 9,
+    '/assets/aistudio/builtin_angel_modal_off.mp4': 12,
+    '/assets/aistudio/builtin_mouse_idle_sleep.mp4': 8.6,
+    '/assets/aistudio/builtin_mouse_wake_up.mp4': 6.5,
   },
   escapeApexes: {
     '/assets/aistudio/angel_escape_point_you.mp4': 2.3,
     '/assets/aistudio/angel_escape_point_you_2.mp4': 1.45,
+    '/assets/aistudio/angel_escape_point_you_5.mp4': 1.95,
+    '/assets/aistudio/angel_escape_point_you_6.mp4': 1.05,
+    '/assets/aistudio/angel_escape_point_me.mp4': 1.65,
+    '/assets/aistudio/angel_escape_point_me_2.mp4': 1.15,
     '/assets/aistudio/angel_escape_push_button.mp4': 1.3,
     '/assets/aistudio/angel_escape_push_button_2.mp4': 1.65,
   },
@@ -1155,7 +1220,12 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
     idleVariants: variants,
     defaultSpeaking: data?.defaultSpeaking,
     groups: data?.groups || {},
-    cases: data?.cases || {},
+    cases: {
+      calc_offer: '/assets/aistudio/angel_case_calc_offer.mp4',
+      angel_modal_on: '/assets/aistudio/angel_case_angel_modal_on.mp4',
+      angel_modal_off: '/assets/aistudio/angel_case_angel_modal_off.mp4',
+      ...(data?.cases || {}),
+    },
     escapes: data?.escapes || {},
     escapeEnabled,
     caseEscapeCues,
@@ -1175,10 +1245,15 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
   };
 }
 
+// Immediately hydrate runtimeOverrides from the bundled angel_video_map.json at module load
+// so 100% of videos, durations, sizes, and studio rules are active at t=0ms in published builds.
+runtimeOverrides = normalizeMapPayload(bundledAngelVideoMapJson as Partial<AngelVideoMapPayload>);
+
 /**
  * Returns the configured maximum plays per chess game for `slotId` (e.g. `'case:tree_browse'`,
  * `'escape:point_you'`, `'idle:idle_2'`), or `null` when set to Unlimited (`∞`).
- * Defaults `'case:tree_browse'` to `2` so `"Don't be shocked, I am a computer..."` never repeats a 3rd time.
+ * Defaults `'case:tree_browse'` and `'case:hesitate_hint'` to `6` so their 6-step sequential
+ * shorter alternatives play once each and then stop repeating for the rest of the match.
  */
 export function getVideoSlotMaxPlays(
   slotId: string,
@@ -1918,7 +1993,7 @@ export async function updateAngelLipSyncRule(
 
 export function extractCaseIdFromClip(clipId?: VoiceClipId | null): CommentaryCaseId | null {
   if (!clipId) return null;
-  const stripped = clipId.replace(/_(v1|v2|v3)$/, '') as CommentaryCaseId;
+  const stripped = clipId.replace(/_v[1-6]$/, '') as CommentaryCaseId;
   return stripped in CASE_TO_GROUP ? stripped : null;
 }
 
@@ -2691,6 +2766,18 @@ export function resolveAngelSpeakingVideo(
   const defaultSpeakSrc = resolveDefaultSpeakingLipVideo();
   const lip = runtimeOverrides.lipSync || { defaultEnabled: true, groups: {}, cases: {} };
   const caseId = extractCaseIdFromClip(clipId);
+
+  // Stages 3..6 of tree_browse are short follow-ups without "I am a computer", so use continuous
+  // live lip-sync directly from t=0.0s instead of the 5.2s cyborg-reveal video.
+  if (
+    !triggerKey?.startsWith('preview:') &&
+    (clipId === 'tree_browse_v3' ||
+      clipId === 'tree_browse_v4' ||
+      clipId === 'tree_browse_v5' ||
+      clipId === 'tree_browse_v6')
+  ) {
+    return lip.cases.tree_browse === 'off' ? null : defaultSpeakSrc;
+  }
 
   if (caseId) {
     const runtimeCase = pickCaseVideoFromPool(caseId, runtimeOverrides, triggerKey);

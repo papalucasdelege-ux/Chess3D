@@ -323,11 +323,8 @@ export function ControlDock(props: ControlDockProps) {
                   ♞
                 </span>
               )}
-              <span className="font-display text-base sm:text-lg font-semibold tracking-tight text-[#f5f0e6] whitespace-nowrap">
-                ChessAngel 3D
-              </span>
-              <span className="font-mono-tabular text-sm sm:text-base font-bold tracking-tight px-2 py-0.5 rounded-md bg-[#261d0e] border border-[#d6ae63]/70 text-[#fde68a] shadow-sm whitespace-nowrap">
-                v3.0
+              <span className="font-display text-base font-medium tracking-tight text-[#f5f0e6] whitespace-nowrap">
+                ChessAngel 3D v3.1
               </span>
             </div>
 
