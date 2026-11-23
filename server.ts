@@ -784,6 +784,35 @@ async function startServer(): Promise<void> {
       res.status(403).json({ error: 'Access denied.' });
       return;
     }
+    // Web-only game: disable PWA manifests and unregister any stale browser service workers
+    // so Chrome/Edge/Brave never display an Install / Download button in the browser URL bar.
+    if (lowerPath === '/sw.js') {
+      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.send(
+        [
+          "self.addEventListener('install', () => { self.skipWaiting(); });",
+          "self.addEventListener('activate', (event) => {",
+          '  event.waitUntil(',
+          '    caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k))))',
+          '      .then(() => self.registration.unregister())',
+          '  );',
+          '});',
+        ].join('\n'),
+      );
+      return;
+    }
+    if (
+      lowerPath === '/manifest.webmanifest' ||
+      lowerPath === '/manifest.json' ||
+      lowerPath === '/site.webmanifest' ||
+      lowerPath === '/registersw.js' ||
+      /^\/workbox-[a-z0-9_-]+\.js$/.test(lowerPath)
+    ) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.status(404).end();
+      return;
+    }
     next();
   });
   app.use(express.json({ limit: '64kb' }));
@@ -3029,7 +3058,7 @@ async function startServer(): Promise<void> {
   }
 
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`ChessAngel3D server listening on http://0.0.0.0:${PORT}`);
+    console.log(`ChessAngel 3D server listening on http://0.0.0.0:${PORT}`);
   });
 }
 

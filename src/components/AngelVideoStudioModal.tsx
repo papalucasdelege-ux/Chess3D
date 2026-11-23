@@ -678,7 +678,7 @@ export function AngelVideoStudioModal({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold text-[#f7f1e5] truncate">
-                Chess Angel Video Studio
+                ChessAngel 3D Video Studio
               </h2>
               <span
                 title="Opened via 5 clicks on the game title; hidden from regular players. All attached .mp4 files, Play-per-Game quotas, and No-Cut flags are bundled into the deployed app."
