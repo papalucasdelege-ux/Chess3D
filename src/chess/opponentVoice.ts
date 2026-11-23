@@ -1,6 +1,14 @@
 import { Chess, type PieceSymbol, type Square } from 'chess.js';
 import type { HumanMoveAudit } from './engine';
-import type { AnalysisSnapshot, BotSearchReport, MoveRecord, PieceColor } from '../shared/types';
+import {
+  ENGINE_LEVELS,
+  type AnalysisSnapshot,
+  type BotSearchReport,
+  type EngineLevel,
+  type GameMode,
+  type MoveRecord,
+  type PieceColor,
+} from '../shared/types';
 
 export type AngelVoiceMode = 'on' | 'off';
 
@@ -59,7 +67,19 @@ export type CommentaryCaseId =
   | 'trial_confirm_2'
   | 'wrong_distracted'
   | 'tree_browse'
-  | 'seduction';
+  | 'seduction'
+  | 'new_match'
+  | 'resign'
+  | 'save_game'
+  | 'load_game'
+  | 'level_beginner'
+  | 'level_intermediate'
+  | 'level_advanced'
+  | 'level_master'
+  | 'level_grandmaster'
+  | 'clock_timeout'
+  | 'angel_modal_on'
+  | 'angel_modal_off';
 
 export type VoiceClipId = `${CommentaryCaseId}_${'v1' | 'v2' | 'v3'}`;
 
@@ -456,6 +476,102 @@ export const CLIP_TEXT: Record<VoiceClipId, string> = {
     'Oh, bravo... Very clever... Alright, you have my full attention.',
   seduction_v3:
     'Oh, bravo... Very clever... Alright, you have my full attention.',
+
+  // 45. New Match Button
+  new_match_v1:
+    'A brand new match... all thirty-two pieces are back home, and I am ready whenever you want to make the first move.',
+  new_match_v2:
+    'Fresh board again... I have reset every piece and clock for you. Play whenever you are ready.',
+  new_match_v3:
+    'New match ready... over to you for the opening move.',
+
+  // 46. Resign Button
+  resign_v1:
+    'You clicked the Resign button... thank you for playing this game with me. Click the New Match button whenever you would like a rematch.',
+  resign_v2:
+    'Resigning this one? Well fought... touch the New Match button whenever you want to play me again.',
+  resign_v3:
+    'Game resigned... I enjoyed every move with you. Ready whenever you want a fresh start.',
+
+  // 47. Save Button
+  save_game_v1:
+    'Game saved... I have tucked every piece and clock second safely away for you. Click the Load button anytime you want to continue.',
+  save_game_v2:
+    'Saved again... I am keeping this exact board position safe for you whenever you return.',
+  save_game_v3:
+    'Position saved safely... we can pick right back up anytime you like.',
+
+  // 48. Load Button
+  load_game_v1:
+    'Opening your saved games... pick any match you saved with me, or click the Load button on a game to jump right back in.',
+  load_game_v2:
+    'Back to your saved games... choose whichever board position you want me to restore for you.',
+  load_game_v3:
+    'Saved games ready... pick a match and let us continue right where we left off.',
+
+  // 49. Thinking Level: Beginner (800 Elo)
+  level_beginner_v1:
+    'Beginner level selected... I will keep my search gentle and shallow so you can explore the board at a relaxed pace.',
+  level_beginner_v2:
+    'Back to Beginner level... I will play gently with you and leave plenty of room to experiment.',
+  level_beginner_v3:
+    'Beginner eight hundred ready... nice and gentle from me.',
+
+  // 50. Thinking Level: Club / Intermediate (1200 Elo)
+  level_intermediate_v1:
+    'Club level selected... I am balancing my search tree for a lively, friendly tactical game with you.',
+  level_intermediate_v2:
+    'Club twelve hundred again... expect steady, classic club tactics from me.',
+  level_intermediate_v3:
+    'Club level ready... let us play a balanced, spirited game.',
+
+  // 51. Thinking Level: Candidate / Advanced (1600 Elo)
+  level_advanced_v1:
+    'Candidate level selected... I am sharpening my multi-branch search now, so watch out for tactical combinations from me.',
+  level_advanced_v2:
+    'Candidate sixteen hundred again... my tactical eyes are sharp, so guard your pieces carefully.',
+  level_advanced_v3:
+    'Candidate level active... sharp multi-branch search ready for you.',
+
+  // 52. Thinking Level: Master (2000 Elo)
+  level_master_v1:
+    'Master level activated... I will calculate much deeper positional and tactical lines against you on every turn now.',
+  level_master_v2:
+    'Master two thousand again... I am looking many moves ahead now, so stay focused.',
+  level_master_v3:
+    'Master strength ready... deep positional calculation engaged.',
+
+  // 53. Thinking Level: Grandmaster (2400 Elo)
+  level_grandmaster_v1:
+    'Grandmaster level... my full search tree and deepest evaluations are wide awake now. Show me your very best chess!',
+  level_grandmaster_v2:
+    'Grandmaster twenty-four hundred again... I am holding nothing back in my search tree. Good luck to you!',
+  level_grandmaster_v3:
+    'Full Grandmaster strength... bring me your sharpest game!',
+
+  // 54. Chess Clock Time Over (Timeout at 0:00)
+  clock_timeout_v1:
+    'Oh, time is over on the chess clock... the flag just fell at zero! Click the New Match button whenever you want another game with me.',
+  clock_timeout_v2:
+    'Time ran out on the clock again... every last second slipped away! Touch the New Match button whenever you are ready for a rematch.',
+  clock_timeout_v3:
+    'Clock time is over... zero seconds left! Ready whenever you want to play me again.',
+
+  // 55. Angel & Modal Turned ON
+  angel_modal_on_v1:
+    'Welcome back... your Chess Angel and modal are right beside the board whenever you want to make your move.',
+  angel_modal_on_v2:
+    'Hi there, I am your Chess Angel... we can pick right back up anytime you like.',
+  angel_modal_on_v3:
+    'Here we go again... make your move whenever you are ready.',
+
+  // 56. Angel & Modal Turned OFF
+  angel_modal_off_v1:
+    'Stepping quietly aside... I am keeping this exact board position safe for you whenever you return.',
+  angel_modal_off_v2:
+    'Stepping out of sight for now... I enjoyed every move with you, ready whenever you want me back.',
+  angel_modal_off_v3:
+    'Hiding my portrait and modal... we can pick right back up anytime you like.',
 };
 
 const PIECE_VALUES: Record<PieceSymbol, number> = {
@@ -635,6 +751,137 @@ export function createHintShownMessage(bestMoveSan?: string): OpponentMessage | 
     tone: 'hint',
     speaker: SPEAKER_NAME,
     mathSummary: bestMoveSan ? `Top candidate: ${bestMoveSan}` : undefined,
+  };
+}
+
+export function createNewMatchMessage(): OpponentMessage | null {
+  const entry = tryPickCaseClip('new_match');
+  if (!entry) return null;
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'NEW MATCH',
+    tone: 'opening',
+    speaker: SPEAKER_NAME,
+  };
+}
+
+export function createResignMessage(winner?: PieceColor): OpponentMessage | null {
+  const entry = tryPickCaseClip('resign');
+  if (!entry) return null;
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'MATCH RESIGNED',
+    tone: 'neutral',
+    speaker: SPEAKER_NAME,
+    mathSummary: winner ? `${winner === 'w' ? 'White' : 'Black'} wins by resignation` : undefined,
+  };
+}
+
+export function createSaveGameMessage(savedTitle?: string): OpponentMessage | null {
+  const entry = tryPickCaseClip('save_game');
+  if (!entry) return null;
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'GAME SAVED',
+    tone: 'hint',
+    speaker: SPEAKER_NAME,
+    mathSummary: savedTitle ? `Archived: ${savedTitle}` : undefined,
+  };
+}
+
+export function createLoadGameMessage(detail?: string): OpponentMessage | null {
+  const entry = tryPickCaseClip('load_game');
+  if (!entry) return null;
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'LOAD SAVED GAME',
+    tone: 'opening',
+    speaker: SPEAKER_NAME,
+    mathSummary: detail ? `Restored: ${detail}` : undefined,
+  };
+}
+
+const LEVEL_TO_CASE_ID: Record<EngineLevel, CommentaryCaseId> = {
+  beginner: 'level_beginner',
+  intermediate: 'level_intermediate',
+  advanced: 'level_advanced',
+  master: 'level_master',
+  grandmaster: 'level_grandmaster',
+};
+
+export function createEngineLevelMessage(level: EngineLevel): OpponentMessage | null {
+  const caseId = LEVEL_TO_CASE_ID[level];
+  const entry = tryPickCaseClip(caseId);
+  if (!entry) return null;
+  const spec = ENGINE_LEVELS[level];
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: `THINKING LEVEL · ${spec.label.toUpperCase()} (${spec.elo})`,
+    tone: 'math',
+    speaker: SPEAKER_NAME,
+    mathSummary: `${spec.label} · ${spec.elo} Elo · ${spec.description}`,
+  };
+}
+
+export function createClockTimeoutMessage(
+  winner: PieceColor,
+  humanColor?: PieceColor,
+  mode?: GameMode,
+): OpponentMessage | null {
+  const entry = tryPickCaseClip('clock_timeout');
+  if (!entry) return null;
+  const flaggedSide = winner === 'w' ? 'Black' : 'White';
+  const winnerSide = winner === 'w' ? 'White' : 'Black';
+  const outcomeNote =
+    mode === 'engine' && humanColor
+      ? winner === humanColor
+        ? `${flaggedSide} flagged at 0:00 · You win on time`
+        : `${flaggedSide} flagged at 0:00 · Chess Angel wins on time`
+      : `${flaggedSide} flagged at 0:00 · ${winnerSide} wins on time`;
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'CLOCK TIME OVER · 0:00',
+    tone: 'warning',
+    speaker: SPEAKER_NAME,
+    mathSummary: outcomeNote,
+  };
+}
+
+export function createAngelModalOnMessage(): OpponentMessage | null {
+  const entry = tryPickCaseClip('angel_modal_on');
+  if (!entry) return null;
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'ANGEL & MODAL · ON',
+    tone: 'opening',
+    speaker: SPEAKER_NAME,
+  };
+}
+
+export function createAngelModalOffMessage(): OpponentMessage | null {
+  const entry = tryPickCaseClip('angel_modal_off');
+  if (!entry) return null;
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'ANGEL & MODAL · OFF',
+    tone: 'neutral',
+    speaker: SPEAKER_NAME,
   };
 }
 
@@ -1698,7 +1945,7 @@ export type VoicePlaybackState = 'idle' | 'speaking' | 'awaiting-gesture';
 
 type StateListener = (state: VoicePlaybackState) => void;
 
-const VOICE_ASSET_VERSION = 'angel7';
+const VOICE_ASSET_VERSION = 'angel9';
 let seductionCustomAudioUrl: string | null = null;
 let nextSeductionSlotAudioUrl: string | null = null;
 

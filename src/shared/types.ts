@@ -40,6 +40,12 @@ export interface SavedGame {
   moves: MoveRecord[];
   finalFen: string;
   pgn: string;
+  engineLevel?: EngineLevel;
+  humanColor?: PieceColor;
+  humanColorPref?: PieceColor | 'random';
+  clocks?: { w: number; b: number };
+  result?: RoomResult | null;
+  moveEvalMeta?: Record<number, AnalyzedMoveMeta>;
 }
 
 export type TimeControlId = '3+0' | '5+3' | '10+0' | 'unlimited';
@@ -121,7 +127,6 @@ export interface AnalysisSnapshot {
 }
 
 export interface RoomPlayer {
-  clientId: string;
   name: string;
   connected: boolean;
 }

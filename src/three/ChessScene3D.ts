@@ -6,8 +6,9 @@ import {
   BOARD_SKINS,
   LIGHTING_MOODS,
   createContactShadowTexture,
-  createCoordinateLabelTexture,
+  createEmbossedCoordinateMaps,
   createProceduralPbrMaps,
+  type WoodFigureStyle,
 } from './skins';
 import {
   buildSculptedPiece,
@@ -24,6 +25,7 @@ import type {
   PieceType,
   SearchTreeEdge,
 } from '../shared/types';
+import type { UpperRightVoidSpec } from '../utils/deviceLayout';
 
 export interface SuggestionArrow {
   from: string;
@@ -62,6 +64,7 @@ interface ActivePieceAnim {
 interface SceneCallbacks {
   onSquareClick: (square: string) => void;
   onTreeSquareClick?: (square: string) => void;
+  onUpperRightVoidChange?: (spec: UpperRightVoidSpec) => void;
   onContextLost?: () => void;
   onContextRestored?: () => void;
 }
@@ -133,7 +136,11 @@ export class ChessScene3D {
 
   private lightSquareMats: THREE.MeshStandardMaterial[] = [];
   private darkSquareMats: THREE.MeshStandardMaterial[] = [];
+  private tileGeometries: THREE.BufferGeometry[] = [];
+  private hitboxGeo: THREE.BufferGeometry | null = null;
+  private hitboxMat: THREE.Material | null = null;
   private frameMat!: THREE.MeshStandardMaterial;
+  private recessBedMat!: THREE.MeshStandardMaterial;
   private tableMat!: THREE.MeshBasicMaterial;
   private whitePieceMats!: PieceMaterialSet;
   private blackPieceMats!: PieceMaterialSet;
@@ -251,9 +258,13 @@ export class ChessScene3D {
   private treeDevelopedCb: (() => void) | null = null;
   private treeSweepCompleteCb: (() => void) | null = null;
 
-  // Camera transition state
+  // Camera transition & responsive maximum-extent framing state
+  private currentPreset: CameraPreset = 'white';
+  private userAdjustedCamera = false;
   private camGoalPos: THREE.Vector3 | null = null;
   private camGoalTarget: THREE.Vector3 | null = null;
+  private angelOverlayVisible = true;
+  private lastEmittedVoid: UpperRightVoidSpec | null = null;
 
   // Interaction
   private raycaster = new THREE.Raycaster();
@@ -341,27 +352,36 @@ export class ChessScene3D {
     this.scene.environment = this.envTexture;
     pmrem.dispose();
 
-    // 3. Camera & OrbitControls
-    this.camera = new THREE.PerspectiveCamera(30, width / height, 0.1, 140);
-    this.camera.position.set(0, 11.4, 13.0);
-    this.applyCameraResponsiveFraming(width, height);
+    // 3. Camera & OrbitControls (fitted to maximum unobstructed screen extent on start)
+    this.camera = new THREE.PerspectiveCamera(30, width / height, 0.1, 160);
+    const initialPose = this.frameCameraPoseForViewport('white', width, height);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.target.set(0, 0.25, 0);
     this.controls.enableDamping = !this.isSoftwareGl;
     this.controls.dampingFactor = 0.07;
     this.controls.enablePan = false;
-    this.controls.minDistance = 8.2;
-    this.controls.maxDistance = 26.0;
-    this.controls.minPolarAngle = 0.14;
-    this.controls.maxPolarAngle = Math.PI / 2 - 0.12;
+    this.controls.minDistance = 5.5;
+    this.controls.maxDistance = 46.0;
+    this.controls.minPolarAngle = 0.12;
+    this.controls.maxPolarAngle = Math.PI / 2 - 0.1;
+
+    this.camera.position.copy(initialPose.pos);
+    this.controls.target.copy(initialPose.target);
+    this.controls.update();
+    this.emitUpperRightVoid(width, height, initialPose.pos, initialPose.target);
 
     this.controls.addEventListener('start', () => {
+      this.userAdjustedCamera = true;
       this.camGoalPos = null;
       this.camGoalTarget = null;
     });
     this.controls.addEventListener('change', () => {
       this.requestRender();
+    });
+    this.controls.addEventListener('end', () => {
+      const cw = Math.max(this.container.clientWidth || window.innerWidth, 1);
+      const ch = Math.max(this.container.clientHeight || window.innerHeight, 1);
+      this.emitUpperRightVoid(cw, ch, this.camera.position, this.controls.target);
     });
 
     // 4. Crisp architectural studio lighting for sharply defined cast piece silhouettes
@@ -370,18 +390,17 @@ export class ChessScene3D {
     this.keyLight.position.set(8.4, 7.4, 5.4);
     this.keyLight.target.position.set(0, 0, 0);
     this.keyLight.castShadow = this.enableShadows;
-    if (this.enableShadows) {
-      this.keyLight.shadow.mapSize.set(4096, 4096);
-      this.keyLight.shadow.camera.near = 4.6;
-      this.keyLight.shadow.camera.far = 19.6;
-      this.keyLight.shadow.camera.left = -6.5;
-      this.keyLight.shadow.camera.right = 6.5;
-      this.keyLight.shadow.camera.top = 5.6;
-      this.keyLight.shadow.camera.bottom = -4.3;
-      this.keyLight.shadow.bias = -0.00008;
-      this.keyLight.shadow.normalBias = 0.002;
-      this.keyLight.shadow.radius = 0;
-    }
+    const shadowMapDim = this.isSoftwareGl ? 1024 : this.isMobileDevice ? 2048 : 4096;
+    this.keyLight.shadow.mapSize.set(shadowMapDim, shadowMapDim);
+    this.keyLight.shadow.camera.near = 4.6;
+    this.keyLight.shadow.camera.far = 19.6;
+    this.keyLight.shadow.camera.left = -6.5;
+    this.keyLight.shadow.camera.right = 6.5;
+    this.keyLight.shadow.camera.top = 5.6;
+    this.keyLight.shadow.camera.bottom = -4.3;
+    this.keyLight.shadow.bias = -0.00008;
+    this.keyLight.shadow.normalBias = 0.002;
+    this.keyLight.shadow.radius = 0;
     this.scene.add(this.keyLight);
     this.scene.add(this.keyLight.target);
 
@@ -406,7 +425,7 @@ export class ChessScene3D {
       this.treeLineGroup,
       this.arrowGroup,
     );
-    this.rebuildCoordinates(skin.coordTextColor);
+    this.rebuildCoordinates(skin.coordTextColor, skin.frameGrainHex, skin.boardEnvIntensity);
 
     this.raycaster.layers.set(1);
 
@@ -455,55 +474,119 @@ export class ChessScene3D {
 
   private buildSkinTextures(skin: (typeof BOARD_SKINS)[BoardSkinId]) {
     const maxAniso = this.renderer.capabilities.getMaxAnisotropy();
+    const veneerStyles: WoodFigureStyle[] = [
+      'cathedral',
+      'quartersawn',
+      'ribbon',
+      'curly',
+      'burl',
+    ];
 
-    const lightVariants = [11, 23, 37, 53].map((seed) =>
+    // Natural beige sycamore/maple plank cuts: subtle per-plank beige hue & figure contrast so every light checker reads as its own distinct piece of wood
+    const lightPlankSpecs: ReadonlyArray<{
+      seed: number;
+      baseHex: string;
+      grainHex: string;
+      contrast: number;
+      rotateQuarter: boolean;
+    }> = [
+      { seed: 11, baseHex: '#b6a07f', grainHex: '#806848', contrast: 0.96, rotateQuarter: false },
+      { seed: 23, baseHex: '#b09a79', grainHex: '#7a6242', contrast: 1.12, rotateQuarter: false },
+      { seed: 37, baseHex: '#aa9372', grainHex: '#755d3d', contrast: 1.04, rotateQuarter: true },
+      { seed: 53, baseHex: '#b9a484', grainHex: '#846c4c', contrast: 0.88, rotateQuarter: false },
+      { seed: 71, baseHex: '#ad9675', grainHex: '#775f3f', contrast: 1.18, rotateQuarter: false },
+      { seed: 89, baseHex: '#a7906f', grainHex: '#72593a', contrast: 1.06, rotateQuarter: true },
+      { seed: 107, baseHex: '#b49f80', grainHex: '#7e6747', contrast: 0.94, rotateQuarter: false },
+      { seed: 127, baseHex: '#af9877', grainHex: '#796141', contrast: 1.16, rotateQuarter: false },
+      { seed: 149, baseHex: '#b59f7e', grainHex: '#7f6646', contrast: 1.02, rotateQuarter: true },
+      { seed: 167, baseHex: '#a99271', grainHex: '#745b3c', contrast: 1.22, rotateQuarter: false },
+      { seed: 191, baseHex: '#b29c7c', grainHex: '#7d6545', contrast: 0.9, rotateQuarter: false },
+      { seed: 211, baseHex: '#ac9574', grainHex: '#775e3f', contrast: 1.1, rotateQuarter: true },
+    ];
+
+    const lightVariants = lightPlankSpecs.map((plank, idx) =>
       createProceduralPbrMaps(
-        skin.lightSquare.baseHex,
-        skin.lightSquare.grainHex,
+        skin.id === 'walnut-maple' ? plank.baseHex : skin.lightSquare.baseHex,
+        skin.id === 'walnut-maple' ? plank.grainHex : skin.lightSquare.grainHex,
         skin.lightSquare.pattern,
-        seed,
+        plank.seed,
         maxAniso,
-        { size: 512, tileSeam: true },
+        {
+          size: 512,
+          tileSeam: false,
+          rotateQuarter: plank.rotateQuarter,
+          grainContrast: plank.contrast,
+          figureStyle: veneerStyles[idx % veneerStyles.length],
+        },
       ),
     );
 
-    const darkVariants = [29, 43, 61, 79].map((seed) =>
+    const darkPlankSpecs: ReadonlyArray<{
+      seed: number;
+      baseHex: string;
+      grainHex: string;
+      contrast: number;
+      rotateQuarter: boolean;
+    }> = [
+      { seed: 17, baseHex: '#351d0f', grainHex: '#1e0e06', contrast: 0.96, rotateQuarter: false },
+      { seed: 29, baseHex: '#301a0d', grainHex: '#1b0d05', contrast: 1.06, rotateQuarter: false },
+      { seed: 43, baseHex: '#2c170b', grainHex: '#180b04', contrast: 0.92, rotateQuarter: true },
+      { seed: 61, baseHex: '#371f10', grainHex: '#201007', contrast: 1.08, rotateQuarter: false },
+      { seed: 79, baseHex: '#311a0d', grainHex: '#1b0d05', contrast: 0.98, rotateQuarter: false },
+      { seed: 97, baseHex: '#2b160b', grainHex: '#170a04', contrast: 1.04, rotateQuarter: true },
+      { seed: 113, baseHex: '#341c0e', grainHex: '#1d0e06', contrast: 0.9, rotateQuarter: false },
+      { seed: 137, baseHex: '#2e180c', grainHex: '#190c05', contrast: 1.1, rotateQuarter: false },
+      { seed: 157, baseHex: '#361e10', grainHex: '#1f0f06', contrast: 0.95, rotateQuarter: true },
+      { seed: 179, baseHex: '#2d180c', grainHex: '#180b04', contrast: 1.05, rotateQuarter: false },
+      { seed: 197, baseHex: '#321b0e', grainHex: '#1c0d05', contrast: 0.93, rotateQuarter: false },
+      { seed: 223, baseHex: '#2f190c', grainHex: '#1a0c05', contrast: 1.12, rotateQuarter: true },
+    ];
+
+    const darkVariants = darkPlankSpecs.map((plank, idx) =>
       createProceduralPbrMaps(
-        skin.darkSquare.baseHex,
-        skin.darkSquare.grainHex,
+        skin.id === 'walnut-maple' ? plank.baseHex : skin.darkSquare.baseHex,
+        skin.id === 'walnut-maple' ? plank.grainHex : skin.darkSquare.grainHex,
         skin.darkSquare.pattern,
-        seed,
+        plank.seed,
         maxAniso,
-        { size: 512, tileSeam: true },
+        {
+          size: 512,
+          tileSeam: false,
+          rotateQuarter: plank.rotateQuarter,
+          grainContrast: plank.contrast,
+          figureStyle: veneerStyles[idx % veneerStyles.length],
+        },
       ),
     );
 
-    const framePbr = createProceduralPbrMaps(
+    // Board frame milled from the exact same rich walnut hardwood palette (continuous frame grain, dedicated 6x6 repeat)
+    const frameBaseMaps = createProceduralPbrMaps(
       skin.frameBaseHex,
       skin.frameGrainHex,
       skin.framePattern,
-      47,
+      151,
       maxAniso,
-      { size: 512, tileSeam: false },
+      { size: 512, tileSeam: false, grainContrast: 0.88, figureStyle: 'frame' },
     );
-    framePbr.map.repeat.set(3, 3);
-    framePbr.bumpMap.repeat.set(3, 3);
-    framePbr.roughnessMap.repeat.set(3, 3);
+    frameBaseMaps.map.repeat.set(6, 6);
+    frameBaseMaps.bumpMap.repeat.set(6, 6);
+    frameBaseMaps.roughnessMap.repeat.set(6, 6);
+    const framePbr = frameBaseMaps;
 
     const whitePieceHex = `#${skin.whitePiece.color.toString(16).padStart(6, '0')}`;
     const blackPieceHex = `#${skin.blackPiece.color.toString(16).padStart(6, '0')}`;
 
     const whitePiecePbr = createProceduralPbrMaps(
       whitePieceHex,
-      '#b28d60',
+      '#5c3d1b',
       'wood',
       101,
       maxAniso,
-      { size: 512, tileSeam: false, rotateQuarter: true, grainContrast: 0.75, smoothTurned: true },
+      { size: 512, tileSeam: false, rotateQuarter: true, grainContrast: 1.85, smoothTurned: true },
     );
     const blackPiecePbr = createProceduralPbrMaps(
       blackPieceHex,
-      '#100906',
+      '#0d0704',
       'wood',
       131,
       maxAniso,
@@ -523,19 +606,21 @@ export class ChessScene3D {
       map: pieceAoTex,
       transparent: true,
       depthWrite: false,
-      opacity: this.enableShadows ? 0.22 : 0.48,
+      opacity: this.enableShadows ? 0.36 : 0.54,
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
     });
 
-    const bumpAmount = 0.016;
+    const bumpAmount = 0.014;
 
-    // Mobile fallback: MeshStandardMaterial on Android/iOS; MeshPhysicalMaterial on PC
-    this.lightSquareMats = lightVariants.map((v, idx) =>
+    // Mobile fallback: MeshStandardMaterial on Android/iOS; MeshPhysicalMaterial on PC (vertexColors carries subtle per-checker wood variation)
+    const boardSurfaceTint = 0xf0ebe3;
+    this.lightSquareMats = lightVariants.map((v) =>
       this.isMobileDevice
         ? new THREE.MeshStandardMaterial({
-            color: idx % 2 === 0 ? 0xffffff : 0xfbf8f2,
+            color: boardSurfaceTint,
+            vertexColors: true,
             map: v.map,
             bumpMap: v.bumpMap,
             bumpScale: bumpAmount,
@@ -545,7 +630,8 @@ export class ChessScene3D {
             envMapIntensity: skin.boardEnvIntensity,
           })
         : new THREE.MeshPhysicalMaterial({
-            color: idx % 2 === 0 ? 0xffffff : 0xfbf8f2,
+            color: boardSurfaceTint,
+            vertexColors: true,
             map: v.map,
             bumpMap: v.bumpMap,
             bumpScale: bumpAmount,
@@ -553,15 +639,16 @@ export class ChessScene3D {
             roughness: skin.lightSquare.roughness,
             metalness: skin.lightSquare.metalness,
             clearcoat: skin.lightSquare.clearcoat,
-            clearcoatRoughness: 0.42,
+            clearcoatRoughness: 0.46,
             envMapIntensity: skin.boardEnvIntensity,
           }),
     );
 
-    this.darkSquareMats = darkVariants.map((v, idx) =>
+    this.darkSquareMats = darkVariants.map((v) =>
       this.isMobileDevice
         ? new THREE.MeshStandardMaterial({
-            color: idx % 2 === 0 ? 0xffffff : 0xf7f3ed,
+            color: boardSurfaceTint,
+            vertexColors: true,
             map: v.map,
             bumpMap: v.bumpMap,
             bumpScale: bumpAmount,
@@ -571,7 +658,8 @@ export class ChessScene3D {
             envMapIntensity: skin.boardEnvIntensity,
           })
         : new THREE.MeshPhysicalMaterial({
-            color: idx % 2 === 0 ? 0xffffff : 0xf7f3ed,
+            color: boardSurfaceTint,
+            vertexColors: true,
             map: v.map,
             bumpMap: v.bumpMap,
             bumpScale: bumpAmount,
@@ -579,20 +667,40 @@ export class ChessScene3D {
             roughness: skin.darkSquare.roughness,
             metalness: skin.darkSquare.metalness,
             clearcoat: skin.darkSquare.clearcoat,
-            clearcoatRoughness: 0.42,
+            clearcoatRoughness: 0.46,
             envMapIntensity: skin.boardEnvIntensity,
           }),
     );
 
-    this.frameMat = new THREE.MeshStandardMaterial({
-      color: skin.frameColor,
-      map: framePbr.map,
-      bumpMap: framePbr.bumpMap,
-      bumpScale: 0.018,
-      roughnessMap: framePbr.roughnessMap,
-      roughness: skin.frameRoughness,
-      metalness: skin.frameMetalness,
-      envMapIntensity: skin.boardEnvIntensity,
+    this.frameMat = this.isMobileDevice
+      ? new THREE.MeshStandardMaterial({
+          color: boardSurfaceTint,
+          map: framePbr.map,
+          bumpMap: framePbr.bumpMap,
+          bumpScale: bumpAmount,
+          roughnessMap: framePbr.roughnessMap,
+          roughness: skin.darkSquare.roughness,
+          metalness: skin.darkSquare.metalness,
+          envMapIntensity: skin.boardEnvIntensity,
+        })
+      : new THREE.MeshPhysicalMaterial({
+          color: boardSurfaceTint,
+          map: framePbr.map,
+          bumpMap: framePbr.bumpMap,
+          bumpScale: bumpAmount,
+          roughnessMap: framePbr.roughnessMap,
+          roughness: skin.darkSquare.roughness,
+          metalness: skin.darkSquare.metalness,
+          clearcoat: skin.darkSquare.clearcoat,
+          clearcoatRoughness: 0.46,
+          envMapIntensity: skin.boardEnvIntensity,
+        });
+
+    this.recessBedMat = new THREE.MeshStandardMaterial({
+      color: 0x0c0502,
+      roughness: 0.96,
+      metalness: 0.0,
+      envMapIntensity: 0.015,
     });
 
     this.tableMat = new THREE.MeshBasicMaterial({
@@ -600,10 +708,10 @@ export class ChessScene3D {
       toneMapped: false,
     });
 
-    const whiteGrooveColor = new THREE.Color(skin.whitePiece.collarColor).multiplyScalar(0.52);
+    const whiteGrooveColor = new THREE.Color(skin.whitePiece.collarColor).multiplyScalar(0.5);
     const blackGrooveColor = new THREE.Color(skin.blackPiece.collarColor).multiplyScalar(0.55);
-    const whitePieceSpec = 0.45;
-    const whiteEnvIntensity = skin.pieceEnvIntensity * 0.85;
+    const whitePieceSpec = 0.16;
+    const whiteEnvIntensity = skin.pieceEnvIntensity * 0.42;
 
     this.whitePieceMats = {
       body: this.isMobileDevice
@@ -612,7 +720,7 @@ export class ChessScene3D {
             vertexColors: true,
             map: whitePiecePbr.map,
             bumpMap: whitePiecePbr.bumpMap,
-            bumpScale: 0.002,
+            bumpScale: 0.0032,
             roughnessMap: whitePiecePbr.roughnessMap,
             roughness: skin.whitePiece.roughness,
             metalness: skin.whitePiece.metalness,
@@ -623,12 +731,12 @@ export class ChessScene3D {
             vertexColors: true,
             map: whitePiecePbr.map,
             bumpMap: whitePiecePbr.bumpMap,
-            bumpScale: 0.002,
+            bumpScale: 0.0032,
             roughnessMap: whitePiecePbr.roughnessMap,
             roughness: skin.whitePiece.roughness,
             metalness: skin.whitePiece.metalness,
             clearcoat: skin.whitePiece.clearcoat,
-            clearcoatRoughness: 0.2,
+            clearcoatRoughness: 0.45,
             specularIntensity: whitePieceSpec,
             envMapIntensity: whiteEnvIntensity,
           }),
@@ -637,7 +745,7 @@ export class ChessScene3D {
             color: skin.whitePiece.collarColor,
             vertexColors: true,
             bumpMap: whitePiecePbr.bumpMap,
-            bumpScale: 0.0015,
+            bumpScale: 0.0022,
             roughness: skin.whitePiece.collarRoughness,
             metalness: skin.whitePiece.collarMetalness,
             envMapIntensity: whiteEnvIntensity,
@@ -646,11 +754,11 @@ export class ChessScene3D {
             color: skin.whitePiece.collarColor,
             vertexColors: true,
             bumpMap: whitePiecePbr.bumpMap,
-            bumpScale: 0.0015,
+            bumpScale: 0.0022,
             roughness: skin.whitePiece.collarRoughness,
             metalness: skin.whitePiece.collarMetalness,
             clearcoat: skin.whitePiece.clearcoat,
-            clearcoatRoughness: 0.22,
+            clearcoatRoughness: 0.48,
             specularIntensity: whitePieceSpec,
             envMapIntensity: whiteEnvIntensity,
           }),
@@ -739,23 +847,26 @@ export class ChessScene3D {
       };
     };
 
-    // Reuses shared procedural wood textures (zero extra CanvasTextures) and respects mobile MeshStandardMaterial
-    this.whiteDangerMats = clonePieceMatsWithEmissive(this.whitePieceMats, 0xff3b2f, 0.55);
-    this.whiteAttackerMats = clonePieceMatsWithEmissive(this.whitePieceMats, 0xfbbf24, 0.46);
-    this.blackDangerMats = clonePieceMatsWithEmissive(this.blackPieceMats, 0xff453a, 0.68);
-    this.blackAttackerMats = clonePieceMatsWithEmissive(this.blackPieceMats, 0xfbbf24, 0.56);
+    // Reuses shared procedural wood textures (zero extra CanvasTextures) with subtle emissive tint
+    this.whiteDangerMats = clonePieceMatsWithEmissive(this.whitePieceMats, 0xd95b4f, 0.15);
+    this.whiteAttackerMats = clonePieceMatsWithEmissive(this.whitePieceMats, 0xd9a84e, 0.12);
+    this.blackDangerMats = clonePieceMatsWithEmissive(this.blackPieceMats, 0xd95b4f, 0.2);
+    this.blackAttackerMats = clonePieceMatsWithEmissive(this.blackPieceMats, 0xd9a84e, 0.16);
   }
 
   private buildTableAndBoard(): void {
     const tableGeo = new THREE.CylinderGeometry(28, 28, 0.5, 64);
+    this.tileGeometries.push(tableGeo);
     const table = new THREE.Mesh(tableGeo, this.tableMat);
     table.position.y = -0.54;
     table.receiveShadow = false;
     this.boardGroup.add(table);
 
     const shadowTex = createContactShadowTexture();
+    const contactGeo = new THREE.PlaneGeometry(11.8, 11.8);
+    this.tileGeometries.push(contactGeo);
     const contactPlane = new THREE.Mesh(
-      new THREE.PlaneGeometry(11.8, 11.8),
+      contactGeo,
       new THREE.MeshBasicMaterial({
         map: shadowTex,
         transparent: true,
@@ -767,43 +878,155 @@ export class ChessScene3D {
     contactPlane.position.y = -0.285;
     this.boardGroup.add(contactPlane);
 
+    const tileHash = (f: number, r: number, salt: number): number => {
+      const n = Math.sin((f + 1) * 127.1 + (r + 1) * 311.7 + salt * 74.7) * 43758.5453;
+      return n - Math.floor(n);
+    };
+
+    const makeRoundedBoardOutline = (half: number, cornerR: number): THREE.Shape => {
+      const shape = new THREE.Shape();
+      shape.moveTo(-half + cornerR, -half);
+      shape.lineTo(half - cornerR, -half);
+      shape.quadraticCurveTo(half, -half, half, -half + cornerR);
+      shape.lineTo(half, half - cornerR);
+      shape.quadraticCurveTo(half, half, half - cornerR, half);
+      shape.lineTo(-half + cornerR, half);
+      shape.quadraticCurveTo(-half, half, -half, half - cornerR);
+      shape.lineTo(-half, -half + cornerR);
+      shape.quadraticCurveTo(-half, -half, -half + cornerR, -half);
+      return shape;
+    };
+
+    const applyPlanarFrameUvs = (geo: THREE.BufferGeometry) => {
+      const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+      const uvAttr = geo.getAttribute('uv') as THREE.BufferAttribute;
+      for (let i = 0; i < posAttr.count; i++) {
+        const vx = posAttr.getX(i);
+        const vy = posAttr.getY(i);
+        const vz = posAttr.getZ(i);
+        uvAttr.setXY(i, (vx + vy * 0.25) / 9.2 + 0.5, (vz + vy * 0.25) / 9.2 + 0.5);
+      }
+      uvAttr.needsUpdate = true;
+    };
+
     const half = 4.44;
     const cornerR = 0.08;
-    const slabShape = new THREE.Shape();
-    slabShape.moveTo(-half + cornerR, -half);
-    slabShape.lineTo(half - cornerR, -half);
-    slabShape.quadraticCurveTo(half, -half, half, -half + cornerR);
-    slabShape.lineTo(half, half - cornerR);
-    slabShape.quadraticCurveTo(half, half, half - cornerR, half);
-    slabShape.lineTo(-half + cornerR, half);
-    slabShape.quadraticCurveTo(-half, half, -half, half - cornerR);
-    slabShape.lineTo(-half, -half + cornerR);
-    slabShape.quadraticCurveTo(-half, -half, -half + cornerR, -half);
+    const slabShape = makeRoundedBoardOutline(half, cornerR);
 
+    // 1. Solid walnut base chassis sitting beneath the marquetry shadow bed
     const slabGeo = new THREE.ExtrudeGeometry(slabShape, {
-      depth: 0.27,
+      depth: 0.26,
       bevelEnabled: true,
       bevelThickness: 0.03,
       bevelSize: 0.035,
       bevelSegments: 3,
     });
     slabGeo.rotateX(Math.PI / 2);
-    const uvAttr = slabGeo.attributes.uv;
-    for (let i = 0; i < uvAttr.count; i++) {
-      uvAttr.setXY(i, uvAttr.getX(i) / 9.2 + 0.5, uvAttr.getY(i) / 9.2 + 0.5);
-    }
-    uvAttr.needsUpdate = true;
+    applyPlanarFrameUvs(slabGeo);
     slabGeo.computeVertexNormals();
+    this.tileGeometries.push(slabGeo);
 
     const mainSlab = new THREE.Mesh(slabGeo, this.frameMat);
-    mainSlab.position.y = 0.025;
+    mainSlab.position.y = 0.015; // Top surface at y = 0.045, bottom at y = -0.275
+    mainSlab.userData.isBoardSlab = true;
     mainSlab.castShadow = this.enableShadows;
     mainSlab.receiveShadow = this.enableShadows;
     this.boardGroup.add(mainSlab);
 
-    const tileGeo = new THREE.BoxGeometry(0.998, 0.12, 0.998);
+    // 2. Dark hand-glued marquetry sub-veneer bed revealed inside the tiny irregular seams
+    const recessBedGeo = new THREE.PlaneGeometry(8.1, 8.1);
+    this.tileGeometries.push(recessBedGeo);
+    const recessBed = new THREE.Mesh(recessBedGeo, this.recessBedMat);
+    recessBed.rotation.x = -Math.PI / 2;
+    recessBed.position.y = 0.0475;
+    recessBed.userData.isBoardTile = true;
+    recessBed.receiveShadow = this.enableShadows;
+    this.boardGroup.add(recessBed);
+
+    // 3. Flush outer walnut frame border with a very tiny, organically irregular inner gap around the 8x8 checkers
+    const frameRimShape = makeRoundedBoardOutline(half, cornerR);
+    const innerHole = new THREE.Path();
+    const edgeSamples = 32;
+    // Note: ExtrudeGeometry bevels expand into holes by bevelSize (0.0032), so base 4.0175 yields a visible lip at ~4.0143
+    // against outer checker edges around ~3.9935, leaving a delicate, irregular ~0.014..0.029 marquetry perimeter gap.
+    const innerIrregularOffset = (sideIdx: number, t: number): number => {
+      const waveA = Math.sin(t * Math.PI * 5 + sideIdx * 1.9) * 0.0028;
+      const waveB = Math.cos(t * Math.PI * 13 + sideIdx * 3.1) * 0.0019;
+      const stepIdx = Math.floor(t * 16);
+      const localNudge = (tileHash(sideIdx * 3 + stepIdx, stepIdx, 61) - 0.5) * 0.0036;
+      // Taper subtle corner easing near t=0 and t=1 so the 4 inner corners join smoothly
+      const env = Math.sin(t * Math.PI);
+      return 4.0175 + (waveA + waveB + localNudge) * (0.35 + 0.65 * env);
+    };
+
+    // Clockwise hole path in 2D shape coordinates: (-X,-Z) -> (-X,+Z) -> (+X,+Z) -> (+X,-Z)
+    for (let s = 0; s < edgeSamples; s++) {
+      const t = s / edgeSamples;
+      const zCoord = -4.0175 + t * 8.035;
+      const xCoord = -innerIrregularOffset(0, t);
+      if (s === 0) innerHole.moveTo(xCoord, zCoord);
+      else innerHole.lineTo(xCoord, zCoord);
+    }
+    for (let s = 0; s < edgeSamples; s++) {
+      const t = s / edgeSamples;
+      const xCoord = -4.0175 + t * 8.035;
+      const zCoord = innerIrregularOffset(1, t);
+      innerHole.lineTo(xCoord, zCoord);
+    }
+    for (let s = 0; s < edgeSamples; s++) {
+      const t = s / edgeSamples;
+      const zCoord = 4.0175 - t * 8.035;
+      const xCoord = innerIrregularOffset(2, t);
+      innerHole.lineTo(xCoord, zCoord);
+    }
+    for (let s = 0; s < edgeSamples; s++) {
+      const t = s / edgeSamples;
+      const xCoord = 4.0175 - t * 8.035;
+      const zCoord = -innerIrregularOffset(3, t);
+      innerHole.lineTo(xCoord, zCoord);
+    }
+    innerHole.closePath();
+    frameRimShape.holes.push(innerHole);
+
+    const frameRimBevel = 0.0032;
+    const frameRimGeo = new THREE.ExtrudeGeometry(frameRimShape, {
+      depth: 0.013,
+      curveSegments: 4,
+      steps: 1,
+      bevelEnabled: true,
+      bevelThickness: frameRimBevel,
+      bevelSize: frameRimBevel,
+      bevelSegments: 2,
+    });
+    frameRimGeo.rotateX(Math.PI / 2);
+    applyPlanarFrameUvs(frameRimGeo);
+    frameRimGeo.computeVertexNormals();
+    this.tileGeometries.push(frameRimGeo);
+
+    const frameRim = new THREE.Mesh(frameRimGeo, this.frameMat);
+    frameRim.position.y = 0.0604 - frameRimBevel; // Flush top at y = 0.0604, right below y = 0.068 coordinate plaques
+    frameRim.userData.isBoardSlab = true;
+    frameRim.castShadow = this.enableShadows;
+    frameRim.receiveShadow = this.enableShadows;
+    this.boardGroup.add(frameRim);
+
     const hitboxGeo = new THREE.PlaneGeometry(1.0, 1.0);
     const hitboxMat = new THREE.MeshBasicMaterial({ visible: false });
+    this.hitboxGeo = hitboxGeo;
+    this.hitboxMat = hitboxMat;
+
+    const placedVariant: number[][] = Array.from({ length: 8 }, () => Array<number>(8).fill(-1));
+    const sameColorNeighborOffsets: ReadonlyArray<[number, number]> = [
+      [-1, -1],
+      [1, -1],
+      [-2, 0],
+      [0, -2],
+      [-2, -2],
+      [2, -2],
+    ];
+
+    const tileBevel = 0.0024;
+    const tileDepth = 0.0096;
 
     for (let rank = 0; rank < 8; rank++) {
       for (let file = 0; file < 8; file++) {
@@ -811,14 +1034,139 @@ export class ChessScene3D {
         const isLight = (file + rank) % 2 === 1;
         const x = file - 3.5;
         const z = 3.5 - rank;
-        const variantIdx = (file * 3 + rank * 5) % 4;
 
-        const tile = new THREE.Mesh(
-          tileGeo,
-          isLight ? this.lightSquareMats[variantIdx] : this.darkSquareMats[variantIdx],
-        );
-        tile.position.set(x, 0, z);
-        if ((file + rank) % 4 === 0) tile.rotation.y = Math.PI;
+        const h1 = tileHash(file, rank, 3);
+        const h2 = tileHash(file, rank, 11);
+        const h3 = tileHash(file, rank, 23);
+        const h4 = tileHash(file, rank, 37);
+        const h5 = tileHash(file, rank, 53);
+        const h6 = tileHash(file, rank, 71);
+        const h7 = tileHash(file, rank, 89);
+        const h8 = tileHash(file, rank, 103);
+        const h9 = tileHash(file, rank, 119);
+        const h10 = tileHash(file, rank, 137);
+
+        const variantList = isLight ? this.lightSquareMats : this.darkSquareMats;
+        const totalVariants = variantList.length;
+        const baseIdx =
+          (file * 5 + rank * 7 + Math.floor(h1 * totalVariants)) % totalVariants;
+        let variantIdx = baseIdx;
+        for (let step = 0; step < totalVariants; step++) {
+          const cand = (baseIdx + step * 5) % totalVariants;
+          let collides = false;
+          for (const [df, dr] of sameColorNeighborOffsets) {
+            const nf = file + df;
+            const nr = rank + dr;
+            if (nf >= 0 && nf < 8 && nr >= 0 && nr < 8 && placedVariant[nr][nf] === cand) {
+              collides = true;
+              break;
+            }
+          }
+          if (!collides) {
+            variantIdx = cand;
+            break;
+          }
+        }
+        placedVariant[rank][file] = variantIdx;
+
+        // 4. Hand-cut imperfect marquetry checker geometry:
+        // Each corner & edge midpoint is inset from the 0.500 cell boundary by a tiny organic margin (0.0038..0.0092),
+        // producing subtly hand-planed edges and very, very tiny irregular gaps (~0.008..0.018) between neighboring checkers.
+        const inset = (salt: number) => 0.0038 + tileHash(file, rank, salt) * 0.0054 + tileBevel;
+        const nwX = -0.5 + inset(201);
+        const nwZ = -0.5 + inset(203);
+        const neX = 0.5 - inset(207);
+        const neZ = -0.5 + inset(211);
+        const seX = 0.5 - inset(213);
+        const seZ = 0.5 - inset(217);
+        const swX = -0.5 + inset(223);
+        const swZ = 0.5 - inset(227);
+
+        // Subtle hand-planed organic bow/camber along each of the 4 checker sides
+        const topMidZ = (nwZ + neZ) * 0.5 + (tileHash(file, rank, 233) - 0.5) * 0.0032;
+        const rightMidX = (neX + seX) * 0.5 + (tileHash(file, rank, 239) - 0.5) * 0.0032;
+        const botMidZ = (seZ + swZ) * 0.5 + (tileHash(file, rank, 241) - 0.5) * 0.0032;
+        const leftMidX = (swX + nwX) * 0.5 + (tileHash(file, rank, 251) - 0.5) * 0.0032;
+
+        const checkerShape = new THREE.Shape();
+        checkerShape.moveTo(nwX, nwZ);
+        checkerShape.quadraticCurveTo((nwX + neX) * 0.5, topMidZ, neX, neZ);
+        checkerShape.quadraticCurveTo(rightMidX, (neZ + seZ) * 0.5, seX, seZ);
+        checkerShape.quadraticCurveTo((seX + swX) * 0.5, botMidZ, swX, swZ);
+        checkerShape.quadraticCurveTo(leftMidX, (swZ + nwZ) * 0.5, nwX, nwZ);
+
+        const tileGeo = new THREE.ExtrudeGeometry(checkerShape, {
+          depth: tileDepth,
+          curveSegments: 2,
+          steps: 1,
+          bevelEnabled: true,
+          bevelThickness: tileBevel,
+          bevelSize: tileBevel,
+          bevelSegments: 2,
+        });
+        tileGeo.rotateX(Math.PI / 2);
+
+        // Per-checker unique marquetry veneer cut: planar top + chamfer UVs with scale/mirror/angle/offset
+        const posAttr = tileGeo.getAttribute('position') as THREE.BufferAttribute;
+        const uvAttr = tileGeo.getAttribute('uv') as THREE.BufferAttribute;
+        const scaleU = (0.52 + h3 * 0.44) * (h5 >= 0.5 ? -1 : 1);
+        const scaleV = (0.54 + h4 * 0.44) * (h6 >= 0.5 ? -1 : 1);
+        const cutAngle = (h7 - 0.5) * 0.34;
+        const cosA = Math.cos(cutAngle);
+        const sinA = Math.sin(cutAngle);
+        const du = h1 * 0.91;
+        const dv = h2 * 0.91;
+        for (let vi = 0; vi < posAttr.count; vi++) {
+          const vx = posAttr.getX(vi);
+          const vy = posAttr.getY(vi);
+          const vz = posAttr.getZ(vi);
+          const cu = (vx + vy * 0.35) * scaleU;
+          const cv = (vz + vy * 0.35) * scaleV;
+          const ru = cu * cosA - cv * sinA + 0.5 + du;
+          const rv = cu * sinA + cv * cosA + 0.5 + dv;
+          uvAttr.setXY(vi, ru, rv);
+        }
+        uvAttr.needsUpdate = true;
+        tileGeo.computeVertexNormals();
+
+        let cr: number;
+        let cg: number;
+        let cb: number;
+        if (isLight) {
+          // Subtle per-checker aged sycamore/maple variation kept calm so bright thinking lines stand out
+          const lum = 0.915 + (h2 - 0.5) * 0.125;
+          const warm = (h6 - 0.5) * 0.038;
+          cr = Math.min(0.99, lum + warm * 0.85);
+          cg = Math.min(0.98, lum + warm * 0.42);
+          cb = Math.max(0.83, lum - warm * 0.45);
+        } else {
+          // Hand-inlaid dark roasted walnut veneer variation from checker to checker
+          const lum = 0.91 + (h2 - 0.5) * 0.18;
+          const warm = (h6 - 0.5) * 0.055;
+          cr = Math.min(1.02, lum + warm);
+          cg = Math.min(0.99, lum + warm * 0.34);
+          cb = Math.max(0.76, lum - warm * 0.58);
+        }
+
+        const posCount = posAttr.count;
+        const colors = new Float32Array(posCount * 3);
+        for (let vi = 0; vi < posCount; vi++) {
+          colors[vi * 3] = cr;
+          colors[vi * 3 + 1] = cg;
+          colors[vi * 3 + 2] = cb;
+        }
+        tileGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        this.tileGeometries.push(tileGeo);
+
+        const jitterX = (h8 - 0.5) * 0.0024;
+        const jitterZ = (h9 - 0.5) * 0.0024;
+        const tileTopY = BOARD_TOP_Y + (h10 - 0.5) * 0.0014;
+        const microYaw = (tileHash(file, rank, 257) - 0.5) * 0.0056;
+
+        const tile = new THREE.Mesh(tileGeo, variantList[variantIdx]);
+        tile.position.set(x + jitterX, tileTopY - tileBevel, z + jitterZ);
+        tile.rotation.y = (h4 >= 0.5 ? Math.PI : 0) + microYaw;
+        tile.userData.isBoardTile = true;
         tile.receiveShadow = this.enableShadows;
         this.boardGroup.add(tile);
 
@@ -833,33 +1181,78 @@ export class ChessScene3D {
     }
   }
 
-  private rebuildCoordinates(textColor: string): void {
+  private rebuildCoordinates(
+    textColor: string,
+    frameGrainHex = '#281409',
+    envIntensity = 0.1,
+  ): void {
+    const disposedMats = new Set<THREE.Material>();
     while (this.coordGroup.children.length > 0) {
       const child = this.coordGroup.children[0] as THREE.Mesh;
       this.coordGroup.remove(child);
       child.geometry.dispose();
-      const mat = child.material as THREE.MeshBasicMaterial;
-      mat.dispose();
+      const mat = child.material as THREE.Material;
+      if (!disposedMats.has(mat)) {
+        disposedMats.add(mat);
+        mat.dispose();
+      }
     }
 
     const maxAniso = this.renderer.capabilities.getMaxAnisotropy();
-    const plaqueGeo = new THREE.PlaneGeometry(0.36, 0.36);
+    const plaqueGeo = new THREE.PlaneGeometry(0.37, 0.37);
+    const matByLabel = new Map<string, THREE.MeshStandardMaterial>();
+
+    const getEmbossedMaterial = (label: string): THREE.MeshStandardMaterial => {
+      const existing = matByLabel.get(label);
+      if (existing) return existing;
+
+      const maps = createEmbossedCoordinateMaps(label, textColor, frameGrainHex, maxAniso);
+      // Mobile fallback: MeshStandardMaterial on Android/iOS; MeshPhysicalMaterial on PC
+      const mat = this.isMobileDevice
+        ? new THREE.MeshStandardMaterial({
+            map: maps.map,
+            bumpMap: maps.bumpMap,
+            bumpScale: 0.017,
+            roughnessMap: maps.roughnessMap,
+            roughness: 0.68,
+            metalness: 0.0,
+            envMapIntensity: envIntensity * 1.15,
+            transparent: true,
+            opacity: 0.94,
+            depthWrite: false,
+            polygonOffset: true,
+            polygonOffsetFactor: -1,
+            polygonOffsetUnits: -2,
+          })
+        : new THREE.MeshPhysicalMaterial({
+            map: maps.map,
+            bumpMap: maps.bumpMap,
+            bumpScale: 0.019,
+            roughnessMap: maps.roughnessMap,
+            roughness: 0.66,
+            metalness: 0.0,
+            clearcoat: 0.06,
+            clearcoatRoughness: 0.55,
+            envMapIntensity: envIntensity * 1.25,
+            transparent: true,
+            opacity: 0.94,
+            depthWrite: false,
+            polygonOffset: true,
+            polygonOffsetFactor: -1,
+            polygonOffsetUnits: -2,
+          });
+      matByLabel.set(label, mat);
+      return mat;
+    };
 
     const placePlaque = (label: string, x: number, z: number, rotZ: number) => {
-      const tex = createCoordinateLabelTexture(label, textColor, maxAniso);
-      const mat = new THREE.MeshBasicMaterial({
-        map: tex,
-        transparent: true,
-        opacity: 0.85,
-        depthWrite: false,
-        polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -1,
-      });
+      const mat = getEmbossedMaterial(label);
       const mesh = new THREE.Mesh(plaqueGeo.clone(), mat);
       mesh.rotation.x = -Math.PI / 2;
       mesh.rotation.z = rotZ;
-      mesh.position.set(x, 0.068, z);
+      // Flush right onto the oiled walnut frame top (y = 0.0604) so the carved groove sits into the wood
+      mesh.position.set(x, 0.0607, z);
+      mesh.receiveShadow = this.enableShadows;
       this.coordGroup.add(mesh);
     };
 
@@ -945,28 +1338,103 @@ export class ChessScene3D {
     this.requestRender();
   }
 
-  public setCameraPreset(preset: CameraPreset): void {
-    if (this.webglUnavailable) return;
-    const pos = new THREE.Vector3();
-    const target = new THREE.Vector3(0, 0.25, 0);
-    switch (preset) {
-      case 'white':
-        pos.set(0, 11.4, 13.0);
-        break;
-      case 'black':
-        pos.set(0, 11.4, -13.0);
-        break;
-      case 'top':
-        pos.set(0, 18.8, 0.7);
-        target.set(0, 0, 0);
-        break;
-      case 'cinematic':
-        pos.set(11.6, 8.2, 10.0);
-        target.set(0, 0.35, 0);
-        break;
+  public getShadowsEnabled(): boolean {
+    return this.enableShadows;
+  }
+
+  public setShadowsEnabled(enabled: boolean): void {
+    if (this.webglUnavailable || this.disposed || this.enableShadows === enabled) return;
+    this.enableShadows = enabled;
+    this.renderer.shadowMap.enabled = enabled;
+    this.renderer.shadowMap.needsUpdate = true;
+    this.keyLight.castShadow = enabled;
+    this.pieceContactShadowMat.opacity = enabled ? 0.36 : 0.54;
+
+    for (const child of this.boardGroup.children) {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) continue;
+      if (mesh.userData.isBoardSlab) {
+        mesh.castShadow = enabled;
+        mesh.receiveShadow = enabled;
+      } else if (mesh.userData.isBoardTile) {
+        mesh.receiveShadow = enabled;
+      }
     }
-    this.camGoalPos = pos;
-    this.camGoalTarget = target;
+
+    const updatePieceGroupShadows = (parent: THREE.Group) => {
+      for (const groupObj of parent.children) {
+        const pieceGroup = groupObj as THREE.Group;
+        for (const sub of pieceGroup.children) {
+          const mesh = sub as THREE.Mesh;
+          if (!mesh.isMesh || mesh.material === this.pieceContactShadowMat) continue;
+          const eligible = Boolean(mesh.userData.shadowEligible);
+          mesh.castShadow = eligible && enabled;
+          mesh.receiveShadow = eligible && enabled;
+        }
+      }
+    };
+    updatePieceGroupShadows(this.pieceGroup);
+    updatePieceGroupShadows(this.capturedGroup);
+
+    const markSetNeedsUpdate = (set: PieceMaterialSet) => {
+      set.body.needsUpdate = true;
+      set.collar.needsUpdate = true;
+      set.groove.needsUpdate = true;
+    };
+    this.frameMat.needsUpdate = true;
+    this.lightSquareMats.forEach((m) => {
+      m.needsUpdate = true;
+    });
+    this.darkSquareMats.forEach((m) => {
+      m.needsUpdate = true;
+    });
+    markSetNeedsUpdate(this.whitePieceMats);
+    markSetNeedsUpdate(this.blackPieceMats);
+    markSetNeedsUpdate(this.whiteDangerMats);
+    markSetNeedsUpdate(this.whiteAttackerMats);
+    markSetNeedsUpdate(this.blackDangerMats);
+    markSetNeedsUpdate(this.blackAttackerMats);
+
+    this.requestRender();
+  }
+
+  public setAngelOverlayVisible(visible: boolean): void {
+    if (this.webglUnavailable || this.disposed || this.angelOverlayVisible === visible) return;
+    this.angelOverlayVisible = visible;
+    const w = Math.max(this.container.clientWidth || window.innerWidth, 1);
+    const h = Math.max(this.container.clientHeight || window.innerHeight, 1);
+    if (!this.userAdjustedCamera) {
+      const pose = this.frameCameraPoseForViewport(this.currentPreset, w, h);
+      this.camGoalPos = null;
+      this.camGoalTarget = null;
+      this.camera.position.copy(pose.pos);
+      this.controls.target.copy(pose.target);
+      this.controls.update();
+      this.emitUpperRightVoid(w, h, pose.pos, pose.target);
+    } else {
+      this.emitUpperRightVoid(w, h, this.camera.position, this.controls.target);
+    }
+    this.requestRender();
+  }
+
+  public setCameraPreset(preset: CameraPreset, immediate = false): void {
+    if (this.webglUnavailable) return;
+    this.currentPreset = preset;
+    this.userAdjustedCamera = false;
+    const w = Math.max(this.container.clientWidth || window.innerWidth, 1);
+    const h = Math.max(this.container.clientHeight || window.innerHeight, 1);
+    const pose = this.frameCameraPoseForViewport(preset, w, h);
+    if (immediate) {
+      this.camGoalPos = null;
+      this.camGoalTarget = null;
+      this.camera.position.copy(pose.pos);
+      this.controls.target.copy(pose.target);
+      this.controls.update();
+    } else {
+      this.camGoalPos = pose.pos;
+      this.camGoalTarget = pose.target;
+    }
+    this.emitUpperRightVoid(w, h, pose.pos, pose.target);
     this.requestRender();
   }
 
@@ -1306,15 +1774,15 @@ export class ChessScene3D {
       const b2z = ez - dirZ * barbBack - perpZ * barbWing;
 
       if (edge.chosen) {
-        c.setHex(0xfff099);
+        c.setHex(0xfff5a8);
       } else if (edge.ply === 0) {
-        c.setHex(0xf4c45a);
+        c.setHex(0xffcf5c);
       } else if (edge.ply === 1) {
-        c.setHex(0x38bdf8);
+        c.setHex(0x4cc9ff);
       } else if (edge.ply === 2) {
-        c.setHex(0xa78bfa);
+        c.setHex(0xb79cff);
       } else {
-        c.setHex(0xfb7185);
+        c.setHex(0xff7a90);
       }
 
       const base = writtenEdges * vertsPerEdge * 3;
@@ -1341,7 +1809,7 @@ export class ChessScene3D {
 
       for (let v = 0; v < vertsPerEdge; v++) {
         const cb = base + v * 3;
-        const boost = v === 0 ? 0.74 : 1.0;
+        const boost = v === 0 ? 0.84 : 1.0;
         colors[cb + 0] = c.r * boost;
         colors[cb + 1] = c.g * boost;
         colors[cb + 2] = c.b * boost;
@@ -1367,17 +1835,17 @@ export class ChessScene3D {
       this.treeSweepMesh.geometry = geo;
       oldGeo.dispose();
       const mat = this.treeSweepMesh.material as THREE.LineBasicMaterial;
-      mat.opacity = 0.88;
+      mat.opacity = 0.96;
     } else {
       const mat = new THREE.LineBasicMaterial({
         vertexColors: true,
         transparent: true,
-        opacity: 0.88,
+        opacity: 0.96,
         depthWrite: false,
         toneMapped: false,
       });
       const mesh = new THREE.LineSegments(geo, mat);
-      mesh.renderOrder = 5;
+      mesh.renderOrder = 7;
       mesh.frustumCulled = false;
       this.treeLineGroup.add(mesh);
       this.treeSweepMesh = mesh;
@@ -1509,7 +1977,7 @@ export class ChessScene3D {
       this.treeSweepPhase = 'holding';
       this.treeSweepMesh.geometry.setDrawRange(0, count * 6);
       const mat = this.treeSweepMesh.material as THREE.LineBasicMaterial;
-      mat.opacity = opts.treeOpacity ?? 0.88;
+      mat.opacity = opts.treeOpacity ?? 0.96;
     }
     this.syncArrows(opts.overlayArrows ?? []);
     this.requestRender();
@@ -1978,41 +2446,390 @@ export class ChessScene3D {
     }
   }
 
-  private applyCameraResponsiveFraming(w: number, h: number): void {
+  /**
+   * Solves for maximum-extent 3D camera distance and sub-frustum `setViewOffset` so the wooden
+   * chessboard fills the viewport while consolidating remaining empty space into a clean
+   * unobstructed upper-right void when Chess Angel is visible.
+   */
+  private frameCameraPoseForViewport(
+    preset: CameraPreset,
+    w: number,
+    h: number,
+  ): { pos: THREE.Vector3; target: THREE.Vector3 } {
     const aspect = w / h;
-    // Keep all 8 files + board rim comfortably inside narrow portrait viewports
-    const minAspectForFullBoard = 1.24;
-    if (aspect < minAspectForFullBoard) {
-      const baseHalfRad = THREE.MathUtils.degToRad(15); // half of 30° desktop vertical FOV
-      const scaledTan = Math.tan(baseHalfRad) * (minAspectForFullBoard / Math.max(0.38, aspect));
-      this.camera.fov = Math.min(64, THREE.MathUtils.radToDeg(2 * Math.atan(scaledTan)));
+    if (aspect < 1.0) {
+      this.camera.fov = THREE.MathUtils.clamp(30 + (1.0 - aspect) * 14, 30, 38);
     } else {
       this.camera.fov = 30;
     }
-
     this.camera.aspect = aspect;
 
-    // On mobile devices (< 768px portrait or <= 540px landscape), offset optical center away from the
-    // micro top-right Chess Angel portrait & modal so 100% of the 3D board remains unobstructed.
-    if (w < 768 && w < h) {
-      // Portrait mobile: shift rendered board downward into the open lower-middle zone
-      const yShiftPx = -Math.round(h * 0.115);
-      this.camera.setViewOffset(w, h, 0, yShiftPx, w, h);
-    } else if (h <= 540 && w >= h) {
-      // Landscape mobile: shift rendered board slightly left of the top-right micro modal
-      const xShiftPx = Math.round(w * 0.105);
-      this.camera.setViewOffset(w, h, xShiftPx, 0, w, h);
-    } else {
-      this.camera.clearViewOffset();
-      this.camera.updateProjectionMatrix();
+    const target = new THREE.Vector3();
+    const dir = new THREE.Vector3();
+
+    switch (preset) {
+      case 'white':
+        target.set(0, 0.16, 0.42);
+        dir.set(0, 11.1, 12.6).normalize();
+        break;
+      case 'black':
+        target.set(0, 0.16, -0.42);
+        dir.set(0, 11.1, -12.6).normalize();
+        break;
+      case 'top':
+        target.set(0, 0.04, 0);
+        dir.set(0, 18.8, 0.65).normalize();
+        break;
+      case 'cinematic':
+        target.set(0, 0.24, 0.15);
+        dir.set(11.2, 8.4, 10.0).normalize();
+        break;
     }
+
+    const corners: ReadonlyArray<[number, number, number]> = [
+      [-4.48, -0.26, -4.48],
+      [4.48, -0.26, -4.48],
+      [-4.48, -0.26, 4.48],
+      [4.48, -0.26, 4.48],
+      [-4.48, 0.06, -4.48],
+      [4.48, 0.06, -4.48],
+      [-4.48, 0.06, 4.48],
+      [4.48, 0.06, 4.48],
+      [-3.65, 1.76, -3.65],
+      [3.65, 1.76, -3.65],
+      [-3.65, 1.76, 3.65],
+      [3.65, 1.76, 3.65],
+      [0, 1.78, -3.65],
+      [0, 1.78, 3.65],
+    ];
+
+    const eye = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    const viewMat = new THREE.Matrix4();
+    const projViewMat = new THREE.Matrix4();
+    const pt = new THREE.Vector4();
+
+    const isPortrait = w < h;
+    const padX = Math.max(4, Math.round(w * 0.012));
+
+    if (isPortrait) {
+      const minTopClearPx = this.angelOverlayVisible
+        ? Math.round(Math.min(188, h * 0.21))
+        : 34;
+      const bottomMarginPx = this.angelOverlayVisible
+        ? Math.round(Math.max(26, Math.min(72, (h - w * 1.15) * 0.28)))
+        : 28;
+      const offsetY = Math.round((bottomMarginPx - minTopClearPx) * 0.5);
+      this.camera.setViewOffset(w, h, 0, offsetY, w, h);
+      this.camera.updateProjectionMatrix();
+
+      const leftPx = padX;
+      const rightPx = w - padX;
+      const topPx = minTopClearPx;
+      const bottomPx = h - bottomMarginPx;
+
+      const fitsPortrait = (dist: number): boolean => {
+        eye.copy(dir).multiplyScalar(dist).add(target);
+        viewMat.lookAt(eye, target, up);
+        viewMat.setPosition(eye);
+        viewMat.invert();
+        projViewMat.multiplyMatrices(this.camera.projectionMatrix, viewMat);
+        for (let i = 0; i < corners.length; i++) {
+          const c = corners[i];
+          pt.set(c[0], c[1], c[2], 1).applyMatrix4(projViewMat);
+          if (pt.w <= 0.05) return false;
+          const px = (pt.x / pt.w + 1) * 0.5 * w;
+          const py = (1 - pt.y / pt.w) * 0.5 * h;
+          if (px < leftPx || px > rightPx || py < topPx || py > bottomPx) {
+            return false;
+          }
+        }
+        return true;
+      };
+
+      let lo = 6.0;
+      let hi = 44.0;
+      for (let iter = 0; iter < 22; iter++) {
+        const mid = (lo + hi) * 0.5;
+        if (fitsPortrait(mid)) hi = mid;
+        else lo = mid;
+      }
+      const pos = dir.clone().multiplyScalar(hi).add(target);
+      return { pos, target };
+    }
+
+    // Landscape / Desktop: first solve centered maximum vertical/horizontal extent,
+    // then consolidate spare left-side void to the right so the board stays at maximum zoom
+    // while giving Chess Angel clean unobstructed upper-right void space.
+    const baseOffsetY = -5;
+    this.camera.setViewOffset(w, h, 0, baseOffsetY, w, h);
+    this.camera.updateProjectionMatrix();
+
+    const topPx = h <= 540 ? 28 : 36;
+    const bottomPx = h - (h <= 540 ? 20 : 24);
+    const minAngelCornerW = this.angelOverlayVisible
+      ? Math.round(Math.min(182, w * 0.21))
+      : 0;
+    const minAngelCornerH = this.angelOverlayVisible
+      ? Math.min(h * 0.42, 215)
+      : 0;
+
+    const fitsCentered = (dist: number): boolean => {
+      eye.copy(dir).multiplyScalar(dist).add(target);
+      viewMat.lookAt(eye, target, up);
+      viewMat.setPosition(eye);
+      viewMat.invert();
+      projViewMat.multiplyMatrices(this.camera.projectionMatrix, viewMat);
+      for (let i = 0; i < corners.length; i++) {
+        const c = corners[i];
+        pt.set(c[0], c[1], c[2], 1).applyMatrix4(projViewMat);
+        if (pt.w <= 0.05) return false;
+        const px = (pt.x / pt.w + 1) * 0.5 * w;
+        const py = (1 - pt.y / pt.w) * 0.5 * h;
+        if (px < padX || px > w - padX || py < topPx || py > bottomPx) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    let lo = 6.0;
+    let hi = 44.0;
+    for (let iter = 0; iter < 22; iter++) {
+      const mid = (lo + hi) * 0.5;
+      if (fitsCentered(mid)) hi = mid;
+      else lo = mid;
+    }
+
+    let offsetX = 0;
+    if (this.angelOverlayVisible) {
+      eye.copy(dir).multiplyScalar(hi).add(target);
+      viewMat.lookAt(eye, target, up);
+      viewMat.setPosition(eye);
+      viewMat.invert();
+      projViewMat.multiplyMatrices(this.camera.projectionMatrix, viewMat);
+
+      let minBoardX = w;
+      for (let i = 0; i < corners.length; i++) {
+        const c = corners[i];
+        pt.set(c[0], c[1], c[2], 1).applyMatrix4(projViewMat);
+        if (pt.w > 0.05) {
+          const px = (pt.x / pt.w + 1) * 0.5 * w;
+          if (px < minBoardX) minBoardX = px;
+        }
+      }
+
+      const desiredLeftPadPx = Math.round(THREE.MathUtils.clamp(w * 0.022, 10, 42));
+      const spareLeftPx = Math.max(0, minBoardX - desiredLeftPadPx);
+      offsetX = Math.round(Math.min(spareLeftPx * 0.88, Math.max(260, w * 0.22)));
+      this.camera.setViewOffset(w, h, offsetX, baseOffsetY, w, h);
+      this.camera.updateProjectionMatrix();
+
+      // Re-verify that with offsetX applied, no corner clips left edge or minimum upper-right Angel corner
+      const fitsShifted = (dist: number): boolean => {
+        eye.copy(dir).multiplyScalar(dist).add(target);
+        viewMat.lookAt(eye, target, up);
+        viewMat.setPosition(eye);
+        viewMat.invert();
+        projViewMat.multiplyMatrices(this.camera.projectionMatrix, viewMat);
+        for (let i = 0; i < corners.length; i++) {
+          const c = corners[i];
+          pt.set(c[0], c[1], c[2], 1).applyMatrix4(projViewMat);
+          if (pt.w <= 0.05) return false;
+          const px = (pt.x / pt.w + 1) * 0.5 * w;
+          const py = (1 - pt.y / pt.w) * 0.5 * h;
+          if (px < padX || px > w - padX || py < topPx || py > bottomPx) {
+            return false;
+          }
+          if (minAngelCornerW > 0 && py < minAngelCornerH && px > w - minAngelCornerW) {
+            return false;
+          }
+        }
+        return true;
+      };
+
+      if (!fitsShifted(hi)) {
+        let sLo = hi;
+        let sHi = 44.0;
+        for (let iter = 0; iter < 18; iter++) {
+          const mid = (sLo + sHi) * 0.5;
+          if (fitsShifted(mid)) sHi = mid;
+          else sLo = mid;
+        }
+        hi = sHi;
+      }
+    }
+
+    const pos = dir.clone().multiplyScalar(hi).add(target);
+    return { pos, target };
+  }
+
+  /**
+   * Projects 36 perimeter points of the beveled wooden board & piece crowns into screen pixels
+   * and finds the largest unobstructed upper-right void rectangle outside the chessboard & TopBar,
+   * returning its dynamic sizing budget (up to full native 554×740 portrait + modal when space permits).
+   */
+  private computeUpperRightVoid(
+    w: number,
+    h: number,
+    camPos: THREE.Vector3,
+    camTarget: THREE.Vector3,
+  ): UpperRightVoidSpec {
+    const up = new THREE.Vector3(0, 1, 0);
+    const viewMat = new THREE.Matrix4();
+    viewMat.lookAt(camPos, camTarget, up);
+    viewMat.setPosition(camPos);
+    viewMat.invert();
+
+    const projViewMat = new THREE.Matrix4().multiplyMatrices(
+      this.camera.projectionMatrix,
+      viewMat,
+    );
+    const pt = new THREE.Vector4();
+
+    // Sample perimeter points along all 4 board edges and top piece crowns
+    const hullSamples: Array<[number, number, number]> = [];
+    const steps = [-4.48, -2.24, 0, 2.24, 4.48];
+    for (const s of steps) {
+      hullSamples.push([s, -0.26, -4.48], [s, 0.06, -4.48]);
+      hullSamples.push([s, -0.26, 4.48], [s, 0.06, 4.48]);
+      hullSamples.push([-4.48, -0.26, s], [-4.48, 0.06, s]);
+      hullSamples.push([4.48, -0.26, s], [4.48, 0.06, s]);
+    }
+    const centralPieceX = [-1.8, 0, 1.8];
+    for (const cx of centralPieceX) {
+      hullSamples.push([cx, 1.78, -3.65], [cx, 1.78, 3.65]);
+    }
+    // Corner Rooks (a1/h1/a8/h8) and flank Pawns along files a & h
+    hullSamples.push(
+      [-3.65, 1.08, -3.65],
+      [3.65, 1.08, -3.65],
+      [-3.65, 1.08, 3.65],
+      [3.65, 1.08, 3.65],
+      [-3.65, 0.94, -1.8],
+      [3.65, 0.94, -1.8],
+      [-3.65, 0.94, 0],
+      [3.65, 0.94, 0],
+      [-3.65, 0.94, 1.8],
+      [3.65, 0.94, 1.8],
+    );
+
+    const projected: Array<{ px: number; py: number }> = [];
+    for (let i = 0; i < hullSamples.length; i++) {
+      const c = hullSamples[i];
+      pt.set(c[0], c[1], c[2], 1).applyMatrix4(projViewMat);
+      if (pt.w <= 0.05) continue;
+      projected.push({
+        px: (pt.x / pt.w + 1) * 0.5 * w,
+        py: (1 - pt.y / pt.w) * 0.5 * h,
+      });
+    }
+
+    const voidTopPx = w < 768 ? 26 : 32;
+    const voidRightPx = w - (w < 768 ? 4 : 8);
+    const minCandBottom = voidTopPx + 100;
+    const maxCandBottom = Math.max(minCandBottom + 20, Math.min(h - 12, Math.round(h * 0.97)));
+
+    let bestVoidW = 0;
+    let bestVoidH = 0;
+    let bestScore = -1;
+
+    const sweepCount = 36;
+    for (let s = 0; s <= sweepCount; s++) {
+      const candBottomPx = Math.round(
+        minCandBottom + ((maxCandBottom - minCandBottom) * s) / sweepCount,
+      );
+      let maxBoardRightX = -Infinity;
+      let anyInBand = false;
+
+      for (let i = 0; i < projected.length; i++) {
+        const p = projected[i];
+        if (p.py <= candBottomPx + 4) {
+          anyInBand = true;
+          if (p.px > maxBoardRightX) {
+            maxBoardRightX = p.px;
+          }
+        }
+      }
+
+      let availW: number;
+      if (!anyInBand) {
+        // Strictly above the entire 3D board & pieces (e.g. portrait phones & portrait tablets)
+        availW = Math.min(voidRightPx - 6, Math.round(w * (w < 560 ? 0.78 : 0.68)));
+      } else {
+        availW = Math.max(0, Math.round(voidRightPx - maxBoardRightX - 4));
+      }
+      const availH = Math.max(0, candBottomPx - voidTopPx);
+
+      // Primary fit rewards balanced portrait+modal aspect; tie-breaker claims full unobstructed vertical height
+      const aspectFit = Math.min(availW, availH * 0.72);
+      const score = aspectFit + availW * 0.02 + availH * 0.025;
+      if (score > bestScore) {
+        bestScore = score;
+        bestVoidW = availW;
+        bestVoidH = availH;
+      }
+    }
+
+    const targetWidthPx = Math.round(bestVoidW * 0.97);
+    const targetHeightPx = Math.round(bestVoidH * 0.97);
+    const hasVoidSpace = bestVoidW >= 132 && bestVoidH >= 132;
+
+    return {
+      voidWidthPx: bestVoidW,
+      voidHeightPx: bestVoidH,
+      targetWidthPx,
+      targetHeightPx,
+      hasVoidSpace,
+    };
+  }
+
+  private emitUpperRightVoid(
+    w: number,
+    h: number,
+    camPos: THREE.Vector3,
+    camTarget: THREE.Vector3,
+  ): void {
+    if (!this.callbacks.onUpperRightVoidChange) return;
+    const next = this.computeUpperRightVoid(w, h, camPos, camTarget);
+    const prev = this.lastEmittedVoid;
+    if (
+      prev &&
+      prev.hasVoidSpace === next.hasVoidSpace &&
+      Math.abs(prev.targetWidthPx - next.targetWidthPx) < 3 &&
+      Math.abs(prev.targetHeightPx - next.targetHeightPx) < 3
+    ) {
+      return;
+    }
+    this.lastEmittedVoid = next;
+    this.callbacks.onUpperRightVoidChange(next);
   }
 
   private handleResize(): void {
     if (this.disposed || this.webglUnavailable) return;
     const w = Math.max(this.container.clientWidth || window.innerWidth, 1);
     const h = Math.max(this.container.clientHeight || window.innerHeight, 1);
-    this.applyCameraResponsiveFraming(w, h);
+    if (!this.userAdjustedCamera) {
+      const pose = this.frameCameraPoseForViewport(this.currentPreset, w, h);
+      this.camGoalPos = null;
+      this.camGoalTarget = null;
+      this.camera.position.copy(pose.pos);
+      this.controls.target.copy(pose.target);
+      this.controls.update();
+      this.emitUpperRightVoid(w, h, pose.pos, pose.target);
+    } else {
+      const aspect = w / h;
+      this.camera.fov =
+        aspect < 1.0 ? THREE.MathUtils.clamp(30 + (1.0 - aspect) * 14, 30, 38) : 30;
+      this.camera.aspect = aspect;
+      if (this.camera.view && this.camera.view.enabled && this.camera.view.fullWidth > 0) {
+        const scaledOffX = Math.round((this.camera.view.offsetX / this.camera.view.fullWidth) * w);
+        const scaledOffY = Math.round((this.camera.view.offsetY / this.camera.view.fullHeight) * h);
+        this.camera.setViewOffset(w, h, scaledOffX, scaledOffY, w, h);
+      }
+      this.camera.updateProjectionMatrix();
+      this.emitUpperRightVoid(w, h, this.camera.position, this.controls.target);
+    }
     this.renderer.setSize(w, h);
     this.requestRender();
   }
@@ -2156,7 +2973,7 @@ export class ChessScene3D {
           : Math.max(1, this.treeSweepTotalEdges - 1);
         const vis = Math.min(maxAllowed, Math.max(1, Math.ceil(this.treeVisibleEdgesFloat)));
         this.treeSweepMesh.geometry.setDrawRange(0, vis * 6);
-        (this.treeSweepMesh.material as THREE.LineBasicMaterial).opacity = 0.88;
+        (this.treeSweepMesh.material as THREE.LineBasicMaterial).opacity = 0.96;
 
         if (this.treeFinalized && vis >= this.treeSweepTotalEdges) {
           this.treeSweepPhase = 'holding';
@@ -2180,7 +2997,7 @@ export class ChessScene3D {
         this.treeFadeElapsed += dt;
         const ft = Math.min(1, this.treeFadeElapsed / Math.max(0.05, this.treeFadeDurationSec));
         const mat = this.treeSweepMesh.material as THREE.LineBasicMaterial;
-        mat.opacity = Math.max(0, 0.88 * (1 - ft * ft * (3 - 2 * ft)));
+        mat.opacity = Math.max(0, 0.96 * (1 - ft * ft * (3 - 2 * ft)));
         if (ft < 1) {
           keepAnimating = true;
         } else {
@@ -2201,15 +3018,15 @@ export class ChessScene3D {
           set.groove.emissiveIntensity = val * 0.65;
         };
 
-        setSetIntensity(this.whiteDangerMats, 0.38, 0.52);
-        setSetIntensity(this.blackDangerMats, 0.48, 0.58);
-        setSetIntensity(this.whiteAttackerMats, 0.3, 0.44);
-        setSetIntensity(this.blackAttackerMats, 0.38, 0.5);
+        setSetIntensity(this.whiteDangerMats, 0.09, 0.14);
+        setSetIntensity(this.blackDangerMats, 0.13, 0.18);
+        setSetIntensity(this.whiteAttackerMats, 0.07, 0.12);
+        setSetIntensity(this.blackAttackerMats, 0.1, 0.15);
 
-        this.speechDangerRingMat.opacity = 0.66 + pulse * 0.32;
-        this.speechDangerDiscMat.opacity = 0.14 + pulse * 0.18;
-        this.speechAttackerRingMat.opacity = 0.64 + pulse * 0.32;
-        this.speechAttackerDiscMat.opacity = 0.12 + pulse * 0.15;
+        this.speechDangerRingMat.opacity = 0.58 + pulse * 0.28;
+        this.speechDangerDiscMat.opacity = 0.09 + pulse * 0.11;
+        this.speechAttackerRingMat.opacity = 0.56 + pulse * 0.28;
+        this.speechAttackerDiscMat.opacity = 0.08 + pulse * 0.1;
 
         const ringScale = 1 + pulse * 0.075;
         for (const child of this.speechHighlightGroup.children) {
@@ -2284,9 +3101,14 @@ export class ChessScene3D {
     this.speechAttackerRingMat.dispose();
     this.speechAttackerDiscMat.dispose();
 
+    this.tileGeometries.forEach((g) => g.dispose());
+    this.tileGeometries = [];
+    this.hitboxGeo?.dispose();
+    this.hitboxMat?.dispose();
     this.lightSquareMats.forEach((m) => m.dispose());
     this.darkSquareMats.forEach((m) => m.dispose());
     this.frameMat.dispose();
+    this.recessBedMat.dispose();
     this.tableMat.dispose();
     this.whitePieceMats.body.dispose();
     this.whitePieceMats.collar.dispose();

@@ -17,6 +17,7 @@ import {
   Unlock,
   Upload,
   X,
+  Zap,
 } from 'lucide-react';
 import {
   ANGEL_CASE_VIDEO_MAP,
@@ -24,23 +25,32 @@ import {
   ANGEL_GROUP_VIDEO_MAP,
   ANGEL_IDLE_LISTENING_VIDEO_SRC,
   ANGEL_VIDEO_STUDIO_GROUPS,
+  ALL_ESCAPE_CUE_KEYS,
   caseHasAlternativeSlotUI,
+  compressAngelStudioVideos,
   getAngelIdleVideoPool,
   getAngelVideoOverridesSnapshot,
   getCaseEscapeCueStatus,
   getCaseSlotKeys,
   getCaseVideoPool,
+  getEscapeCueEntries,
+  getEscapeSlotKey,
   getEscapeVideoApexSec,
   getEscapeVideoPool,
   getSeductionCaseEntries,
   getSeductionSlotKey,
   getVideoFileDurationSec,
+  getVideoFileSizeBytes,
+  getVideoOptimizedInfo,
   getVideoSlotMaxPlays,
+  LONG_VIDEO_AUTO_NO_CUT_MIN_SEC,
   isCaseUsingDefaultLipSync,
   isEffectiveCasePlayToEnd,
   isEscapeCueEnabled,
   isGroupUsingDefaultLipSync,
+  isVideoSlotAutoProtectedByLength,
   isVideoSlotPlayToEnd,
+  parseEscapeSlotNumber,
   parseIdleSlotNumber,
   parseSeductionSlotNumber,
   primeNextCaseSlotPreview,
@@ -49,16 +59,19 @@ import {
   resetAngelPortraitVideo,
   subscribeAngelVideoOverrides,
   updateAngelCaseEscapeCue,
+  updateAngelCompressionPreset,
   updateAngelEscapeEnabled,
   updateAngelLipSyncRule,
   updateAngelSeductionTriggerMode,
   updateAngelVideoMaxPlays,
   updateAngelVideoPlayToEnd,
   uploadAngelPortraitVideo,
+  type AngelCompressionPreset,
   type AngelEscapeCueKey,
   type AngelEscapeSlotKey,
   type AngelExpressionGroup,
   type AngelVideoMapPayload,
+  type CompressAngelVideosResult,
 } from '../chess/angelPortraitVideos';
 import {
   CLIP_TEXT,
@@ -69,6 +82,7 @@ import {
 
 interface AngelVideoStudioModalProps {
   onClose: () => void;
+  onLockStudio?: () => void;
   onPreviewCase: (clipId: VoiceClipId, text: string, tag: string) => void;
   onPreviewIdle: (specificIdleUrl?: string) => void;
 }
@@ -77,8 +91,23 @@ function formatSec(sec: number): string {
   return `${sec.toFixed(1)}s`;
 }
 
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function getTargetCrfForPreset(preset: AngelCompressionPreset): number {
+  if (preset === 'balanced_24') return 24;
+  if (preset === 'mobile_27') return 27;
+  return 21;
+}
+
 export function AngelVideoStudioModal({
   onClose,
+  onLockStudio,
   onPreviewCase,
   onPreviewIdle,
 }: AngelVideoStudioModalProps) {
@@ -90,12 +119,24 @@ export function AngelVideoStudioModal({
     explaining: true,
     helpful: true,
     warning: true,
+    ending: true,
+    controls: true,
   });
   const [visibleIdleCount, setVisibleIdleCount] = useState<number>(2);
   const [visibleSeductionCount, setVisibleSeductionCount] = useState<number>(3);
+  const [visibleEscapeCounts, setVisibleEscapeCounts] = useState<
+    Record<AngelEscapeCueKey, number>
+  >({
+    point_you: 4,
+    point_me: 3,
+    push_button: 4,
+  });
   const [busySlot, setBusySlot] = useState<string | null>(null);
   const [dragOverSlot, setDragOverSlot] = useState<string | null>(null);
   const [statusNote, setStatusNote] = useState<string | null>(null);
+  const [compressingAll, setCompressingAll] = useState<boolean>(false);
+  const [compressingUrl, setCompressingUrl] = useState<string | null>(null);
+  const [lastCompressRun, setLastCompressRun] = useState<CompressAngelVideosResult | null>(null);
 
   useEffect(() => {
     void refreshAngelVideoOverrides();
@@ -103,6 +144,12 @@ export function AngelVideoStudioModal({
       setOverrides({ ...getAngelVideoOverridesSnapshot() });
     });
   }, []);
+
+  const currentCompressionPreset: AngelCompressionPreset =
+    overrides.compressionPreset || 'lossless_21';
+  const effectiveBatchPreset: Exclude<AngelCompressionPreset, 'mute_only'> =
+    currentCompressionPreset === 'mute_only' ? 'lossless_21' : currentCompressionPreset;
+  const effectiveTargetCrf = getTargetCrfForPreset(effectiveBatchPreset);
 
   const handleUpload = async (
     kind: 'idle' | 'default' | 'group' | 'case' | 'escape',
@@ -115,11 +162,24 @@ export function AngelVideoStudioModal({
     setBusySlot(slotId);
     setStatusNote(null);
     try {
-      const { url: uploadedUrl, extractedAudio } = await uploadAngelPortraitVideo(kind, key, file);
+      const {
+        url: uploadedUrl,
+        extractedAudio,
+        inBytes,
+        outBytes,
+        compressed,
+        crf,
+      } = await uploadAngelPortraitVideo(kind, key, file);
+      const sizeDetail =
+        inBytes && outBytes
+          ? compressed
+            ? `compressed ${formatBytes(inBytes)} → ${formatBytes(outBytes)} (-${Math.max(1, Math.round((1 - outBytes / inBytes) * 100))}%, 554×740 CRF ${crf || effectiveTargetCrf})`
+            : `${formatBytes(outBytes)} (already optimal)`
+          : 'silent + faststart';
       setStatusNote(
         extractedAudio
-          ? `ACTIVE IMMEDIATELY: "${file.name}" is now live for "${key}" (embedded video sound preserved automatically).`
-          : `ACTIVE IMMEDIATELY: "${file.name}" is now live for "${key}" (video sound & trailing black frames stripped).`,
+          ? `ACTIVE IMMEDIATELY: "${file.name}" live for "${key}" — #000000 background & white balance matched, ${sizeDetail}, embedded sound synced.`
+          : `ACTIVE IMMEDIATELY: "${file.name}" live for "${key}" — #000000 background & white balance matched, ${sizeDetail}, sound & black tail stripped.`,
       );
       if (autoPreview) {
         autoPreview(uploadedUrl);
@@ -128,6 +188,62 @@ export function AngelVideoStudioModal({
       setStatusNote(`Could not upload "${file.name}". Please check that it is an MP4/WebM video.`);
     } finally {
       setBusySlot(null);
+    }
+  };
+
+  const handleCompressLibrary = async (force = false) => {
+    if (compressingAll) return;
+    setCompressingAll(true);
+    setStatusNote(
+      `Running 554×740 Lanczos H.264 (CRF ${effectiveTargetCrf}) compression across Studio videos…`,
+    );
+    try {
+      const res = await compressAngelStudioVideos({
+        preset: effectiveBatchPreset,
+        force,
+      });
+      setLastCompressRun(res);
+      if (res.compressedCount > 0 && res.beforeBytes > 0) {
+        const pct = Math.max(1, Math.round((1 - res.afterBytes / res.beforeBytes) * 100));
+        setStatusNote(
+          `Compression complete (CRF ${res.crf}): optimized ${res.compressedCount}/${res.totalFiles} videos · ${formatBytes(res.beforeBytes)} → ${formatBytes(res.afterBytes)} (-${pct}% saved).`,
+        );
+      } else {
+        setStatusNote(
+          `All ${res.totalFiles} Studio videos are already optimal at 554×740 CRF ${res.crf} (${formatBytes(res.afterBytes)} total).`,
+        );
+      }
+    } catch {
+      setStatusNote('Could not run Studio MP4 compression routine.');
+    } finally {
+      setCompressingAll(false);
+    }
+  };
+
+  const handleCompressSingleVideo = async (url: string, labelName: string) => {
+    if (!url || compressingAll || compressingUrl) return;
+    const clean = url.split('?')[0];
+    setCompressingUrl(clean);
+    try {
+      const res = await compressAngelStudioVideos({
+        preset: effectiveBatchPreset,
+        targetUrl: clean,
+        force: true,
+      });
+      if (res.compressedCount > 0 && res.beforeBytes > res.afterBytes) {
+        const pct = Math.max(1, Math.round((1 - res.afterBytes / res.beforeBytes) * 100));
+        setStatusNote(
+          `Compressed "${labelName}" (CRF ${res.crf}): ${formatBytes(res.beforeBytes)} → ${formatBytes(res.afterBytes)} (-${pct}%).`,
+        );
+      } else {
+        setStatusNote(
+          `"${labelName}" is already optimal at ${formatBytes(res.afterBytes)} (554×740 CRF ${res.crf}).`,
+        );
+      }
+    } catch {
+      setStatusNote(`Could not compress "${labelName}".`);
+    } finally {
+      setCompressingUrl(null);
     }
   };
 
@@ -200,7 +316,15 @@ export function AngelVideoStudioModal({
           ) : (
             <Upload className="w-3.5 h-3.5" />
           )}
-          <span>{isBusy ? 'Muting & Saving…' : hasCustom ? 'Active · Replace' : 'Attach .mp4'}</span>
+          <span>
+            {isBusy
+              ? currentCompressionPreset === 'mute_only'
+                ? 'Muting & Saving…'
+                : 'Compressing…'
+              : hasCustom
+                ? 'Active · Replace'
+                : 'Attach .mp4'}
+          </span>
           <input
             type="file"
             accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov"
@@ -317,8 +441,8 @@ export function AngelVideoStudioModal({
       await updateAngelVideoPlayToEnd(slotId, nextVal);
       setStatusNote(
         nextVal
-          ? `"${labelName}": No Cut ON — video cannot be cut in length and will always play until its very end.`
-          : `"${labelName}": No Cut OFF — normal pre-end optical morph transitions restored.`,
+          ? `"${labelName}": No Cut LOCKED — video cannot be cut short and will always play until its very end.`
+          : `"${labelName}": Developer consent granted to allow cuts / pre-end morph transitions.`,
       );
     } catch {
       setStatusNote(`Could not save No-Cut flag for "${labelName}".`);
@@ -378,6 +502,8 @@ export function AngelVideoStudioModal({
 
   const renderPlayToEndFlagButton = (slotId: string, labelName: string) => {
     const locked = isVideoSlotPlayToEnd(slotId, overrides);
+    const autoByLength = isVideoSlotAutoProtectedByLength(slotId, overrides);
+    const explicitOverride = overrides.videoPlayToEnd?.[slotId];
     return (
       <button
         type="button"
@@ -388,13 +514,19 @@ export function AngelVideoStudioModal({
         }}
         title={
           locked
-            ? `LOCKED — No Cut - Play to End: "${labelName}" cannot be cut in length and must play until its very end. Click to allow cuts.`
-            : `Click to enable "No Cut - Play to End" on "${labelName}" so it cannot be cut short and must play until its very end.`
+            ? autoByLength
+              ? `AUTO-PROTECTED (>${LONG_VIDEO_AUTO_NO_CUT_MIN_SEC}s) — "${labelName}" plays to its very end unless you click here to explicitly allow cuts.`
+              : `LOCKED — No Cut - Play to End: "${labelName}" cannot be cut short and must play until its very end. Click to give developer consent to allow cuts.`
+            : explicitOverride === false
+              ? `Developer consented to allow cuts on "${labelName}". Click to re-lock "No Cut - Play to End".`
+              : `Click to enable "No Cut - Play to End" on "${labelName}" so it cannot be cut short.`
         }
         className={`inline-flex items-center gap-1 font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer whitespace-nowrap ${
           locked
             ? 'border-[#f59e0b]/80 bg-[#2b1d07] hover:bg-[#382609] text-[#fde68a] font-semibold shadow-sm'
-            : 'border-white/16 bg-[#12161f] hover:bg-[#1b2230] text-[#9aa3b2] hover:text-[#e2e8f0]'
+            : explicitOverride === false
+              ? 'border-rose-400/45 bg-rose-950/30 hover:bg-rose-950/50 text-rose-200'
+              : 'border-white/16 bg-[#12161f] hover:bg-[#1b2230] text-[#9aa3b2] hover:text-[#e2e8f0]'
         }`}
       >
         {locked ? (
@@ -402,11 +534,92 @@ export function AngelVideoStudioModal({
         ) : (
           <Unlock className="w-2.5 h-2.5 opacity-75 shrink-0" />
         )}
-        <span>No Cut - Play to End</span>
+        <span>{explicitOverride === false && !locked ? 'Cut Allowed' : 'No Cut - Play to End'}</span>
         {locked && <Check className="w-2.5 h-2.5 text-[#fbbf24] shrink-0" />}
       </button>
     );
   };
+
+  const renderVideoSizeBadge = (url: string | undefined, labelName: string) => {
+    if (!url) return null;
+    const sizeBytes = getVideoFileSizeBytes(url, overrides);
+    if (sizeBytes === null) return null;
+    const optInfo = getVideoOptimizedInfo(url, overrides);
+    const clean = url.split('?')[0];
+    const isSingleBusy = compressingUrl === clean;
+    const isOptimizedAtTarget = Boolean(
+      optInfo &&
+        optInfo.width === 554 &&
+        optInfo.height === 740 &&
+        optInfo.crf >= effectiveTargetCrf,
+    );
+
+    return (
+      <button
+        type="button"
+        disabled={isSingleBusy || compressingAll}
+        onClick={(e) => {
+          e.stopPropagation();
+          void handleCompressSingleVideo(clean, labelName);
+        }}
+        title={
+          isOptimizedAtTarget
+            ? `Optimized 554×740 H.264 (CRF ${optInfo?.crf || 21}) · ${formatBytes(sizeBytes)}. Click to re-run compression on "${labelName}" at CRF ${effectiveTargetCrf}.`
+            : `Click to compress "${labelName}" (${formatBytes(sizeBytes)}${optInfo?.width ? `, ${optInfo.width}×${optInfo.height}` : ''}) to 554×740 H.264 CRF ${effectiveTargetCrf}.`
+        }
+        className={`inline-flex items-center gap-1 font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer whitespace-nowrap ${
+          isOptimizedAtTarget
+            ? 'border-emerald-500/40 bg-emerald-950/35 hover:bg-emerald-900/45 text-emerald-200'
+            : 'border-amber-400/60 bg-amber-950/45 hover:bg-amber-900/50 text-amber-200 font-semibold'
+        }`}
+      >
+        {isSingleBusy ? (
+          <Loader2 className="w-2.5 h-2.5 animate-spin shrink-0" />
+        ) : (
+          <Zap className="w-2.5 h-2.5 shrink-0 opacity-90" />
+        )}
+        <span>{isSingleBusy ? 'Compressing…' : formatBytes(sizeBytes)}</span>
+        {!isOptimizedAtTarget && !isSingleBusy && <span>· Compress</span>}
+      </button>
+    );
+  };
+
+  const sizeEntries = Object.entries(overrides.videoSizes || {});
+  const totalStudioVideos = sizeEntries.length;
+  const totalStudioBytes = sizeEntries.reduce((acc, [, sz]) => acc + (sz || 0), 0);
+  const optimizedStudioCount = sizeEntries.filter(([cleanPath, sz]) => {
+    const info = overrides.videoOptimized?.[cleanPath];
+    return Boolean(
+      info &&
+        info.size === sz &&
+        info.width === 554 &&
+        info.height === 740 &&
+        info.crf >= effectiveTargetCrf,
+    );
+  }).length;
+  const pendingCompressCount = Math.max(0, totalStudioVideos - optimizedStudioCount);
+
+  const COMPRESSION_PRESET_OPTIONS: ReadonlyArray<{
+    value: AngelCompressionPreset;
+    label: string;
+  }> = [
+    {
+      value: 'lossless_21',
+      label: 'Visually Lossless · CRF 21 (554×740 · Default)',
+    },
+    {
+      value: 'balanced_24',
+      label: 'Compact · CRF 24 (554×740 · ~35% smaller)',
+    },
+    {
+      value: 'mobile_27',
+      label: 'Ultra-Light Mobile · CRF 27 (554×740 · ~55% smaller)',
+    },
+    {
+      value: 'mute_only',
+      label: 'Original Stream · Mute Audio Only (No Re-encode on Upload)',
+    },
+  ];
 
   const escapeSpecs: Array<{
     key: AngelEscapeCueKey;
@@ -416,7 +629,7 @@ export function AngelVideoStudioModal({
     description: string;
     previewClipId: VoiceClipId;
     previewTag: string;
-    slots: ReadonlyArray<{ slotKey: AngelEscapeSlotKey; slotLabel: string }>;
+    minDefaultSlots: number;
   }> = [
     {
       key: 'point_you',
@@ -424,28 +637,33 @@ export function AngelVideoStudioModal({
       title: 'Word "you" — Point Finger Right at Player',
       triggerBadge: 'Trigger: "you"',
       description:
-        'Whenever "you" appears in any spoken text, pauses the active video, morphs into her pointing at the player (alternating #1 & #2 when both are attached), then resumes the active video to the end.',
+        'Whenever "you" appears in any spoken text, pauses the active video, morphs into her pointing at the player (rotating across #1, #2, #3, #4… alternatives when attached), then resumes the active video to the end.',
       previewClipId: 'check_knight_v1',
       previewTag: 'ESCAPE: "YOU"',
-      slots: [
-        { slotKey: 'point_you', slotLabel: '"you" #1' },
-        { slotKey: 'point_you_2', slotLabel: '"you" #2 (Alt)' },
-      ],
+      minDefaultSlots: 4,
+    },
+    {
+      key: 'point_me',
+      shortWord: '"me" / "I"',
+      title: 'Words "me" & "I" — Gesture Toward Herself',
+      triggerBadge: 'Trigger: "me" · "I"',
+      description:
+        'Whenever "me" or "I" appears in any spoken text (e.g. "I am your Chess Angel", "I am a computer", "let me answer that", "I tested three sharp variations"), pauses the active video, plays her self-gesture overlay (rotating across attached alternatives), then resumes the active video to the end.',
+      previewClipId: 'player_check_v1',
+      previewTag: 'ESCAPE: "ME" / "I"',
+      minDefaultSlots: 3,
     },
     {
       key: 'push_button',
       shortWord: '"button"',
       title: '"push a button" Below — Point Down at Modal Button',
       triggerBadge:
-        'Trigger: "push a button" · "clicking on a button" · "touch show hint" · "touch hint"',
+        'Trigger: "push a button" · "clicking on a button" · "touch show hint" · "touch Undo" · "Click to confirm"',
       description:
-        'Whenever she mentions pushing/clicking a button below ("push a button", "clicking on a button", "clicking on the button", "touch show hint", "touch hint", "touch Undo", "Click to confirm"), plays this short overlay video (alternating #1 & #2 when both are attached) and continues the active video to the end.',
+        'Whenever she mentions pushing/clicking a button below ("push a button", "clicking on a button", "touch show hint", "touch Undo", "Click to confirm"), plays this short overlay video (rotating across #1, #2, #3, #4… alternatives when attached) and continues the active video to the end.',
       previewClipId: 'hesitate_hint_v3',
       previewTag: 'ESCAPE: TOUCH SHOW HINT',
-      slots: [
-        { slotKey: 'push_button', slotLabel: '"button" #1' },
-        { slotKey: 'push_button_2', slotLabel: '"button" #2 (Alt)' },
-      ],
+      minDefaultSlots: 4,
     },
   ];
 
@@ -463,10 +681,10 @@ export function AngelVideoStudioModal({
                 Chess Angel Video Studio
               </h2>
               <span
-                title="This Studio editor is only visible in the Dev environment; all attached .mp4 files, Play-per-Game quotas, and No-Cut flags are bundled into the deployed app."
+                title="Opened via 5 clicks on the game title; hidden from regular players. All attached .mp4 files, Play-per-Game quotas, and No-Cut flags are bundled into the deployed app."
                 className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/45 bg-emerald-950/40 text-emerald-300 font-medium whitespace-nowrap"
               >
-                Dev-Only UI · Bundled on Deploy
+                Studio Unlocked · Bundled on Deploy
               </span>
             </div>
             <p className="text-[11px] text-[#9aa3b2] truncate">
@@ -476,14 +694,27 @@ export function AngelVideoStudioModal({
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={onClose}
-          title="Close Video Studio"
-          className="p-1.5 rounded-md text-[#9aa3b2] hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {onLockStudio && (
+            <button
+              type="button"
+              onClick={onLockStudio}
+              title="Hide Videos button again until next 5-click on game title"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-amber-400/40 bg-amber-950/35 hover:bg-amber-900/45 text-[11px] font-medium text-amber-200 transition-colors cursor-pointer"
+            >
+              <Lock className="w-3 h-3" />
+              <span>Hide</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            title="Close Video Studio"
+            className="p-1.5 rounded-md text-[#9aa3b2] hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {statusNote && (
@@ -494,6 +725,105 @@ export function AngelVideoStudioModal({
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto thin-scroll p-4 space-y-3">
+        {/* Studio Portrait .mp4 Compression Engine */}
+        <div className="rounded-xl border border-emerald-500/45 bg-gradient-to-b from-[#0a1512] to-[#070a0d] p-3">
+          <div className="flex flex-wrap items-start justify-between gap-2.5">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span className="text-xs font-semibold text-[#f3f7f5]">
+                  Portrait .mp4 Compression Routine
+                </span>
+                <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/40 bg-sky-950/40 text-sky-200 whitespace-nowrap">
+                  {totalStudioVideos} .mp4s · {formatBytes(totalStudioBytes)}
+                </span>
+                <span
+                  className={`font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border whitespace-nowrap ${
+                    pendingCompressCount === 0 && totalStudioVideos > 0
+                      ? 'border-emerald-500/50 bg-emerald-950/45 text-emerald-300 font-medium'
+                      : 'border-amber-400/55 bg-amber-950/45 text-amber-200 font-semibold'
+                  }`}
+                >
+                  {pendingCompressCount === 0 && totalStudioVideos > 0
+                    ? `✓ All ${totalStudioVideos} Optimized (554×740 · CRF ≤${effectiveTargetCrf})`
+                    : `${pendingCompressCount} Can Compress to CRF ${effectiveTargetCrf}`}
+                </span>
+                {lastCompressRun && lastCompressRun.compressedCount > 0 && (
+                  <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/45 bg-emerald-950/50 text-emerald-200 whitespace-nowrap">
+                    Saved {formatBytes(Math.max(0, lastCompressRun.beforeBytes - lastCompressRun.afterBytes))}
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-[#9fb0a9] mt-1 leading-snug">
+                Every attached <span className="text-emerald-200 font-medium">.mp4</span> is
+                automatically scaled to <span className="font-mono-tabular text-[#e2e8f0]">554×740</span>{' '}
+                (Lanczos), H.264 film-tuned, audio-stripped, and{' '}
+                <span className="font-mono-tabular text-[#e2e8f0]">+faststart</span> indexed — or
+                batch-compress the entire Studio library below.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-2.5 pt-2.5 border-t border-white/10 flex flex-wrap items-center justify-between gap-2">
+            <label
+              title="Compression profile applied automatically on new .mp4 uploads and batch Studio compression"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-emerald-500/40 bg-[#0d1915] text-[11px] font-medium text-emerald-100 cursor-pointer max-w-full"
+            >
+              <span className="text-[10px] uppercase tracking-wider text-emerald-300/90 font-semibold shrink-0">
+                Profile:
+              </span>
+              <select
+                aria-label="Portrait MP4 compression profile"
+                value={currentCompressionPreset}
+                disabled={compressingAll}
+                onChange={(e) => {
+                  const nextPreset = e.target.value as AngelCompressionPreset;
+                  void updateAngelCompressionPreset(nextPreset);
+                  setStatusNote(
+                    nextPreset === 'mute_only'
+                      ? 'Upload profile set to Mute Audio Only (no video re-encoding on upload).'
+                      : `Compression profile set to CRF ${getTargetCrfForPreset(nextPreset)} (554×740 Lanczos + faststart) for uploads & batch runs.`,
+                  );
+                }}
+                className="bg-transparent text-emerald-100 text-[11px] focus:outline-none cursor-pointer truncate"
+              >
+                {COMPRESSION_PRESET_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value} className="bg-[#09110e] text-[#f3f7f5]">
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                disabled={compressingAll || totalStudioVideos === 0}
+                onClick={() => void handleCompressLibrary(false)}
+                title={`Compress all Studio .mp4 files not yet at 554×740 CRF ${effectiveTargetCrf}`}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50 ${
+                  pendingCompressCount > 0
+                    ? 'bg-[#133224] hover:bg-[#194230] border-emerald-400/70 text-emerald-100 shadow-sm'
+                    : 'bg-[#111923] hover:bg-[#182331] border-white/20 text-[#cbd5e1]'
+                }`}
+              >
+                {compressingAll ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-300" />
+                ) : (
+                  <Zap className="w-3.5 h-3.5 text-emerald-300" />
+                )}
+                <span>
+                  {compressingAll
+                    ? `Compressing (CRF ${effectiveTargetCrf})…`
+                    : pendingCompressCount > 0
+                      ? `Compress All (${pendingCompressCount}) · CRF ${effectiveTargetCrf}`
+                      : `Verify / Compress All (CRF ${effectiveTargetCrf})`}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* 0. Multi-Video Idle / Quiet Listening Pool */}
         <div className="rounded-xl border border-[#d6ae63]/40 bg-black overflow-hidden">
           <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 bg-[#0c1017] border-b border-white/10">
@@ -509,7 +839,7 @@ export function AngelVideoStudioModal({
                 </span>
               </div>
               <p className="text-[11px] text-[#8e98a8] truncate mt-0.5">
-                Calm 28s–40s stillness &amp; wrist-watch cooldowns so secondary gestures never repeat back-to-back
+                Waits ≥10s after each game speech &amp; ≥15s between idle videos · Secondary gestures never repeat back-to-back
               </p>
             </div>
 
@@ -565,6 +895,7 @@ export function AngelVideoStudioModal({
                             Video: {formatSec(clipSec)}
                           </span>
                         )}
+                        {isActive && renderVideoSizeBadge(effectiveUrl, `Idle #${num}`)}
                         {num >= 2 && renderMaxPlaysControl(`idle:${key}`, `Idle #${num}`)}
                         {renderPlayToEndFlagButton(`idle:${key}`, `Idle #${num}`)}
                       </div>
@@ -654,6 +985,7 @@ export function AngelVideoStudioModal({
                     Video: {formatSec(defaultSpeakClipSec)}
                   </span>
                 )}
+                {renderVideoSizeBadge(defaultSpeakUrl, 'Default Speaking Lip Fallback')}
                 {renderPlayToEndFlagButton(
                   'default:speaking_default',
                   'Default Speaking Lip Fallback',
@@ -720,7 +1052,7 @@ export function AngelVideoStudioModal({
           </div>
         </div>
 
-        {/* Special Word-Triggered Escape Overlay Videos ("you" & "push a button") */}
+        {/* Special Word-Triggered Escape Overlay Videos ("you", "me", & "push a button") */}
         <div className="rounded-xl border border-[#c084fc]/45 bg-black overflow-hidden">
           <div className="px-3.5 py-2.5 bg-[#120d1d] border-b border-white/10">
             <div className="flex flex-wrap items-center gap-2">
@@ -729,16 +1061,18 @@ export function AngelVideoStudioModal({
                 Special Word-Triggered Escape Overlay Videos
               </span>
               <span className="text-[10px] px-1.5 py-0.5 rounded border border-[#c084fc]/45 bg-[#241338] text-[#e9d5ff] font-medium whitespace-nowrap">
-                3rd-Layer Overlay · Resumes Base Video to End
+                3rd-Layer Overlay · Multi-Alternative Pool · Resumes Base Video to End
               </span>
             </div>
             <p className="text-[11px] text-[#a9b1c2] mt-0.5 leading-snug">
-              Attach 1 or 2 alternative short overlay clips for{' '}
-              <span className="text-[#f3cf83] font-medium">&ldquo;you&rdquo;</span> and for{' '}
+              Attach multiple alternative short overlay clips for{' '}
+              <span className="text-[#f3cf83] font-medium">&ldquo;you&rdquo;</span>,{' '}
+              <span className="text-[#f3cf83] font-medium">&ldquo;me&rdquo; / &ldquo;I&rdquo;</span>, and{' '}
               <span className="text-[#f3cf83] font-medium">&ldquo;button&rdquo;</span> — gesture
-              apexes are synchronized to the exact spoken word in the voice recording, and you can
-              select or unselect{' '}
+              apexes synchronize to the exact spoken word in the voice recording, and you can select
+              or unselect{' '}
               <span className="text-[#e9d5ff] font-medium">Cue &ldquo;you&rdquo;</span> /{' '}
+              <span className="text-[#e9d5ff] font-medium">Cue &ldquo;me/I&rdquo;</span> /{' '}
               <span className="text-[#e9d5ff] font-medium">Cue &ldquo;button&rdquo;</span> on each
               individual video below.
             </p>
@@ -748,6 +1082,20 @@ export function AngelVideoStudioModal({
             {escapeSpecs.map((esc) => {
               const isEnabled = isEscapeCueEnabled(esc.key, overrides);
               const activePool = getEscapeVideoPool(esc.key, overrides);
+              const configuredEntries = getEscapeCueEntries(esc.key, overrides);
+              const highestConfiguredNum = Object.keys(overrides.escapes || {}).reduce((max, k) => {
+                const n = parseEscapeSlotNumber(esc.key, k);
+                return n > 0 && overrides.escapes?.[k as AngelEscapeSlotKey]
+                  ? Math.max(max, n)
+                  : max;
+              }, 0);
+              const totalEscSlots = Math.max(
+                esc.minDefaultSlots,
+                visibleEscapeCounts[esc.key] || esc.minDefaultSlots,
+                highestConfiguredNum,
+              );
+              const escSlotNumbers = Array.from({ length: totalEscSlots }, (_, i) => i + 1);
+
               const previewEscapeSlot = (specificUrl?: string) => {
                 primeNextEscapeSlotPreview(esc.key, specificUrl);
                 onPreviewCase(
@@ -759,7 +1107,7 @@ export function AngelVideoStudioModal({
 
               return (
                 <div key={esc.key} className="bg-black">
-                  {/* Escape Cue Header ("you" or "button") */}
+                  {/* Escape Cue Header ("you", "me", or "button") */}
                   <div className="px-3.5 py-2.5 bg-[#0d0a15] border-b border-white/10 flex items-start justify-between gap-2.5">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -779,14 +1127,19 @@ export function AngelVideoStudioModal({
                         >
                           {activePool.length >= 2
                             ? isEnabled
-                              ? '2 Alternating'
-                              : '2 Attached (OFF)'
+                              ? `${activePool.length} Alternating`
+                              : `${activePool.length} Attached (OFF)`
                             : activePool.length === 1
                               ? isEnabled
                                 ? '1 Active'
                                 : '1 Attached (OFF)'
                               : '0 Attached'}
                         </span>
+                        {configuredEntries.length > 0 && (
+                          <span className="font-mono-tabular text-[10px] text-[#9aa3b2] whitespace-nowrap">
+                            ({totalEscSlots} slots)
+                          </span>
+                        )}
                       </div>
                       <p className="mt-1 text-[11px] leading-snug text-[#9aa3b2]">
                         {esc.description}
@@ -794,6 +1147,21 @@ export function AngelVideoStudioModal({
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setVisibleEscapeCounts((prev) => ({
+                            ...prev,
+                            [esc.key]: Math.max(prev[esc.key] || esc.minDefaultSlots, totalEscSlots) + 1,
+                          }))
+                        }
+                        title={`Add another alternative video slot for ${esc.shortWord}`}
+                        className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-[#181126] hover:bg-[#231838] border border-[#c084fc]/45 text-[10px] font-semibold text-[#e9d5ff] cursor-pointer whitespace-nowrap"
+                      >
+                        <Plus className="w-3 h-3 text-[#d8b4fe]" />
+                        Add Alt
+                      </button>
+
                       <button
                         type="button"
                         onClick={() =>
@@ -821,10 +1189,13 @@ export function AngelVideoStudioModal({
                     </div>
                   </div>
 
-                  {/* Two Alternative Video Slots (#1 and #2) */}
+                  {/* Multi-Alternative Video Slots (#1, #2, #3, #4...) */}
                   <div className="divide-y divide-white/10">
-                    {esc.slots.map((slot, idx) => {
-                      const customUrl = overrides.escapes?.[slot.slotKey];
+                    {escSlotNumbers.map((slotNum, idx) => {
+                      const slotKey = getEscapeSlotKey(esc.key, slotNum);
+                      const slotLabel =
+                        slotNum === 1 ? `${esc.shortWord} #1` : `${esc.shortWord} #${slotNum} (Alt)`;
+                      const customUrl = overrides.escapes?.[slotKey];
                       const clipSec = getVideoFileDurationSec(customUrl, overrides);
                       const apexSec = customUrl
                         ? getEscapeVideoApexSec(customUrl, esc.key, overrides)
@@ -832,12 +1203,12 @@ export function AngelVideoStudioModal({
 
                       return (
                         <div
-                          key={slot.slotKey}
-                          {...makeDropHandlers('escape', slot.slotKey, (uploadedUrl) =>
+                          key={slotKey}
+                          {...makeDropHandlers('escape', slotKey, (uploadedUrl) =>
                             previewEscapeSlot(uploadedUrl),
                           )}
                           className={`px-3.5 py-2.5 transition-colors ${
-                            dragOverSlot === `escape:${slot.slotKey}`
+                            dragOverSlot === `escape:${slotKey}`
                               ? 'bg-[#201533]'
                               : 'bg-black hover:bg-[#0c0a12]'
                           }`}
@@ -846,7 +1217,7 @@ export function AngelVideoStudioModal({
                             <div className="min-w-0">
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <span className="font-mono-tabular text-xs font-semibold text-[#f3cf83]">
-                                  {slot.slotLabel}
+                                  {slotLabel}
                                 </span>
                                 <span
                                   className={`text-[10px] px-1.5 py-0.5 rounded border truncate ${
@@ -862,32 +1233,30 @@ export function AngelVideoStudioModal({
                                       ? '✓ Active (.mp4)'
                                       : 'Attached (Overlay OFF)'
                                     : idx === 0
-                                      ? 'Empty — attach or drop primary .mp4'
-                                      : 'Empty — attach or drop 2nd alternative .mp4'}
+                                      ? `Empty — attach or drop primary ${esc.shortWord} .mp4`
+                                      : `Empty — attach or drop alternative #${slotNum} .mp4`}
                                 </span>
                                 {clipSec !== null && (
                                   <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200 whitespace-nowrap">
                                     Video: {formatSec(clipSec)}
                                   </span>
                                 )}
+                                {renderVideoSizeBadge(customUrl, slotLabel)}
                                 {apexSec !== null && (
                                   <span
-                                    title="Calibrated pointing gesture apex inside this video — aligned automatically with the spoken word in the voice recording"
+                                    title="Calibrated gesture apex inside this video — aligned automatically with the spoken word in the voice recording"
                                     className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-[#c084fc]/45 bg-[#231436] text-[#e9d5ff] whitespace-nowrap"
                                   >
                                     Point Apex: {formatSec(apexSec)}
                                   </span>
                                 )}
-                                {renderMaxPlaysControl(`escape:${slot.slotKey}`, slot.slotLabel)}
-                                {renderPlayToEndFlagButton(
-                                  `escape:${slot.slotKey}`,
-                                  slot.slotLabel,
-                                )}
+                                {renderMaxPlaysControl(`escape:${slotKey}`, slotLabel)}
+                                {renderPlayToEndFlagButton(`escape:${slotKey}`, slotLabel)}
                               </div>
                               <div className="text-[11px] text-[#8e98a8] truncate mt-0.5">
                                 {customUrl
                                   ? customUrl.split('?')[0]
-                                  : `Alternative #${idx + 1} overlay video for ${esc.shortWord}`}
+                                  : `Alternative #${slotNum} overlay video for ${esc.shortWord} (rotates automatically across all attached slots)`}
                               </div>
                             </div>
 
@@ -895,7 +1264,7 @@ export function AngelVideoStudioModal({
                               <button
                                 type="button"
                                 onClick={() => previewEscapeSlot(customUrl)}
-                                title={`Preview ${slot.slotLabel} escape overlay & base-video resume on Chess Angel`}
+                                title={`Preview ${slotLabel} escape overlay & base-video resume on Chess Angel`}
                                 className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#151c28] border border-white/16 text-[11px] text-[#cbd5e1] cursor-pointer"
                               >
                                 <Play className="w-3 h-3 text-[#7dd3fc]" />
@@ -904,7 +1273,7 @@ export function AngelVideoStudioModal({
 
                               {renderUploadButton(
                                 'escape',
-                                slot.slotKey,
+                                slotKey,
                                 Boolean(customUrl),
                                 (uploadedUrl) => previewEscapeSlot(uploadedUrl),
                               )}
@@ -1123,6 +1492,7 @@ export function AngelVideoStudioModal({
                                 Video: {formatSec(clipSec)}
                               </span>
                             )}
+                            {renderVideoSizeBadge(customUrl, slotLabel)}
                             {renderMaxPlaysControl(quotaSlotId, slotLabel)}
                             {renderPlayToEndFlagButton(slotId, slotLabel)}
                           </div>
@@ -1156,7 +1526,122 @@ export function AngelVideoStudioModal({
           );
         })()}
 
-        {/* Groups 1–8 & Individual Sayings */}
+        {/* Angel & Modal — On / Off Dedicated Studio Points */}
+        {(() => {
+          const modalToggleSlots: ReadonlyArray<{
+            caseId: 'angel_modal_on' | 'angel_modal_off';
+            title: string;
+            subtitle: string;
+            sampleClipId: VoiceClipId;
+            badgeColorClass: string;
+          }> = [
+            {
+              caseId: 'angel_modal_on',
+              title: 'Angel & Modal — Turned ON',
+              subtitle:
+                'Played when the player switches "Angel & Modal" ON in the HUD dock.',
+              sampleClipId: 'angel_modal_on_v1',
+              badgeColorClass: 'border-emerald-400/50 bg-emerald-950/40 text-emerald-200',
+            },
+            {
+              caseId: 'angel_modal_off',
+              title: 'Angel & Modal — Turned OFF',
+              subtitle:
+                'Played as Chess Angel’s farewell right before her portrait & modal hide when switched OFF.',
+              sampleClipId: 'angel_modal_off_v1',
+              badgeColorClass: 'border-amber-400/50 bg-amber-950/40 text-amber-200',
+            },
+          ];
+
+          return (
+            <div className="rounded-xl border border-[#38bdf8]/45 bg-[#0a111a] overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#0e1724] border-b border-[#38bdf8]/25">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Film className="w-3.5 h-3.5 text-[#7dd3fc] shrink-0" />
+                    <span className="text-xs font-semibold text-[#e0f2fe]">
+                      Angel &amp; Modal — On / Off Videos
+                    </span>
+                    <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-[#38bdf8]/40 bg-[#122234] text-[#bae6fd]">
+                      2 Studio Points
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#94a3b8] mt-0.5">
+                    Assign custom .mp4 videos for turning Chess Angel &amp; her modal ON or OFF (or keep the built-in #000000 studio clips).
+                  </p>
+                </div>
+              </div>
+
+              <div className="divide-y divide-white/10">
+                {modalToggleSlots.map((slot) => {
+                  const customUrl = overrides.cases[slot.caseId];
+                  const builtInUrl = ANGEL_CASE_VIDEO_MAP[slot.caseId];
+                  const activeUrl = customUrl || builtInUrl;
+                  const clipSec = getVideoFileDurationSec(activeUrl, overrides);
+                  const sampleText = CLIP_TEXT[slot.sampleClipId];
+                  const previewSlot = () =>
+                    onPreviewCase(slot.sampleClipId, sampleText, slot.caseId.toUpperCase());
+
+                  return (
+                    <div
+                      key={slot.caseId}
+                      {...makeDropHandlers('case', slot.caseId, previewSlot)}
+                      className={`px-3 py-2.5 transition-colors ${
+                        dragOverSlot === `case:${slot.caseId}` ? 'bg-[#162538]' : 'bg-black'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-xs font-semibold text-[#f7f1e5]">
+                              {slot.title}
+                            </span>
+                            <span
+                              className={`font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border ${slot.badgeColorClass}`}
+                            >
+                              {slot.caseId}
+                            </span>
+                            <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-white/15 bg-[#121722] text-[#cbd5e1]">
+                              {customUrl ? '✓ Custom .mp4' : '✓ Built-in (.mp4)'}
+                            </span>
+                            {clipSec !== null && (
+                              <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200">
+                                Video: {formatSec(clipSec)}
+                              </span>
+                            )}
+                            {renderVideoSizeBadge(activeUrl, slot.title)}
+                          </div>
+                          <div className="text-[11px] text-[#8e98a8] mt-0.5">
+                            {slot.subtitle}
+                          </div>
+                          <div className="text-[11px] text-[#cbd5e1] italic mt-0.5">
+                            &ldquo;{sampleText}&rdquo;
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                          {renderMaxPlaysControl(`case:${slot.caseId}`, slot.title)}
+                          {renderPlayToEndFlagButton(`case:${slot.caseId}`, slot.title)}
+                          <button
+                            type="button"
+                            onClick={previewSlot}
+                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#151c28] border border-white/16 text-[11px] text-[#cbd5e1] cursor-pointer"
+                          >
+                            <Play className="w-3 h-3 text-[#7dd3fc]" />
+                            Test
+                          </button>
+                          {renderUploadButton('case', slot.caseId, Boolean(customUrl), previewSlot)}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Groups 1–9 & Individual Sayings */}
         {ANGEL_VIDEO_STUDIO_GROUPS.map((grp) => {
           const isOpen = Boolean(expandedGroups[grp.id]);
           const groupOverride =
@@ -1209,6 +1694,7 @@ export function AngelVideoStudioModal({
                           Video: {formatSec(groupClipSec)}
                         </span>
                       )}
+                      {renderVideoSizeBadge(groupOverride, `Group ${grp.title}`)}
                     </div>
                     <div className="text-[11px] text-[#8e98a8] truncate mt-0.5">
                       Group ({grp.id})
@@ -1296,10 +1782,9 @@ export function AngelVideoStudioModal({
                     const casePool = getCaseVideoPool(item.caseId, overrides);
                     const customCaseUrl = customCaseUrl1 || customCaseUrl2;
                     const explicitCaseLipRule = lipSyncCfg.cases[item.caseId as CommentaryCaseId];
-                    const builtInCaseUrl =
-                      !customCaseUrl && !explicitCaseLipRule
-                        ? ANGEL_CASE_VIDEO_MAP[item.caseId as CommentaryCaseId]
-                        : undefined;
+                    const builtInCaseUrl = !customCaseUrl
+                      ? ANGEL_CASE_VIDEO_MAP[item.caseId as CommentaryCaseId]
+                      : undefined;
                     const activeCaseUrl = customCaseUrl || builtInCaseUrl;
                     const activeCaseClipSec = !hasAltSlots
                       ? getVideoFileDurationSec(activeCaseUrl, overrides)
@@ -1399,11 +1884,12 @@ export function AngelVideoStudioModal({
                                   Video: {formatSec(activeCaseClipSec)}
                                 </span>
                               )}
+                              {!hasAltSlots && renderVideoSizeBadge(activeCaseUrl, item.caseId)}
 
                               {renderMaxPlaysControl(`case:${item.caseId}`, item.caseId)}
                               {renderPlayToEndFlagButton(`case:${item.caseId}`, item.caseId)}
 
-                              {(['point_you', 'push_button'] as const).map((cueKey) => {
+                              {ALL_ESCAPE_CUE_KEYS.map((cueKey) => {
                                 const cueStatus = getCaseEscapeCueStatus(
                                   item.caseId,
                                   cueKey,
@@ -1417,7 +1903,13 @@ export function AngelVideoStudioModal({
                                 const hasEscapeClip = cuePool.length > 0;
                                 const globalCueOn = isEscapeCueEnabled(cueKey, overrides);
                                 const shortTitle =
-                                  cueKey === 'point_you' ? '"you"' : '"button"';
+                                  cueKey === 'point_you'
+                                    ? '"you"'
+                                    : cueKey === 'point_me'
+                                      ? cueStatus.natural.cue
+                                        ? `"${cueStatus.natural.cue.focalWord}"`
+                                        : '"me/I"'
+                                      : '"button"';
                                 const isButtonAfterNoCut =
                                   cueKey === 'push_button' && caseNoCutEffective;
                                 const variantSuffix =
@@ -1459,9 +1951,10 @@ export function AngelVideoStudioModal({
                                       cueStatus.selected
                                         ? isButtonAfterNoCut
                                           ? `Selected: Because No Cut - Play to End is enabled, the "button" video part plays right afterwards once "${item.caseId}" finishes. Click to unselect.`
-                                          : caseNoCutEffective && cueKey === 'point_you'
+                                          : caseNoCutEffective &&
+                                              (cueKey === 'point_you' || cueKey === 'point_me')
                                             ? `No Cut - Play to End is enabled on "${item.caseId}" so mid-video cuts are suppressed.`
-                                            : `Selected: Cue ${shortTitle} triggers synced to ${cueStatus.wordLabel} @${formatSec(cueStatus.spokenWordSec)}. Click to unselect for "${item.caseId}".`
+                                            : `Selected: Cue ${shortTitle} triggers synced to ${cueStatus.wordLabel} @${formatSec(cueStatus.spokenWordSec)}${!hasEscapeClip ? ' (attach an .mp4 above to activate)' : ''}. Click to unselect for "${item.caseId}".`
                                         : cueStatus.natural.hasAny
                                           ? `Unselected (disabled on "${item.caseId}"). Click to re-enable Cue ${shortTitle}${isButtonAfterNoCut ? ' (plays after No-Cut video)' : ` @${formatSec(cueStatus.spokenWordSec)}`}.`
                                           : `Click to select & trigger Cue ${shortTitle} on "${item.caseId}"${isButtonAfterNoCut ? ' (plays right after No-Cut video finishes)' : ` (@${formatSec(cueStatus.spokenWordSec)})`}.`
@@ -1643,6 +2136,7 @@ export function AngelVideoStudioModal({
                                             Video: {formatSec(slotClipSec)}
                                           </span>
                                         )}
+                                        {renderVideoSizeBadge(slot.slotUrl, slot.slotLabel)}
                                         {renderMaxPlaysControl(
                                           `case:${slot.slotKey}`,
                                           slot.slotLabel,

@@ -80,7 +80,7 @@ export function TopBar({
         {/* White Player & Clock */}
         <div className="flex items-center gap-2 whitespace-nowrap shrink-0">
           <span
-            className={`w-2.5 h-2.5 rounded-[2px] border border-white/35 bg-[#dfc194] ${
+            className={`w-2.5 h-2.5 rounded-[2px] border border-white/35 bg-[#9d7340] ${
               turn === 'w' && !gameResult ? 'ring-1 ring-[#d6ae63]' : 'opacity-65'
             }`}
             aria-hidden="true"

@@ -629,9 +629,10 @@ export function disposePieceGeometryCache(cache: PieceGeometryCache): void {
   Object.values(cache).forEach((geo) => geo.dispose());
 }
 
-function enableShadows(mesh: THREE.Mesh, castShadow: boolean): THREE.Mesh {
-  mesh.castShadow = castShadow;
-  mesh.receiveShadow = castShadow;
+function enableShadows(mesh: THREE.Mesh, shadowActive: boolean, shadowEligible = true): THREE.Mesh {
+  mesh.userData.shadowEligible = shadowEligible;
+  mesh.castShadow = shadowEligible && shadowActive;
+  mesh.receiveShadow = shadowEligible && shadowActive;
   return mesh;
 }
 
@@ -666,7 +667,7 @@ export function buildSculptedPiece(
 
     case 'r': {
       const body = enableShadows(new THREE.Mesh(cache.rookBody, materials.body), castShadow);
-      const well = enableShadows(new THREE.Mesh(cache.rookWellFloor, materials.groove), false);
+      const well = enableShadows(new THREE.Mesh(cache.rookWellFloor, materials.groove), castShadow, false);
       well.position.y = 0.922;
       group.add(body, well);
 
@@ -703,9 +704,9 @@ export function buildSculptedPiece(
       muzzle.position.set(0, 0.875, -0.265);
       muzzle.rotation.x = 0.42;
 
-      const nostrilL = enableShadows(new THREE.Mesh(cache.knightNostril, materials.collar), false);
+      const nostrilL = enableShadows(new THREE.Mesh(cache.knightNostril, materials.collar), castShadow, false);
       nostrilL.position.set(-0.044, 0.895, -0.288);
-      const nostrilR = enableShadows(new THREE.Mesh(cache.knightNostril, materials.collar), false);
+      const nostrilR = enableShadows(new THREE.Mesh(cache.knightNostril, materials.collar), castShadow, false);
       nostrilR.position.set(0.044, 0.895, -0.288);
 
       // Sculpted brow ridges and subtle carved eyes
@@ -716,9 +717,9 @@ export function buildSculptedPiece(
       browR.scale.set(0.75, 0.65, 1.2);
       browR.position.set(0.072, 1.045, -0.098);
 
-      const eyeL = enableShadows(new THREE.Mesh(cache.knightEye, materials.groove), false);
+      const eyeL = enableShadows(new THREE.Mesh(cache.knightEye, materials.groove), castShadow, false);
       eyeL.position.set(-0.084, 1.022, -0.105);
-      const eyeR = enableShadows(new THREE.Mesh(cache.knightEye, materials.groove), false);
+      const eyeR = enableShadows(new THREE.Mesh(cache.knightEye, materials.groove), castShadow, false);
       eyeR.position.set(0.084, 1.022, -0.105);
 
       // Hand-carved flowing mane crest along the arched neck

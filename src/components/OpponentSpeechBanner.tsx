@@ -33,6 +33,13 @@ import {
   type ResolvedActiveEscapeCue,
 } from '../chess/angelPortraitVideos';
 import {
+  computeFallbackUpperRightVoid,
+  isTouchTabletHardware,
+  selectAngelVoidSizeTier,
+  selectMatchedAngelTierIndex,
+  type UpperRightVoidSpec,
+} from '../utils/deviceLayout';
+import {
   opponentSpeech,
   type AngelVoiceMode,
   type OpponentMessage,
@@ -65,14 +72,15 @@ interface ChessAngelPortraitVideoProps {
   soundEnabled: boolean;
   angelVoice: AngelVoiceMode;
   triggerKey: string;
-  compact?: boolean;
+  portraitWidthClass: string;
   hasCardBelow: boolean;
   onClick?: () => void;
   title?: string;
 }
 
 const IS_MOBILE_DEVICE =
-  typeof navigator !== 'undefined' && /Android|iPhone|iPad/i.test(navigator.userAgent);
+  (typeof navigator !== 'undefined' && /Android|iPhone|iPad/i.test(navigator.userAgent)) ||
+  isTouchTabletHardware();
 
 /**
  * Hard-silences any lady portrait HTMLVideoElement regardless of what video file
@@ -104,13 +112,19 @@ const BLEND_TO_IDLE_MS = 1650;
 const BLEND_TO_SPEAK_MS = 780;
 const ESCAPE_BLEND_IN_MS = 260;
 const ESCAPE_BLEND_OUT_MS = 520;
-const PRE_END_MORPH_LEAD_SEC = 1.15;
+const PRE_END_MORPH_LEAD_SEC = 0.28;
 const ESCAPE_PRE_END_LEAD_SEC = 0.52;
-const PRE_EOS_STOP_SEC = 0.1;
+const PRE_EOS_STOP_SEC = 0.03;
 
-/** Calm stillness window (28s–40s) between idle listening variations so she never checks her watch repeatedly */
+/** Minimum quiet pause (>= 10s) after Chess Angel finishes any game speech before showing any idle video */
+const POST_SPEECH_MIN_IDLE_WAIT_MS = 10_500;
+
+/** Minimum quiet pause (>= 15s) between the end of one idle video and the start of the next idle video */
+const MIN_BETWEEN_IDLE_VIDEOS_MS = 15_500;
+
+/** Calm stillness window (16s–26s, always >= 15s) between idle listening videos */
 function nextCalmIdlePauseMs(): number {
-  return 28_000 + Math.floor(Math.random() * 12_000);
+  return 16_000 + Math.floor(Math.random() * 10_000);
 }
 
 /** C2-continuous quintic smoothstep (zero velocity & acceleration jump at 0 and 1) */
@@ -168,6 +182,52 @@ function createPortraitOffscreenCanvas(): HTMLCanvasElement {
   return off;
 }
 
+interface BackdropRgbLut {
+  key: string;
+  r: Uint8Array;
+  g: Uint8Array;
+  b: Uint8Array;
+}
+
+function buildBackdropWhiteBalanceLut(
+  cutR: number,
+  cutG: number,
+  cutB: number,
+  medR: number,
+  medG: number,
+  medB: number,
+): BackdropRgbLut {
+  const avgMed = (medR + medG + medB) / 3;
+  const gammaR = Math.max(0.92, Math.min(1.08, 1 + (medR - avgMed) * 0.0065));
+  const gammaG = Math.max(0.92, Math.min(1.08, 1 + (medG - avgMed) * 0.0065));
+  const gammaB = Math.max(0.92, Math.min(1.08, 1 + (medB - avgMed) * 0.0065));
+  const key = `${cutR}|${cutG}|${cutB}|${gammaR.toFixed(3)}|${gammaG.toFixed(3)}|${gammaB.toFixed(3)}`;
+
+  const makeChannelLut = (cut: number, gamma: number): Uint8Array => {
+    const lut = new Uint8Array(256);
+    const knee = 8;
+    const denom = Math.max(1, 255 - cut);
+    for (let v = 0; v < 256; v++) {
+      if (v <= cut) {
+        lut[v] = 0;
+      } else {
+        const lin = (v - cut) / denom;
+        const toe = v < cut + knee ? (v - cut) / knee : 1;
+        const curved = Math.pow(lin * toe, gamma) * 255;
+        lut[v] = Math.max(0, Math.min(255, Math.round(curved)));
+      }
+    }
+    return lut;
+  };
+
+  return {
+    key,
+    r: makeChannelLut(cutR, gammaR),
+    g: makeChannelLut(cutG, gammaG),
+    b: makeChannelLut(cutB, gammaB),
+  };
+}
+
 function ChessAngelPortraitVideo({
   clipId,
   speechText,
@@ -176,7 +236,7 @@ function ChessAngelPortraitVideo({
   soundEnabled,
   angelVoice,
   triggerKey,
-  compact = false,
+  portraitWidthClass,
   hasCardBelow,
   onClick,
   title,
@@ -191,8 +251,10 @@ function ChessAngelPortraitVideo({
   const escapeCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const escapePrevCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const workCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const workCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const probeCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const probeCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const backdropLutCacheRef = useRef<BackdropRgbLut | null>(null);
   const outgoingFallbackCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const masterCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -205,6 +267,7 @@ function ChessAngelPortraitVideo({
   const slotAutoPlayRef = useRef<[boolean, boolean]>([false, false]);
   const slotHasFrameRef = useRef<[boolean, boolean]>([false, false]);
   const slotPeakLumaRef = useRef<[number, number]>([0, 0]);
+  const slotLastLumaRef = useRef<[number, number]>([0, 0]);
   const slotSafeEndedRef = useRef<[boolean, boolean]>([false, false]);
 
   // Dedicated 3rd-layer Special Escape Overlay ("you" finger-point & "push a button" below)
@@ -215,6 +278,7 @@ function ChessAngelPortraitVideo({
   const escapeSeekAppliedRef = useRef<boolean>(false);
   const escapeHasFrameRef = useRef<boolean>(false);
   const escapePeakLumaRef = useRef<number>(0);
+  const escapeLastLumaRef = useRef<number>(0);
   const escapeSafeEndedRef = useRef<boolean>(false);
   const escapePhaseRef = useRef<'inactive' | 'entering' | 'playing' | 'exiting'>('inactive');
   const activeEscapeCueKeyRef = useRef<AngelEscapeCueKey | null>(null);
@@ -246,6 +310,10 @@ function ChessAngelPortraitVideo({
   const lastTriggerRef = useRef<string>('');
   const lastRequestedSpeakingUrlRef = useRef<string>('');
   const lastSpeakingStartMsRef = useRef<number>(0);
+  const hasDeliveredSpeechRef = useRef<boolean>(false);
+  const lastSpeechEndedAtMsRef = useRef<number>(0);
+  const lastIdleEndedAtMsRef = useRef<number>(0);
+  const idleClipCurrentlyPlayingRef = useRef<boolean>(false);
   const prevSpeakingRef = useRef<boolean>(false);
   const isSpeakingLiveRef = useRef<boolean>(isSpeaking);
   const soundEnabledLiveRef = useRef<boolean>(soundEnabled);
@@ -300,7 +368,9 @@ function ChessAngelPortraitVideo({
       escapePrevCanvasRef.current = createPortraitOffscreenCanvas();
     }
     if (!workCanvasRef.current) {
-      workCanvasRef.current = createPortraitOffscreenCanvas();
+      const wc = createPortraitOffscreenCanvas();
+      workCanvasRef.current = wc;
+      workCtxRef.current = wc.getContext('2d', { willReadFrequently: true });
     }
     if (!outgoingFallbackCanvasRef.current) {
       outgoingFallbackCanvasRef.current = createPortraitOffscreenCanvas();
@@ -318,30 +388,121 @@ function ChessAngelPortraitVideo({
   };
 
   /**
-   * Measures central portrait luminance on a 32x32 downsampled sensor so neither
-   * trailing fade-to-black frames in an uploaded .mp4 nor browser EOS black buffers
-   * can ever overwrite Chess Angel or make her disappear.
+   * 1. Measures central portrait luminance on the 32x32 sensor (protecting against EOS / black tails), AND
+   * 2. Samples the video's outer dark background perimeter on the same 32x32 readback: if the video or
+   *    hardware YUV decoder produces any non-zero dark background or color cast `(bgR, bgG, bgB) > (0,0,0)`,
+   *    immediately calibrates white balance and anchors the dark background 100% to `#000000` (`0, 0, 0`)
+   *    so it matches the game's pure `#000000` background seamlessly on every device.
    */
-  const measurePortraitLuminance = (candidateCanvas: HTMLCanvasElement): number => {
+  const measureAndMatchBackdropToGameBlack = (candidateCanvas: HTMLCanvasElement): number => {
     ensureBuffers();
     const pctx = probeCtxRef.current;
     if (!pctx) return 100;
 
     pctx.clearRect(0, 0, PROBE_SIZE, PROBE_SIZE);
     pctx.drawImage(candidateCanvas, 0, 0, PROBE_SIZE, PROBE_SIZE);
-    // Central 18x26 portrait region covering face, hair & ivory/sky-blue robe
-    const img = pctx.getImageData(7, 3, 18, 26).data;
-    let sum = 0;
-    const count = img.length / 4;
-    for (let i = 0; i < img.length; i += 4) {
-      sum += 0.299 * img[i] + 0.587 * img[i + 1] + 0.114 * img[i + 2];
+    const fullProbe = pctx.getImageData(0, 0, PROBE_SIZE, PROBE_SIZE).data;
+
+    // 1. Central 18x26 portrait region (x = 7..24, y = 3..28) covering face, hair & robe
+    let lumaSum = 0;
+    let lumaCount = 0;
+    for (let y = 3; y < 29; y++) {
+      for (let x = 7; x < 25; x++) {
+        const idx = (y * PROBE_SIZE + x) * 4;
+        lumaSum += 0.299 * fullProbe[idx] + 0.587 * fullProbe[idx + 1] + 0.114 * fullProbe[idx + 2];
+        lumaCount++;
+      }
     }
-    return count > 0 ? sum / count : 0;
+    const luma = lumaCount > 0 ? lumaSum / lumaCount : 0;
+    if (luma < 10) {
+      return luma;
+    }
+
+    // 2. Outer dark-background margin (top strip y=0..1 and upper corners x=0..3 / x=28..31, y=0..10)
+    const bgR: number[] = [];
+    const bgG: number[] = [];
+    const bgB: number[] = [];
+    let maxCornerVal = 0;
+
+    for (let y = 0; y < 11; y++) {
+      for (let x = 0; x < PROBE_SIZE; x++) {
+        const isMargin = y < 2 || x < 4 || x >= PROBE_SIZE - 4;
+        if (!isMargin) continue;
+        const idx = (y * PROBE_SIZE + x) * 4;
+        const r = fullProbe[idx];
+        const g = fullProbe[idx + 1];
+        const b = fullProbe[idx + 2];
+        const peakRgb = Math.max(r, g, b);
+        // Exclude bright foreground if a raised hand/wing enters the margin
+        if (peakRgb < 56) {
+          bgR.push(r);
+          bgG.push(g);
+          bgB.push(b);
+          if ((x < 3 || x >= PROBE_SIZE - 3) && y < 6 && peakRgb > maxCornerVal) {
+            maxCornerVal = peakRgb;
+          }
+        }
+      }
+    }
+
+    if (bgR.length >= 8) {
+      bgR.sort((a, b) => a - b);
+      bgG.sort((a, b) => a - b);
+      bgB.sort((a, b) => a - b);
+      const mid = Math.floor(bgR.length * 0.5);
+      const i90 = Math.min(bgR.length - 1, Math.floor(bgR.length * 0.9));
+      const medR = bgR[mid];
+      const medG = bgG[mid];
+      const medB = bgB[mid];
+      const p90R = bgR[i90];
+      const p90G = bgG[i90];
+      const p90B = bgB[i90];
+
+      // Only run pixel LUT pass if any dark background sample deviates from exact #000000 (0, 0, 0)
+      if (maxCornerVal > 0 || p90R > 0 || p90G > 0 || p90B > 0) {
+        const cutR = Math.min(48, Math.max(2, p90R + 2));
+        const cutG = Math.min(48, Math.max(2, p90G + 2));
+        const cutB = Math.min(48, Math.max(2, p90B + 2));
+        const avgMed = (medR + medG + medB) / 3;
+        const gammaR = Math.max(0.92, Math.min(1.08, 1 + (medR - avgMed) * 0.0065));
+        const gammaG = Math.max(0.92, Math.min(1.08, 1 + (medG - avgMed) * 0.0065));
+        const gammaB = Math.max(0.92, Math.min(1.08, 1 + (medB - avgMed) * 0.0065));
+        const lutKey = `${cutR}|${cutG}|${cutB}|${gammaR.toFixed(3)}|${gammaG.toFixed(3)}|${gammaB.toFixed(3)}`;
+
+        let lut = backdropLutCacheRef.current;
+        if (!lut || lut.key !== lutKey) {
+          lut = buildBackdropWhiteBalanceLut(cutR, cutG, cutB, medR, medG, medB);
+          backdropLutCacheRef.current = lut;
+        }
+
+        const wctx =
+          candidateCanvas === workCanvasRef.current && workCtxRef.current
+            ? workCtxRef.current
+            : candidateCanvas.getContext('2d', { willReadFrequently: true });
+        if (wctx) {
+          const frameImg = wctx.getImageData(0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
+          const px = frameImg.data;
+          const lr = lut.r;
+          const lg = lut.g;
+          const lb = lut.b;
+          for (let i = 0; i < px.length; i += 4) {
+            px[i] = lr[px[i]];
+            px[i + 1] = lg[px[i + 1]];
+            px[i + 2] = lb[px[i + 2]];
+          }
+          wctx.putImageData(frameImg, 0, 0);
+        }
+      }
+    }
+
+    return luma;
   };
 
   /**
-   * Safely decodes the latest frame of `slot` into `slotCanvasesRef.current[slot]`
-   * ONLY if Chess Angel is visibly bright (never black/dimmed/EOS).
+   * Decodes the latest frame of `slot` into `slotCanvasesRef.current[slot]` with 100% `#000000`
+   * background calibration. Never cuts or pauses a video mid-stream on luminance dips (such as
+   * Chess Angel dramatically ducking out of frame in `lost_queen`); only guards the final 80ms
+   * against hardware YUV decoder EOF black-frame flushes.
    */
   const sampleSlotVideoFrame = (slot: 0 | 1): boolean => {
     ensureBuffers();
@@ -359,22 +520,24 @@ function ChessAngelPortraitVideo({
       return slotHasFrameRef.current[slot];
     }
 
+    const dur = video.duration;
+    const cur = video.currentTime;
     const fullLength =
       slot === activeSlotRef.current &&
       activeRoleRef.current === 'speaking' &&
       !isInExtendedLipSyncRef.current
-        ? isUtterancePlayToEnd(slotUrlRef.current[slot], activeSlotClipIdRef.current)
-        : isVideoUrlPlayToEnd(slotUrlRef.current[slot]);
+        ? isUtterancePlayToEnd(slotUrlRef.current[slot], activeSlotClipIdRef.current, undefined, dur)
+        : isVideoUrlPlayToEnd(slotUrlRef.current[slot], undefined, dur);
     const eosGuardSec = fullLength ? 0.025 : PRE_EOS_STOP_SEC;
-    const dur = video.duration;
-    const cur = video.currentTime;
     const nearEos = Number.isFinite(dur) && dur > 0.4 && cur >= dur - eosGuardSec;
+    const inFinalEofWindow = Number.isFinite(dur) && dur > 0.4 && cur >= dur - 0.08;
 
-    const wctx = workCanvas.getContext('2d');
+    const wctx = workCtxRef.current || workCanvas.getContext('2d', { willReadFrequently: true });
     if (!wctx) return slotHasFrameRef.current[slot];
 
     wctx.globalAlpha = 1;
-    wctx.clearRect(0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
+    wctx.fillStyle = '#000000';
+    wctx.fillRect(0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
     drawCoverSource(
       wctx,
       video,
@@ -385,31 +548,35 @@ function ChessAngelPortraitVideo({
       1,
     );
 
-    const luma = measurePortraitLuminance(workCanvas);
-    const peak = slotPeakLumaRef.current[slot];
-    const minLumaFloor = fullLength ? 14 : 22;
-    const minLumaRatio = fullLength ? 0.42 : 0.68;
-    const minAllowedLuma = peak > 0 ? Math.max(minLumaFloor, peak * minLumaRatio) : minLumaFloor;
+    const luma = measureAndMatchBackdropToGameBlack(workCanvas);
 
-    if (luma >= minAllowedLuma) {
-      if (luma > peak) {
-        slotPeakLumaRef.current[slot] = luma;
-      }
-      const sctx = slotCanvases[slot].getContext('2d');
-      if (sctx) {
-        sctx.globalAlpha = 1;
-        sctx.clearRect(0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
-        sctx.drawImage(workCanvas, 0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
-        slotHasFrameRef.current[slot] = true;
-      }
+    // Wait for initial decoder readiness if the very first frame at t≈0 is still uninitialized black
+    if (!slotHasFrameRef.current[slot] && cur < 0.08 && luma < 2) {
+      return false;
+    }
 
-      if (nearEos) {
-        // Pause cleanly BEFORE browser EOS can ever flush the hardware decoder to black
-        video.pause();
-        slotSafeEndedRef.current[slot] = true;
-      }
-    } else if (cur > 0.35 && peak > 0) {
-      // Video file began fading/cutting to black at the tail: reject dark frame & freeze bright frame!
+    // Only inside the final 80ms EOF window: if hardware decoder flushes an abrupt black frame
+    // right after a bright frame, freeze the last clean frame cleanly at EOF.
+    if (inFinalEofWindow && luma < 6 && slotLastLumaRef.current[slot] > 18) {
+      video.pause();
+      slotSafeEndedRef.current[slot] = true;
+      return slotHasFrameRef.current[slot];
+    }
+
+    if (luma > slotPeakLumaRef.current[slot]) {
+      slotPeakLumaRef.current[slot] = luma;
+    }
+    slotLastLumaRef.current[slot] = luma;
+
+    const sctx = slotCanvases[slot].getContext('2d');
+    if (sctx) {
+      sctx.globalAlpha = 1;
+      sctx.clearRect(0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
+      sctx.drawImage(workCanvas, 0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
+      slotHasFrameRef.current[slot] = true;
+    }
+
+    if (nearEos) {
       video.pause();
       slotSafeEndedRef.current[slot] = true;
     }
@@ -418,7 +585,8 @@ function ChessAngelPortraitVideo({
   };
 
   /**
-   * Luminance-verified frame sampler for the 3rd-layer Special Escape Overlay video (`point_you` / `push_button`).
+   * Frame sampler for the 3rd-layer Special Escape Overlay video (`point_you` / `point_me` / `push_button`).
+   * Never cuts mid-clip on motion/lighting dips; only guards the final 80ms EOF decoder flush.
    */
   const sampleEscapeVideoFrame = (): boolean => {
     ensureBuffers();
@@ -436,42 +604,47 @@ function ChessAngelPortraitVideo({
       return escapeHasFrameRef.current;
     }
 
-    const fullLength = isVideoUrlPlayToEnd(escapeUrlRef.current);
-    const eosGuardSec = fullLength ? 0.025 : PRE_EOS_STOP_SEC;
     const dur = video.duration;
     const cur = video.currentTime;
+    const fullLength = isVideoUrlPlayToEnd(escapeUrlRef.current, undefined, dur);
+    const eosGuardSec = fullLength ? 0.025 : PRE_EOS_STOP_SEC;
     const nearEos = Number.isFinite(dur) && dur > 0.35 && cur >= dur - eosGuardSec;
+    const inFinalEofWindow = Number.isFinite(dur) && dur > 0.35 && cur >= dur - 0.08;
 
-    const wctx = workCanvas.getContext('2d');
+    const wctx = workCtxRef.current || workCanvas.getContext('2d', { willReadFrequently: true });
     if (!wctx) return escapeHasFrameRef.current;
 
     wctx.globalAlpha = 1;
-    wctx.clearRect(0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
+    wctx.fillStyle = '#000000';
+    wctx.fillRect(0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
     drawCoverSource(wctx, video, vw, vh, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H, 1);
 
-    const luma = measurePortraitLuminance(workCanvas);
-    const peak = escapePeakLumaRef.current;
-    const minLumaFloor = fullLength ? 14 : 22;
-    const minLumaRatio = fullLength ? 0.42 : 0.68;
-    const minAllowedLuma = peak > 0 ? Math.max(minLumaFloor, peak * minLumaRatio) : minLumaFloor;
+    const luma = measureAndMatchBackdropToGameBlack(workCanvas);
 
-    if (luma >= minAllowedLuma) {
-      if (luma > peak) {
-        escapePeakLumaRef.current = luma;
-      }
-      const ectx = escCanvas.getContext('2d');
-      if (ectx) {
-        ectx.globalAlpha = 1;
-        ectx.clearRect(0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
-        ectx.drawImage(workCanvas, 0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
-        escapeHasFrameRef.current = true;
-      }
+    if (!escapeHasFrameRef.current && cur < 0.08 && luma < 2) {
+      return false;
+    }
 
-      if (nearEos) {
-        video.pause();
-        escapeSafeEndedRef.current = true;
-      }
-    } else if (cur > 0.25 && peak > 0) {
+    if (inFinalEofWindow && luma < 6 && escapeLastLumaRef.current > 18) {
+      video.pause();
+      escapeSafeEndedRef.current = true;
+      return escapeHasFrameRef.current;
+    }
+
+    if (luma > escapePeakLumaRef.current) {
+      escapePeakLumaRef.current = luma;
+    }
+    escapeLastLumaRef.current = luma;
+
+    const ectx = escCanvas.getContext('2d');
+    if (ectx) {
+      ectx.globalAlpha = 1;
+      ectx.clearRect(0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
+      ectx.drawImage(workCanvas, 0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
+      escapeHasFrameRef.current = true;
+    }
+
+    if (nearEos) {
       video.pause();
       escapeSafeEndedRef.current = true;
     }
@@ -507,6 +680,7 @@ function ChessAngelPortraitVideo({
       escapeLaunchSeekSecRef.current = Math.max(0, startSeekSec);
     }
     escapePeakLumaRef.current = 0;
+    escapeLastLumaRef.current = 0;
     escapeSafeEndedRef.current = false;
 
     if (escapeUrlRef.current === url && video.readyState >= 1) {
@@ -547,11 +721,11 @@ function ChessAngelPortraitVideo({
   const isCurrentSlotNoCut = (): boolean => {
     const slot = activeSlotRef.current;
     const url = slotUrlRef.current[slot];
-    if (isVideoUrlPlayToEnd(url)) return true;
+    const liveDur = getVideoBySlot(slot)?.duration;
     if (activeRoleRef.current === 'speaking' && !isInExtendedLipSyncRef.current) {
-      return isUtterancePlayToEnd(url, activeSlotClipIdRef.current);
+      return isUtterancePlayToEnd(url, activeSlotClipIdRef.current, undefined, liveDur);
     }
-    return false;
+    return isVideoUrlPlayToEnd(url, undefined, liveDur);
   };
 
   const resetEscapeOverlayState = (resumeBase: boolean, clearPostVideo = true) => {
@@ -649,6 +823,7 @@ function ChessAngelPortraitVideo({
     video.loop = false;
     slotAutoPlayRef.current[slot] = autoPlay;
     slotPeakLumaRef.current[slot] = 0;
+    slotLastLumaRef.current[slot] = 0;
     slotSafeEndedRef.current[slot] = false;
 
     if (slotUrlRef.current[slot] === url && video.readyState >= 2) {
@@ -662,6 +837,7 @@ function ChessAngelPortraitVideo({
         if (p) p.catch(() => {});
       } else {
         video.pause();
+        sampleSlotVideoFrame(slot);
       }
       return;
     }
@@ -742,12 +918,15 @@ function ChessAngelPortraitVideo({
 
   /**
    * Starts a seamless optical morph transition into `targetUrl` with role `'speaking' | 'idle'`.
-   * If `keepOutgoingLive` is true, the outgoing video continues moving naturally during the dissolve!
+   * - If `keepOutgoingLive` is true, the outgoing video continues moving naturally during the dissolve.
+   * - If `autoPlayTarget` is false (`role === 'idle'`), Chess Angel dissolves smoothly onto a still,
+   *   closed-mouth resting portrait frame without playing an idle video animation yet!
    */
   const startTransitionTo = (
     targetUrl: string,
     role: 'speaking' | 'idle',
     keepOutgoingLive: boolean,
+    autoPlayTarget = true,
   ) => {
     deferredTransitionRef.current = null;
     clearIdleCycleTimer();
@@ -777,13 +956,18 @@ function ChessAngelPortraitVideo({
     useLiveOutgoingRef.current = canKeepOutgoingLive;
 
     if (role === 'speaking') {
+      hasDeliveredSpeechRef.current = true;
+      idleClipCurrentlyPlayingRef.current = false;
       activeSlotClipIdRef.current = clipIdLiveRef.current;
       lastRequestedSpeakingUrlRef.current = targetUrl;
       lastSpeakingStartMsRef.current = performance.now();
       plannedIdleUrlRef.current = pickNextAngelIdleVideo(lastPlayedIdleUrlRef.current);
     } else {
       activeSlotClipIdRef.current = null;
-      lastPlayedIdleUrlRef.current = targetUrl;
+      idleClipCurrentlyPlayingRef.current = autoPlayTarget;
+      if (autoPlayTarget) {
+        lastPlayedIdleUrlRef.current = targetUrl;
+      }
     }
 
     blendDurationMsRef.current = role === 'idle' ? BLEND_TO_IDLE_MS : BLEND_TO_SPEAK_MS;
@@ -796,8 +980,83 @@ function ChessAngelPortraitVideo({
       isBlendingRef.current = false;
     }
 
-    loadVideoIntoSlot(nextSlot, targetUrl, true);
+    loadVideoIntoSlot(nextSlot, targetUrl, autoPlayTarget);
     ensureRenderLoop();
+  };
+
+  /**
+   * Transitions Chess Angel out of a finished game speech onto a calm, still resting portrait frame
+   * (no idle gesture animation yet!) and stamps `lastSpeechEndedAtMsRef` so the >=10s post-speech
+   * quiet timer runs before any idle video can play.
+   */
+  const settleIntoPostSpeechRest = (keepOutgoingLive: boolean) => {
+    hasDeliveredSpeechRef.current = true;
+    lastSpeechEndedAtMsRef.current = performance.now();
+    isInExtendedLipSyncRef.current = false;
+    startTransitionTo(resolveAngelIdleVideo(), 'idle', keepOutgoingLive, false);
+  };
+
+  /**
+   * Arms `idleCycleTimerRef` to play the next Idle video ONLY after:
+   *   1. At least 10 seconds (`POST_SPEECH_MIN_IDLE_WAIT_MS`) have elapsed since Chess Angel
+   *      finished her last game speech (both voice audio and speaking video), AND
+   *   2. At least 15 seconds (`MIN_BETWEEN_IDLE_VIDEOS_MS`) have elapsed since the end of the
+   *      previous idle video.
+   */
+  const scheduleNextIdlePlayback = (preferRandomCalmGap: boolean) => {
+    clearIdleCycleTimer();
+    if (activeRoleRef.current !== 'idle') return;
+    if (isSpeakingLiveRef.current || idleClipCurrentlyPlayingRef.current) return;
+
+    const now = performance.now();
+    const waitAfterSpeechMs = hasDeliveredSpeechRef.current
+      ? Math.max(0, POST_SPEECH_MIN_IDLE_WAIT_MS - (now - lastSpeechEndedAtMsRef.current))
+      : 0;
+    const baseInterIdleTargetMs = preferRandomCalmGap
+      ? nextCalmIdlePauseMs()
+      : MIN_BETWEEN_IDLE_VIDEOS_MS;
+    const waitBetweenIdlesMs =
+      lastIdleEndedAtMsRef.current > 0
+        ? Math.max(0, baseInterIdleTargetMs - (now - lastIdleEndedAtMsRef.current))
+        : preferRandomCalmGap && !hasDeliveredSpeechRef.current
+          ? MIN_BETWEEN_IDLE_VIDEOS_MS
+          : 0;
+
+    const delayMs = Math.max(
+      waitAfterSpeechMs,
+      waitBetweenIdlesMs,
+      hasDeliveredSpeechRef.current ? 0 : MIN_BETWEEN_IDLE_VIDEOS_MS,
+    );
+
+    const nextAlt = pickNextAngelIdleVideo(lastPlayedIdleUrlRef.current);
+    preloadStandbyIdleSlot(nextAlt);
+
+    idleCycleTimerRef.current = window.setTimeout(() => {
+      idleCycleTimerRef.current = null;
+      if (activeRoleRef.current !== 'idle' || idleClipCurrentlyPlayingRef.current) {
+        return;
+      }
+      if (isSpeakingLiveRef.current) {
+        lastSpeechEndedAtMsRef.current = performance.now();
+        return;
+      }
+      const firedNow = performance.now();
+      const remSpeech = hasDeliveredSpeechRef.current
+        ? POST_SPEECH_MIN_IDLE_WAIT_MS - (firedNow - lastSpeechEndedAtMsRef.current)
+        : 0;
+      const remIdle =
+        lastIdleEndedAtMsRef.current > 0
+          ? MIN_BETWEEN_IDLE_VIDEOS_MS - (firedNow - lastIdleEndedAtMsRef.current)
+          : 0;
+      if (Math.max(remSpeech, remIdle) > 40) {
+        scheduleNextIdlePlayback(false);
+        return;
+      }
+      const chosenIdle =
+        plannedIdleUrlRef.current || pickNextAngelIdleVideo(lastPlayedIdleUrlRef.current);
+      plannedIdleUrlRef.current = '';
+      startTransitionTo(chosenIdle, 'idle', false, true);
+    }, Math.max(100, Math.ceil(delayMs)));
   };
 
   function renderFrame(now: number) {
@@ -980,7 +1239,11 @@ function ChessAngelPortraitVideo({
         if (pending.rearmEscapeCues) {
           armEscapeCuesForUtterance(pending.url, pending.clipId, pending.speechText);
         }
-        startTransitionTo(pending.url, pending.role, true);
+        if (pending.role === 'idle') {
+          settleIntoPostSpeechRest(true);
+        } else {
+          startTransitionTo(pending.url, pending.role, true, true);
+        }
         rafIdRef.current = window.requestAnimationFrame(renderFrame);
         return;
       }
@@ -1008,12 +1271,9 @@ function ChessAngelPortraitVideo({
             shouldExtendWithDefaultLipSync(clipIdLiveRef.current)
           ) {
             isInExtendedLipSyncRef.current = true;
-            startTransitionTo(resolveDefaultSpeakingLipVideo(), 'speaking', true);
+            startTransitionTo(resolveDefaultSpeakingLipVideo(), 'speaking', true, true);
           } else {
-            isInExtendedLipSyncRef.current = false;
-            const targetIdle =
-              plannedIdleUrlRef.current || pickNextAngelIdleVideo(lastPlayedIdleUrlRef.current);
-            startTransitionTo(targetIdle, 'idle', true);
+            settleIntoPostSpeechRest(true);
           }
           rafIdRef.current = window.requestAnimationFrame(renderFrame);
           return;
@@ -1214,7 +1474,11 @@ function ChessAngelPortraitVideo({
                     if (pending.rearmEscapeCues) {
                       armEscapeCuesForUtterance(pending.url, pending.clipId, pending.speechText);
                     }
-                    startTransitionTo(pending.url, pending.role, false);
+                    if (pending.role === 'idle') {
+                      settleIntoPostSpeechRest(false);
+                    } else {
+                      startTransitionTo(pending.url, pending.role, false, true);
+                    }
                   } else {
                     const remainingTalkSec = isSpeakingLiveRef.current
                       ? opponentSpeech.getRemainingSpeechSeconds()
@@ -1224,13 +1488,9 @@ function ChessAngelPortraitVideo({
                       shouldExtendWithDefaultLipSync(clipIdLiveRef.current)
                     ) {
                       isInExtendedLipSyncRef.current = true;
-                      startTransitionTo(resolveDefaultSpeakingLipVideo(), 'speaking', false);
+                      startTransitionTo(resolveDefaultSpeakingLipVideo(), 'speaking', false, true);
                     } else {
-                      isInExtendedLipSyncRef.current = false;
-                      const targetIdle =
-                        plannedIdleUrlRef.current ||
-                        pickNextAngelIdleVideo(lastPlayedIdleUrlRef.current);
-                      startTransitionTo(targetIdle, 'idle', false);
+                      settleIntoPostSpeechRest(false);
                     }
                   }
                 }
@@ -1246,12 +1506,8 @@ function ChessAngelPortraitVideo({
                   !mutedPreviewActive &&
                   isInExtendedLipSyncRef.current
                 ) {
-                  isInExtendedLipSyncRef.current = false;
                   pausedBaseForEscapeRef.current = false;
-                  const targetIdle =
-                    plannedIdleUrlRef.current ||
-                    pickNextAngelIdleVideo(lastPlayedIdleUrlRef.current);
-                  startTransitionTo(targetIdle, 'idle', false);
+                  settleIntoPostSpeechRest(false);
                 } else {
                   resumePausedBaseVideoAfterEscape();
                 }
@@ -1303,12 +1559,13 @@ function ChessAngelPortraitVideo({
       }
     }
 
-    // 5. Blit verified `masterCanvas` onto visible screen `<canvas>` (mathematically impossible to blank!)
+    // 5. Blit verified `masterCanvas` onto visible screen `<canvas>` backed by pure #000000 game black
     if (hasMasterFrameRef.current) {
       const vctx = visibleCanvas.getContext('2d');
       if (vctx) {
         vctx.globalAlpha = 1;
-        vctx.clearRect(0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
+        vctx.fillStyle = '#000000';
+        vctx.fillRect(0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
         vctx.drawImage(masterCanvas, 0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
       }
     }
@@ -1338,19 +1595,13 @@ function ChessAngelPortraitVideo({
       // Settled calmly on verified visible listening frame: 0% idle CPU/GPU during rest!
       rafIdRef.current = null;
 
-      // When 2 or more Idle / Quiet Listening alternatives exist, pre-decode the next alternative
-      // and wait a calm 28s–40s stillness interval (with wrist-watch cooldowns) before morphing!
-      if (activeRoleRef.current === 'idle' && idleCycleTimerRef.current === null) {
-        const pool = getAngelIdleVideoPool();
-        if (pool.length >= 2) {
-          const nextAlt = pickNextAngelIdleVideo(slotUrlRef.current[activeSlot]);
-          preloadStandbyIdleSlot(nextAlt);
-          idleCycleTimerRef.current = window.setTimeout(() => {
-            idleCycleTimerRef.current = null;
-            if (activeRoleRef.current === 'idle') {
-              startTransitionTo(nextAlt, 'idle', false);
-            }
-          }, nextCalmIdlePauseMs());
+      if (activeRoleRef.current === 'idle') {
+        if (idleClipCurrentlyPlayingRef.current) {
+          idleClipCurrentlyPlayingRef.current = false;
+          lastIdleEndedAtMsRef.current = now;
+        }
+        if (idleCycleTimerRef.current === null && !isSpeakingLiveRef.current) {
+          scheduleNextIdlePlayback(true);
         }
       }
     }
@@ -1367,6 +1618,8 @@ function ChessAngelPortraitVideo({
       activeRoleRef.current = targetRole;
       autoMorphTriggeredRef.current = targetRole === 'idle';
       if (targetRole === 'speaking') {
+        hasDeliveredSpeechRef.current = true;
+        idleClipCurrentlyPlayingRef.current = false;
         activeSlotClipIdRef.current = clipId;
         isInExtendedLipSyncRef.current = desiredSrc === resolveDefaultSpeakingLipVideo();
         lastRequestedSpeakingUrlRef.current = desiredSrc;
@@ -1383,8 +1636,19 @@ function ChessAngelPortraitVideo({
       } else {
         activeSlotClipIdRef.current = null;
         isInExtendedLipSyncRef.current = false;
-        lastPlayedIdleUrlRef.current = desiredSrc;
-        loadVideoIntoSlot(0, desiredSrc, true);
+        const shouldPlayImmediateIdle = Boolean(forcedIdleUrl);
+        idleClipCurrentlyPlayingRef.current = shouldPlayImmediateIdle;
+        if (!isIdleTrigger) {
+          // Utterance configured as Idle Only (e.g. Lip-Sync OFF): hold calm stillness & enforce >=10s post-speech guard!
+          hasDeliveredSpeechRef.current = true;
+          const estSec = clipId ? VOICE_CLIP_DURATION_SEC[clipId] ?? 5.0 : 5.0;
+          lastSpeechEndedAtMsRef.current =
+            performance.now() + (!soundEnabled || angelVoice === 'off' ? estSec * 1000 : 0);
+        }
+        if (shouldPlayImmediateIdle) {
+          lastPlayedIdleUrlRef.current = desiredSrc;
+        }
+        loadVideoIntoSlot(0, desiredSrc, shouldPlayImmediateIdle);
       }
       armEscapeCuesForUtterance(desiredSrc, clipId, speechText);
       ensureRenderLoop();
@@ -1461,28 +1725,26 @@ function ChessAngelPortraitVideo({
       // Hot-swap immediately if the user just uploaded a new .mp4 or toggled Lip-Sync ON/OFF in Video Studio
       if (
         targetRole === 'speaking' &&
-        (activeRoleRef.current !== 'speaking' ||
+        ((activeRoleRef.current !== 'speaking' &&
+          (isSpeakingLiveRef.current || desiredSrc !== lastRequestedSpeakingUrlRef.current)) ||
           (!isInExtendedLipSyncRef.current && desiredSrc !== lastRequestedSpeakingUrlRef.current))
       ) {
         isInExtendedLipSyncRef.current = desiredSrc === resolveDefaultSpeakingLipVideo();
-        startTransitionTo(desiredSrc, 'speaking', true);
+        startTransitionTo(desiredSrc, 'speaking', true, true);
       } else if (targetRole === 'idle' && activeRoleRef.current === 'speaking') {
-        isInExtendedLipSyncRef.current = false;
-        startTransitionTo(pickNextAngelIdleVideo(lastPlayedIdleUrlRef.current), 'idle', true);
+        settleIntoPostSpeechRest(true);
       } else if (activeRoleRef.current === 'idle') {
         const pool = getAngelIdleVideoPool();
         const currentIdle = slotUrlRef.current[activeSlotRef.current];
         if (!pool.includes(currentIdle)) {
-          startTransitionTo(pickNextAngelIdleVideo(), 'idle', true);
-        } else if (pool.length >= 2 && idleCycleTimerRef.current === null && rafIdRef.current === null) {
-          const nextAlt = pickNextAngelIdleVideo(currentIdle);
-          preloadStandbyIdleSlot(nextAlt);
-          idleCycleTimerRef.current = window.setTimeout(() => {
-            idleCycleTimerRef.current = null;
-            if (activeRoleRef.current === 'idle') {
-              startTransitionTo(nextAlt, 'idle', false);
-            }
-          }, nextCalmIdlePauseMs());
+          startTransitionTo(resolveAngelIdleVideo(), 'idle', true, false);
+        } else if (
+          idleCycleTimerRef.current === null &&
+          rafIdRef.current === null &&
+          !isSpeakingLiveRef.current &&
+          !idleClipCurrentlyPlayingRef.current
+        ) {
+          scheduleNextIdlePlayback(true);
         }
       } else if (activeRoleRef.current === 'speaking') {
         preloadNextForActiveSpeaking();
@@ -1492,12 +1754,23 @@ function ChessAngelPortraitVideo({
 
     lastTriggerRef.current = triggerKey;
     const isExplicitStudioTest = triggerKey.startsWith('preview:') || Boolean(forcedIdleUrl);
+    const isExplicitStudioIdleTest = Boolean(forcedIdleUrl);
     const nextUrl =
       targetRole === 'idle' && !forcedIdleUrl
-        ? pickNextAngelIdleVideo(lastPlayedIdleUrlRef.current)
+        ? resolveAngelIdleVideo()
         : desiredSrc;
     const nextIsExtendedLip =
       targetRole === 'speaking' && nextUrl === resolveDefaultSpeakingLipVideo();
+
+    if (!isIdleTrigger) {
+      hasDeliveredSpeechRef.current = true;
+      clearIdleCycleTimer();
+      if (targetRole === 'idle') {
+        const estSec = clipId ? VOICE_CLIP_DURATION_SEC[clipId] ?? 5.0 : 5.0;
+        lastSpeechEndedAtMsRef.current =
+          performance.now() + (!soundEnabled || angelVoice === 'off' ? estSec * 1000 : 0);
+      }
+    }
 
     if (!isExplicitStudioTest && isActiveBaseProtectedFromCut()) {
       deferredTransitionRef.current = {
@@ -1514,20 +1787,32 @@ function ChessAngelPortraitVideo({
 
     armEscapeCuesForUtterance(nextUrl, clipId, speechText);
 
-    // If this saying has Lip-Sync turned OFF (Idle Only) and Chess Angel is already in Idle,
-    // keep her calm Idle / Quiet Listening portrait undisturbed (while still running any Escape Overlay cues!)
-    if (targetRole === 'idle' && !forcedIdleUrl && activeRoleRef.current === 'idle') {
+    // If this saying has Lip-Sync turned OFF (Idle Only) or an idle trigger occurs while already in Idle:
+    // - Do NOT play an idle video immediately (unless clicking Test on an Idle slot in Video Studio!).
+    // - If an idle gesture video was mid-motion when a game speech started, settle calmly to rest.
+    if (targetRole === 'idle' && !isExplicitStudioIdleTest && activeRoleRef.current === 'idle') {
       isInExtendedLipSyncRef.current = false;
+      if (!isIdleTrigger && idleClipCurrentlyPlayingRef.current) {
+        startTransitionTo(resolveAngelIdleVideo(), 'idle', true, false);
+        return;
+      }
       if (
         pendingEscapeCuesRef.current.length > 0 ||
         deferredPostVideoCuesRef.current.length > 0
       ) {
         ensureRenderLoop();
+      } else if (isIdleTrigger && !idleClipCurrentlyPlayingRef.current && !isSpeakingLiveRef.current) {
+        scheduleNextIdlePlayback(false);
       }
       return;
     }
     isInExtendedLipSyncRef.current = nextIsExtendedLip;
-    startTransitionTo(nextUrl, targetRole, true);
+    startTransitionTo(
+      nextUrl,
+      targetRole,
+      true,
+      targetRole === 'speaking' || isExplicitStudioIdleTest,
+    );
   }, [
     triggerKey,
     desiredSrc,
@@ -1547,6 +1832,11 @@ function ChessAngelPortraitVideo({
   useEffect(() => {
     const wasSpeaking = prevSpeakingRef.current;
     prevSpeakingRef.current = isSpeaking;
+
+    if (!wasSpeaking && isSpeaking) {
+      hasDeliveredSpeechRef.current = true;
+      clearIdleCycleTimer();
+    }
 
     if (!wasSpeaking && isSpeaking && soundEnabled && angelVoice !== 'off' && !isIdleTrigger) {
       const elapsedSinceStart = performance.now() - lastSpeakingStartMsRef.current;
@@ -1579,7 +1869,7 @@ function ChessAngelPortraitVideo({
           ensureRenderLoop();
         } else {
           isInExtendedLipSyncRef.current = nextIsExtended;
-          startTransitionTo(desiredSrc, 'speaking', true);
+          startTransitionTo(desiredSrc, 'speaking', true, true);
         }
       } else if (
         pendingEscapeCuesRef.current.length > 0 ||
@@ -1591,6 +1881,9 @@ function ChessAngelPortraitVideo({
     }
 
     if (wasSpeaking && !isSpeaking) {
+      hasDeliveredSpeechRef.current = true;
+      lastSpeechEndedAtMsRef.current = performance.now();
+      clearIdleCycleTimer();
       // Clear mid-video cues, NEVER clear `deferredPostVideoCuesRef` so the "button" part still plays after No-Cut ends!
       pendingEscapeCuesRef.current = [];
       if (
@@ -1598,19 +1891,22 @@ function ChessAngelPortraitVideo({
         isInExtendedLipSyncRef.current &&
         escapePhaseRef.current === 'inactive'
       ) {
-        const targetIdle =
-          plannedIdleUrlRef.current || pickNextAngelIdleVideo(lastPlayedIdleUrlRef.current);
         if (isActiveBaseProtectedFromCut()) {
           deferredTransitionRef.current = {
-            url: targetIdle,
+            url: resolveAngelIdleVideo(),
             role: 'idle',
             isExtendedLip: false,
           };
           ensureRenderLoop();
         } else {
-          isInExtendedLipSyncRef.current = false;
-          startTransitionTo(targetIdle, 'idle', true);
+          settleIntoPostSpeechRest(true);
         }
+      } else if (
+        activeRoleRef.current === 'idle' &&
+        !idleClipCurrentlyPlayingRef.current &&
+        rafIdRef.current === null
+      ) {
+        scheduleNextIdlePlayback(true);
       }
     }
   }, [
@@ -1646,6 +1942,13 @@ function ChessAngelPortraitVideo({
     ensureRenderLoop();
   };
 
+  const makeSlotSeekedHandler = (slot: 0 | 1) => () => {
+    if (!slotAutoPlayRef.current[slot]) {
+      sampleSlotVideoFrame(slot);
+      ensureRenderLoop();
+    }
+  };
+
   const makeSlotEndedHandler = (slot: 0 | 1) => (e: SyntheticEvent<HTMLVideoElement>) => {
     const el = e.currentTarget;
     el.loop = false;
@@ -1664,12 +1967,10 @@ function ChessAngelPortraitVideo({
   return (
     <div
       onClick={onClick}
+      onContextMenu={(e) => e.preventDefault()}
+      onDragStart={(e) => e.preventDefault()}
       title={title}
-      className={`relative pointer-events-auto select-none bg-black border-0 ring-0 outline-none shadow-none overflow-hidden shrink-0 transition-[width] duration-200 ${
-        compact
-          ? 'w-[42px] md:w-[136px] lg:w-[174px] [@media(max-height:540px)]:w-[38px]'
-          : 'w-[48px] md:w-[164px] lg:w-[216px] [@media(max-height:540px)]:w-[42px]'
-      } aspect-[3/4] ${onClick ? 'cursor-pointer' : ''} ${
+      className={`relative pointer-events-auto select-none bg-black border-0 ring-0 outline-none shadow-none overflow-hidden shrink-0 ${portraitWidthClass} aspect-[554/740] ${onClick ? 'cursor-pointer' : ''} ${
         hasCardBelow ? '' : '[mask-image:linear-gradient(to_bottom,black_82%,transparent_100%)]'
       }`}
     >
@@ -1687,11 +1988,13 @@ function ChessAngelPortraitVideo({
         preload="auto"
         disablePictureInPicture
         disableRemotePlayback
+        controlsList="nodownload noplaybackrate"
         controls={false}
         onLoadStart={handleForceSilence}
         onLoadedMetadata={handleForceSilence}
         onLoadedData={makeSlotLoadedHandler(0)}
         onCanPlay={makeSlotLoadedHandler(0)}
+        onSeeked={makeSlotSeekedHandler(0)}
         onPlay={() => {
           if (video0Ref.current) silenceVideoElement(video0Ref.current);
           ensureRenderLoop();
@@ -1714,11 +2017,13 @@ function ChessAngelPortraitVideo({
         preload="auto"
         disablePictureInPicture
         disableRemotePlayback
+        controlsList="nodownload noplaybackrate"
         controls={false}
         onLoadStart={handleForceSilence}
         onLoadedMetadata={handleForceSilence}
         onLoadedData={makeSlotLoadedHandler(1)}
         onCanPlay={makeSlotLoadedHandler(1)}
+        onSeeked={makeSlotSeekedHandler(1)}
         onPlay={() => {
           if (video1Ref.current) silenceVideoElement(video1Ref.current);
           ensureRenderLoop();
@@ -1743,6 +2048,7 @@ function ChessAngelPortraitVideo({
         preload="auto"
         disablePictureInPicture
         disableRemotePlayback
+        controlsList="nodownload noplaybackrate"
         controls={false}
         onLoadStart={handleForceSilence}
         onLoadedMetadata={(e) => {
@@ -1813,6 +2119,8 @@ function ChessAngelPortraitVideo({
 }
 
 interface OpponentSpeechBannerProps {
+  visible?: boolean;
+  upperRightVoid?: UpperRightVoidSpec;
   message: OpponentMessage | null;
   angelVoice: AngelVoiceMode;
   soundEnabled: boolean;
@@ -1853,6 +2161,8 @@ const TONE_TAG_COLOR: Record<OpponentMessage['tone'], string> = {
 };
 
 export function OpponentSpeechBanner({
+  visible = true,
+  upperRightVoid,
   message,
   angelVoice,
   soundEnabled,
@@ -1879,7 +2189,99 @@ export function OpponentSpeechBanner({
   onDismiss,
   onOpenVideoStudio,
 }: OpponentSpeechBannerProps) {
+  const asideRef = useRef<HTMLElement | null>(null);
+  const lastSteppedTierKeyRef = useRef<string>('');
+  const [tierDowngrade, setTierDowngrade] = useState(0);
+
+  const voidSpec =
+    upperRightVoid ??
+    computeFallbackUpperRightVoid(
+      typeof window !== 'undefined' ? window.innerWidth : 1280,
+      typeof window !== 'undefined' ? window.innerHeight : 800,
+    );
+
   const isSpeaking = voiceState === 'speaking';
+  const action = message?.action;
+  const isUndoProposed = Boolean(message && angelVoice !== 'off' && action?.kind === 'undo-offer');
+  const isCompactPortrait = Boolean(calcPreview || treeBrowser);
+  const isElevatedZ = Boolean(treeBrowser || isUndoProposed);
+  const isWideCard = Boolean(treeBrowser);
+  const canClickPortraitToReplay = Boolean(soundEnabled && message && angelVoice !== 'off');
+
+  const hasCalcPreview = Boolean(calcPreview);
+  const hasTreeBrowser = Boolean(treeBrowser);
+  const msgId = message?.id ?? 0;
+
+  useEffect(() => {
+    lastSteppedTierKeyRef.current = '';
+    setTierDowngrade(0);
+  }, [
+    voidSpec.targetWidthPx,
+    voidSpec.targetHeightPx,
+    voidSpec.hasVoidSpace,
+    hasCalcPreview,
+    hasTreeBrowser,
+    msgId,
+    visible,
+  ]);
+
+  const matchedBaseIdx = selectMatchedAngelTierIndex(voidSpec, isWideCard);
+  const tier = selectAngelVoidSizeTier(voidSpec, isWideCard, tierDowngrade);
+
+  // Post-layout height fit: whenever unclipped multi-line modal content + portrait video
+  // exceed available vertical budget, step down unified tiers cleanly so 100% of both the
+  // portrait video and the entire modal content always stay visible on screen.
+  useEffect(() => {
+    if (!visible || !voidSpec.hasVoidSpace || matchedBaseIdx < 1 || tierDowngrade >= matchedBaseIdx) {
+      return undefined;
+    }
+    const el = asideRef.current;
+    if (!el) return undefined;
+
+    let rafId = 0;
+    const scheduleCheck = () => {
+      window.cancelAnimationFrame(rafId);
+      rafId = window.requestAnimationFrame(() => {
+        const node = asideRef.current;
+        if (!node) return;
+        const passKey = `${voidSpec.targetWidthPx}:${voidSpec.targetHeightPx}:${msgId}:${tier.index}:${tierDowngrade}`;
+        if (lastSteppedTierKeyRef.current === passKey) return;
+        const viewportBudgetPx =
+          typeof window !== 'undefined'
+            ? Math.max(220, window.innerHeight - 16)
+            : voidSpec.targetHeightPx;
+        const maxAllowedHeight = Math.min(voidSpec.targetHeightPx + 10, viewportBudgetPx);
+        if (node.offsetHeight > maxAllowedHeight) {
+          lastSteppedTierKeyRef.current = passKey;
+          setTierDowngrade((prev) => Math.min(matchedBaseIdx, prev + 1));
+        }
+      });
+    };
+
+    scheduleCheck();
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => scheduleCheck());
+      ro.observe(el);
+      return () => {
+        window.cancelAnimationFrame(rafId);
+        ro.disconnect();
+      };
+    }
+    return () => window.cancelAnimationFrame(rafId);
+  }, [
+    visible,
+    voidSpec.hasVoidSpace,
+    voidSpec.targetWidthPx,
+    voidSpec.targetHeightPx,
+    matchedBaseIdx,
+    tier.index,
+    tierDowngrade,
+    msgId,
+  ]);
+
+  if (!visible) {
+    return null;
+  }
 
   const triggerKey = message?.isStudioPreview
     ? `preview:${message.id}`
@@ -1895,18 +2297,31 @@ export function OpponentSpeechBanner({
           ? `msg:${message.id}`
           : `idle:${idlePreviewNonce}`;
 
-  const action = message?.action;
-  const isUndoProposed = Boolean(message && angelVoice !== 'off' && action?.kind === 'undo-offer');
+  const activeColumnWidthPx = isCompactPortrait
+    ? tier.compactPortraitWidthPx
+    : tier.portraitWidthPx;
+  const isRoomy = tier.showVerboseCopy && activeColumnWidthPx >= 268;
+  const isMediumPlus = tier.index >= 3;
 
-  const isCompactPortrait = Boolean(calcPreview || treeBrowser);
-  const isElevatedZ = Boolean(treeBrowser || isUndoProposed);
-  const isWideCard = Boolean(treeBrowser);
-  const canClickPortraitToReplay = Boolean(soundEnabled && message && angelVoice !== 'off');
+  const {
+    cardShellClass,
+    titleTextClass,
+    tagTextClass,
+    bodyQuoteClass,
+    sectionDividerClass,
+    treeMaxHeightClass,
+    simChipListClass,
+    iconSmClass,
+    iconBtnPadClass,
+    primaryActionBtnClass,
+    secondaryActionBtnClass,
+    footerBtnPadClass,
+    footerBtnCompactPadClass,
+    footerBtnIconClass,
+  } = tier;
 
   const renderThinkingAndThreeMoves = (compact = false, forceAllowThreeMoves = false) => {
-    const padClass = compact
-      ? 'px-1 py-0.5 text-[8px] leading-none md:px-2.5 md:py-1.5 md:text-[11px] md:leading-normal'
-      : 'px-1 py-0.5 text-[8px] leading-none md:px-3 md:py-1.5 md:text-xs md:leading-normal';
+    const padClass = compact ? footerBtnCompactPadClass : footerBtnPadClass;
     const isThreeMovesPlaying = Boolean(calcPreview);
     const handleThreeMovesClick = onPlayThreeMoves || onAnimateTopThreeFromTree;
     const showThreeMovesBtn =
@@ -1914,7 +2329,7 @@ export function OpponentSpeechBanner({
       (forceAllowThreeMoves || proposeThreeMoves || isThreeMovesPlaying);
 
     return (
-      <div className="flex flex-wrap items-center gap-1 md:gap-2">
+      <div className={`flex flex-wrap items-center ${isRoomy ? 'gap-2' : 'gap-1'}`}>
         <button
           type="button"
           onClick={onExportTreeJpg}
@@ -1924,15 +2339,14 @@ export function OpponentSpeechBanner({
               ? 'Close thinking lines view and return to 3D board'
               : 'Show frontal top-view thinking lines on pure black'
           }
-          className={`inline-flex items-center gap-0.5 md:gap-1.5 ${padClass} rounded md:rounded-md border font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+          className={`inline-flex items-center ${padClass} border font-semibold transition-colors cursor-pointer text-left leading-tight ${
             frontalTreeViewOpen
               ? 'bg-[#241b0c] hover:bg-[#312510] border-[#f3cf83]/85 text-[#fde68a]'
               : 'bg-black hover:bg-[#141a25] border-[#d6ae63]/55 text-[#f3cf83]'
           }`}
         >
-          <Maximize2 className="w-2 h-2 md:w-3.5 md:h-3.5 text-[#f3cf83] shrink-0" />
-          <span className="md:hidden">Lines</span>
-          <span className="hidden md:inline">Thinking Lines</span>
+          <Maximize2 className={`${footerBtnIconClass} text-[#f3cf83] shrink-0`} />
+          <span>Thinking Lines</span>
         </button>
 
         {showThreeMovesBtn && handleThreeMovesClick && (
@@ -1945,15 +2359,14 @@ export function OpponentSpeechBanner({
                 ? 'Stop 3D three-moves preview'
                 : 'Watch Chess Angel play out the three candidate moves slowly on the 3D board'
             }
-            className={`inline-flex items-center gap-0.5 md:gap-1.5 ${padClass} rounded md:rounded-md border font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+            className={`inline-flex items-center ${padClass} border font-semibold transition-colors cursor-pointer text-left leading-tight ${
               isThreeMovesPlaying
                 ? 'bg-[#122232] hover:bg-[#182d42] border-[#38bdf8]/80 text-[#bae6fd]'
                 : 'bg-black hover:bg-[#141a25] border-[#38bdf8]/50 text-[#bae6fd]'
             }`}
           >
-            <Eye className="w-2 h-2 md:w-3.5 md:h-3.5 text-[#7dd3fc] shrink-0" />
-            <span className="md:hidden">3 Moves</span>
-            <span className="hidden md:inline">Three Moves</span>
+            <Eye className={`${footerBtnIconClass} text-[#7dd3fc] shrink-0`} />
+            <span>Three Moves</span>
           </button>
         )}
       </div>
@@ -1979,70 +2392,70 @@ export function OpponentSpeechBanner({
     const nextBranchNum = Math.min(calcPreview.totalBranches, calcPreview.branchIndex + 1);
 
     modalCardContent = (
-      <div className="w-full rounded-md md:rounded-xl bg-black border border-[#d6ae63]/60 shadow-2xl px-1.5 py-1 md:px-4 md:py-3.5 pointer-events-auto">
-        <div className="flex items-start justify-between gap-1 md:gap-3">
-          <div className="min-w-0">
-            <div className={`text-[8.5px] md:text-[11px] font-semibold leading-tight truncate ${trialAccent}`}>
+      <div className={`w-full bg-black border border-[#d6ae63]/60 shadow-2xl pointer-events-auto ${cardShellClass}`}>
+        <div className={`flex flex-wrap items-start justify-between ${isRoomy ? 'gap-2' : 'gap-1'}`}>
+          <div className="min-w-0 flex-1">
+            <div className={`${titleTextClass} font-semibold break-words whitespace-normal ${trialAccent}`}>
               {trialHeading}
               {calcPreview.waitingForConfirm ? ' · Ready' : ' · Playing'}
             </div>
-            <div className="font-mono-tabular text-[8.5px] md:text-xs text-[#f3f1ec] truncate mt-0.5">
+            <div className={`font-mono-tabular ${titleTextClass} text-[#f3f1ec] break-words whitespace-normal mt-0.5`}>
               {calcPreview.pvSan.join(' → ')}
             </div>
           </div>
 
-          <div className="flex items-center gap-0.5 md:gap-1.5 shrink-0">
+          <div className={`flex items-center ${isRoomy ? 'gap-1.5' : 'gap-0.5'} shrink-0`}>
             {soundEnabled && calcPreview.waitingForConfirm && (
               <button
                 type="button"
                 onClick={onReplayVoice}
                 title="Replay voice"
                 aria-label="Replay voice"
-                className={`p-0.5 md:p-1.5 rounded transition-colors cursor-pointer ${
+                className={`${iconBtnPadClass} rounded transition-colors cursor-pointer ${
                   isSpeaking
                     ? 'text-[#f3cf83] bg-[#d6ae63]/15'
                     : 'text-[#9aa3b2] hover:text-[#f3f1ec] hover:bg-white/10'
                 }`}
               >
-                <Volume2 className="w-2.5 h-2.5 md:w-3.5 md:h-3.5" />
+                <Volume2 className={iconSmClass} />
               </button>
             )}
             <button
               type="button"
               onClick={onStopCalculationPreview}
-              className="inline-flex items-center gap-0.5 px-1 py-0.5 md:px-2.5 md:py-1.5 rounded bg-[#141820] hover:bg-[#1f2633] border border-white/15 text-[8px] md:text-xs font-medium text-[#e2e8f0] whitespace-nowrap shrink-0 cursor-pointer"
+              className={`inline-flex items-center gap-0.5 ${footerBtnCompactPadClass} bg-[#141820] hover:bg-[#1f2633] border border-white/15 font-medium text-[#e2e8f0] shrink-0 cursor-pointer`}
             >
-              <Square className="w-2 h-2 md:w-3 md:h-3" />
-              Stop
+              <Square className={footerBtnIconClass} />
+              <span>Stop</span>
             </button>
           </div>
         </div>
 
         {calcPreview.waitingForConfirm && (
-          <div className="mt-1 pt-1 md:mt-2.5 md:pt-2.5 border-t border-white/12">
-            <p className="text-[8.5px] md:text-xs leading-[1.2] md:leading-relaxed max-h-[22px] md:max-h-none overflow-y-auto thin-scroll text-[#e6e1d6]">
+          <div className={sectionDividerClass}>
+            <p className={bodyQuoteClass}>
               &ldquo;
               {message?.text ||
                 'Have you seen and understood this branch? Click to confirm when you are ready for the next one.'}
               &rdquo;
             </p>
-            <div className="mt-1 md:mt-2.5 flex flex-wrap items-center justify-between gap-1 md:gap-2">
+            <div className={`${isRoomy ? 'mt-2 gap-1.5' : 'mt-1 gap-1'} flex flex-wrap items-center justify-between`}>
               <button
                 type="button"
                 onClick={onConfirmNextBranch}
-                className="inline-flex items-center gap-0.5 md:gap-1.5 px-1.5 py-0.5 md:px-3 md:py-1.5 rounded bg-[#d6ae63] hover:bg-[#e3be78] text-[#111419] text-[8.5px] md:text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer"
+                className={primaryActionBtnClass}
               >
-                <Check className="w-2 h-2 md:w-3.5 md:h-3.5" />
-                Next #{nextBranchNum}
+                <Check className={iconSmClass} />
+                <span>Next #{nextBranchNum}</span>
               </button>
-              <span className="hidden md:inline text-[11px] text-[#9aa3b2] whitespace-nowrap">
+              <span className={`${tagTextClass} text-[#9aa3b2] break-words whitespace-normal`}>
                 or click on the board
               </span>
             </div>
           </div>
         )}
 
-        <div className="mt-1 pt-1 md:mt-2.5 md:pt-2.5 border-t border-white/10">
+        <div className={sectionDividerClass}>
           {renderThinkingAndThreeMoves(true, true)}
         </div>
       </div>
@@ -2067,42 +2480,42 @@ export function OpponentSpeechBanner({
       'Browse calmly through all my simulations one by one before we go on, or click below to see only my three best evaluations.';
 
     modalCardContent = (
-      <div className="w-full max-h-[104px] md:max-h-[calc(100dvh-285px)] [@media(max-height:540px)]:max-h-[92px] overflow-y-auto thin-scroll rounded-md md:rounded-xl bg-black border border-[#d6ae63]/70 shadow-2xl p-1.5 md:p-4 pointer-events-auto">
-        <div className="flex items-center justify-between gap-1 md:gap-2">
-          <div className="flex items-center gap-1 md:gap-2 min-w-0">
-            <span className="w-3.5 h-3.5 md:w-6 md:h-6 rounded md:rounded-md bg-black border border-[#38bdf8]/60 inline-flex items-center justify-center shrink-0">
-              <GitBranch className="w-2 h-2 md:w-3.5 md:h-3.5 text-[#7dd3fc]" />
+      <div className={`w-full bg-black border border-[#d6ae63]/70 shadow-2xl pointer-events-auto ${treeMaxHeightClass}`}>
+        <div className={`flex flex-wrap items-center justify-between ${isRoomy ? 'gap-1.5' : 'gap-1'}`}>
+          <div className={`flex flex-wrap items-center ${isRoomy ? 'gap-1.5' : 'gap-1'} min-w-0`}>
+            <span className={`${isRoomy ? 'w-6 h-6 rounded-md' : isMediumPlus ? 'w-4 h-4 rounded' : 'w-3.5 h-3.5 rounded'} bg-black border border-[#38bdf8]/60 inline-flex items-center justify-center shrink-0`}>
+              <GitBranch className={`${iconSmClass} text-[#7dd3fc]`} />
             </span>
             <h2
               id="chess-angel-tree-modal-title"
-              className="font-semibold text-[9px] md:text-sm text-[#f7f1e5] whitespace-nowrap shrink-0"
+              className={`font-semibold ${titleTextClass} text-[#f7f1e5]`}
             >
-              Angel
+              Chess Angel
             </h2>
-            <span className="text-white/30 text-[8px] md:text-xs" aria-hidden="true">
+            <span className={`text-white/30 ${tagTextClass}`} aria-hidden="true">
               ·
             </span>
-            <span className="font-mono-tabular text-[8px] md:text-[11px] font-medium text-[#7dd3fc] truncate">
+            <span className={`font-mono-tabular ${tagTextClass} font-medium text-[#7dd3fc] break-words whitespace-normal`}>
               {treeBrowser.onlyTopThree
                 ? '3 BEST'
                 : `ALL ${allSims.length}`}
             </span>
           </div>
 
-          <div className="flex items-center gap-0.5 md:gap-1 shrink-0">
+          <div className={`flex items-center ${isRoomy ? 'gap-1' : 'gap-0.5'} shrink-0`}>
             {soundEnabled && message && (
               <button
                 type="button"
                 onClick={onReplayVoice}
                 title={isSpeaking ? 'Speaking — click to replay' : 'Replay voice'}
                 aria-label="Replay voice"
-                className={`p-0.5 md:p-1.5 rounded transition-colors cursor-pointer ${
+                className={`${iconBtnPadClass} rounded transition-colors cursor-pointer ${
                   isSpeaking
                     ? 'text-[#f3cf83] bg-[#d6ae63]/15'
                     : 'text-[#9aa3b2] hover:text-[#f3f1ec] hover:bg-white/10'
                 }`}
               >
-                <Volume2 className="w-2.5 h-2.5 md:w-3.5 md:h-3.5" />
+                <Volume2 className={iconSmClass} />
               </button>
             )}
             <button
@@ -2115,56 +2528,58 @@ export function OpponentSpeechBanner({
               }
               aria-label="Show frontal top-view thinking tree lines on pure black"
               aria-pressed={frontalTreeViewOpen}
-              className={`p-0.5 md:p-1.5 rounded transition-colors cursor-pointer ${
+              className={`${iconBtnPadClass} rounded transition-colors cursor-pointer ${
                 frontalTreeViewOpen
                   ? 'text-[#f3cf83] bg-[#d6ae63]/20 ring-1 ring-[#d6ae63]/50'
                   : 'text-[#9aa3b2] hover:text-[#f3cf83] hover:bg-white/10'
               }`}
             >
-              <Maximize2 className="w-2.5 h-2.5 md:w-3.5 md:h-3.5" />
+              <Maximize2 className={iconSmClass} />
             </button>
           </div>
         </div>
 
-        <p className="hidden md:block mt-2.5 text-xs leading-relaxed text-[#f2ede2]">
+        <p className={bodyQuoteClass}>
           &ldquo;{spokenText}&rdquo;
         </p>
 
         {allSims.length > 0 && (
-          <div className="mt-1 md:mt-3 flex items-center gap-1 md:gap-2">
+          <div className={`${isRoomy ? 'mt-2 gap-1.5' : 'mt-1 gap-1'} flex items-center`}>
             <button
               type="button"
               onClick={onToggleTreeOnlyTopThree}
               aria-pressed={treeBrowser.onlyTopThree}
-              className={`w-full inline-flex items-center justify-center gap-1 md:gap-1.5 px-1.5 py-0.5 md:px-3 md:py-2 rounded md:rounded-md border text-[8px] md:text-xs font-semibold transition-colors cursor-pointer ${
+              className={`w-full inline-flex flex-wrap items-center justify-center text-center leading-tight ${footerBtnPadClass} border font-semibold transition-colors cursor-pointer ${
                 treeBrowser.onlyTopThree
                   ? 'bg-[#122232] border-[#38bdf8]/80 text-[#bae6fd]'
                   : 'bg-black hover:bg-[#141923] border-[#d6ae63]/65 text-[#f3cf83]'
               }`}
             >
-              <Sparkles className="w-2 h-2 md:w-3.5 md:h-3.5 shrink-0" />
-              {treeBrowser.onlyTopThree
-                ? `3 Best · All ${allSims.length}`
-                : 'Only 3 Best'}
+              <Sparkles className={`${footerBtnIconClass} shrink-0`} />
+              <span>
+                {treeBrowser.onlyTopThree
+                  ? `3 Best · All ${allSims.length}`
+                  : 'Only 3 Best'}
+              </span>
             </button>
           </div>
         )}
 
         {visibleSims.length > 0 && (
-          <div className="mt-1 pt-1 md:mt-3 md:pt-3 border-t border-white/12">
-            <div className="flex items-center justify-between gap-1 md:gap-2">
+          <div className={sectionDividerClass}>
+            <div className={`flex flex-wrap items-center justify-between ${isRoomy ? 'gap-1.5' : 'gap-1'}`}>
               <button
                 type="button"
                 onClick={() => onStepTreeSimulation(-1)}
                 title="Previous simulation (Left Arrow)"
-                className="inline-flex items-center gap-0.5 md:gap-1 px-1 py-0.5 md:px-2.5 md:py-1 rounded bg-black hover:bg-[#151b26] border border-white/18 text-[8px] md:text-xs font-medium text-[#e2e8f0] cursor-pointer whitespace-nowrap"
+                className={`inline-flex items-center ${footerBtnCompactPadClass} bg-black hover:bg-[#151b26] border border-white/18 font-medium text-[#e2e8f0] cursor-pointer`}
               >
-                <ChevronLeft className="w-2.5 h-2.5 md:w-3.5 md:h-3.5" />
-                Prev
+                <ChevronLeft className={iconSmClass} />
+                <span>Prev</span>
               </button>
 
-              <div className="flex items-center gap-1 min-w-0 text-[8px] md:text-[11px] font-mono-tabular text-[#cbd5e1]">
-                <span className="truncate">
+              <div className={`flex flex-wrap items-center gap-1 min-w-0 ${tagTextClass} font-mono-tabular text-[#cbd5e1]`}>
+                <span>
                   {activeIdx !== null
                     ? `${activeIdx + 1}/${visibleSims.length}`
                     : `${visibleSims.length}`}
@@ -2173,7 +2588,7 @@ export function OpponentSpeechBanner({
                   <button
                     type="button"
                     onClick={() => onSelectTreeSimulation(null)}
-                    className="px-1 py-0 rounded border border-white/16 text-[7.5px] md:text-[10px] text-[#9aa3b2] hover:text-white cursor-pointer"
+                    className={`px-1 py-0 rounded border border-white/16 ${tagTextClass} text-[#9aa3b2] hover:text-white cursor-pointer`}
                   >
                     All
                   </button>
@@ -2184,41 +2599,41 @@ export function OpponentSpeechBanner({
                 type="button"
                 onClick={() => onStepTreeSimulation(1)}
                 title="Next simulation (Right Arrow)"
-                className="inline-flex items-center gap-0.5 md:gap-1 px-1 py-0.5 md:px-2.5 md:py-1 rounded bg-black hover:bg-[#151b26] border border-white/18 text-[8px] md:text-xs font-medium text-[#e2e8f0] cursor-pointer whitespace-nowrap"
+                className={`inline-flex items-center ${footerBtnCompactPadClass} bg-black hover:bg-[#151b26] border border-white/18 font-medium text-[#e2e8f0] cursor-pointer`}
               >
-                Next
-                <ChevronRight className="w-2.5 h-2.5 md:w-3.5 md:h-3.5" />
+                <span>Next</span>
+                <ChevronRight className={iconSmClass} />
               </button>
             </div>
 
             {activeSim && activeColor && activeIdx !== null ? (
               <div
-                className={`mt-1 md:mt-2.5 rounded md:rounded-lg bg-black border ${activeColor.borderClass} px-1.5 py-1 md:px-3 md:py-2.5`}
+                className={`${isRoomy ? 'mt-2 rounded-lg px-2.5 py-1.5' : 'mt-1 rounded px-1.5 py-1'} bg-black border ${activeColor.borderClass}`}
               >
-                <div className="flex items-center justify-between gap-1 md:gap-2">
-                  <div className="flex items-center gap-1 min-w-0">
+                <div className={`flex flex-wrap items-center justify-between ${isRoomy ? 'gap-1.5' : 'gap-1'}`}>
+                  <div className="flex flex-wrap items-center gap-1 min-w-0">
                     <span
-                      className={`w-1.5 h-1.5 md:w-2.5 md:h-2.5 rounded-full shrink-0 ${activeColor.dotBgClass}`}
+                      className={`${isRoomy ? 'w-2.5 h-2.5' : 'w-1.5 h-1.5'} rounded-full shrink-0 ${activeColor.dotBgClass}`}
                     />
-                    <span className={`text-[8.5px] md:text-xs font-semibold ${activeColor.textClass}`}>
+                    <span className={`${titleTextClass} font-semibold ${activeColor.textClass}`}>
                       #{activeIdx + 1} {activeSim.pvSan[0] || activeSim.bestMoveUci}
                     </span>
-                    <span className="hidden md:inline text-[10px] px-1.5 py-0.5 rounded border border-white/14 text-[#cbd5e1]">
+                    <span className={`${tagTextClass} px-1 py-0 rounded border border-white/14 text-[#cbd5e1]`}>
                       {activeColor.badgeLabel}
                     </span>
                   </div>
                   <span
-                    className={`font-mono-tabular text-[8.5px] md:text-xs font-semibold ${activeColor.textClass}`}
+                    className={`font-mono-tabular ${titleTextClass} font-semibold ${activeColor.textClass}`}
                   >
                     {formatEvalLabel(activeSim.scoreCp, activeSim.mateIn)}
                   </span>
                 </div>
-                <div className="mt-0.5 font-mono-tabular text-[8px] md:text-[11px] text-[#d8dee9] truncate">
+                <div className={`mt-0.5 font-mono-tabular ${tagTextClass} text-[#d8dee9] break-words whitespace-normal`}>
                   {activeSim.pvSan.slice(0, 5).join(' → ') || activeSim.bestMoveUci}
                 </div>
               </div>
             ) : treeBrowser.onlyTopThree ? (
-              <div className="mt-1 md:mt-2.5 flex flex-col gap-0.5 md:gap-1.5">
+              <div className={`${isRoomy ? 'mt-2 gap-1.5' : 'mt-1 gap-0.5'} flex flex-col`}>
                 {visibleSims.map((sim, idx) => {
                   const spec = getSimulationColorSpec(
                     idx,
@@ -2231,19 +2646,19 @@ export function OpponentSpeechBanner({
                       key={sim.bestMoveUci + idx}
                       type="button"
                       onClick={() => onSelectTreeSimulation(idx)}
-                      className={`w-full flex items-center justify-between gap-1 px-1.5 py-0.5 md:px-2.5 md:py-1.5 rounded bg-black hover:bg-[#121722] border ${spec.borderClass} text-left cursor-pointer transition-colors`}
+                      className={`w-full flex flex-wrap items-center justify-between gap-1 ${isRoomy ? 'px-2 py-1' : 'px-1.5 py-0.5'} rounded bg-black hover:bg-[#121722] border ${spec.borderClass} text-left cursor-pointer transition-colors`}
                     >
-                      <div className="flex items-center gap-1 min-w-0">
-                        <span className={`w-1.5 h-1.5 md:w-2 md:h-2 rounded-full shrink-0 ${spec.dotBgClass}`} />
-                        <span className={`text-[8.5px] md:text-xs font-semibold shrink-0 ${spec.textClass}`}>
+                      <div className="flex flex-wrap items-center gap-1 min-w-0">
+                        <span className={`${isRoomy ? 'w-2 h-2' : 'w-1.5 h-1.5'} rounded-full shrink-0 ${spec.dotBgClass}`} />
+                        <span className={`${titleTextClass} font-semibold ${spec.textClass}`}>
                           #{idx + 1} {sim.pvSan[0] || sim.bestMoveUci}
                         </span>
-                        <span className="font-mono-tabular text-[8px] md:text-[11px] text-[#9aa3b2] truncate">
+                        <span className={`font-mono-tabular ${tagTextClass} text-[#9aa3b2] break-words whitespace-normal`}>
                           {sim.pvSan.slice(1, 4).join(' → ')}
                         </span>
                       </div>
                       <span
-                        className={`font-mono-tabular text-[8.5px] md:text-xs font-semibold shrink-0 ${spec.textClass}`}
+                        className={`font-mono-tabular ${titleTextClass} font-semibold shrink-0 ${spec.textClass}`}
                       >
                         {formatEvalLabel(sim.scoreCp, sim.mateIn)}
                       </span>
@@ -2252,14 +2667,14 @@ export function OpponentSpeechBanner({
                 })}
               </div>
             ) : (
-              <div className="hidden md:block mt-2 px-2.5 py-2 rounded bg-black border border-white/12 text-[11px] text-[#aeb7c6]">
+              <div className={`${isRoomy ? 'mt-2 px-2 py-1.5' : 'mt-1 px-1.5 py-1'} rounded bg-black border border-white/12 ${tagTextClass} text-[#aeb7c6] break-words whitespace-normal leading-snug`}>
                 Use <span className="text-[#f3f1ec] font-medium">Prev / Next</span>, click any
                 colored evaluation below, or click a square on the 3D board to inspect each
                 simulation calmly.
               </div>
             )}
 
-            <div className="mt-1 md:mt-2.5 max-h-10 md:max-h-20 overflow-y-auto thin-scroll flex flex-wrap gap-0.5 md:gap-1 pr-0.5">
+            <div className={`${simChipListClass} flex flex-wrap`}>
               {visibleSims.map((sim, idx) => {
                 const spec = getSimulationColorSpec(
                   idx,
@@ -2274,13 +2689,13 @@ export function OpponentSpeechBanner({
                     type="button"
                     onClick={() => onSelectTreeSimulation(isSelected ? null : idx)}
                     title={`#${idx + 1} ${sim.pvSan.join(' ')} (${formatEvalLabel(sim.scoreCp, sim.mateIn)})`}
-                    className={`inline-flex items-center gap-0.5 px-1 py-0 md:px-2 md:py-0.5 rounded text-[8px] md:text-[11px] font-mono-tabular border transition-colors cursor-pointer ${
+                    className={`inline-flex items-center gap-0.5 ${isRoomy ? 'px-2 py-0.5 text-[11px]' : isMediumPlus ? 'px-1.5 py-0.5 text-[9px]' : 'px-1 py-0 text-[8px]'} rounded font-mono-tabular border transition-colors cursor-pointer ${
                       isSelected
                         ? `bg-[#182030] ${spec.borderClass} text-white font-semibold`
                         : 'bg-black hover:bg-[#131824] border-white/14 text-[#cbd5e1]'
                     }`}
                   >
-                    <span className={`w-1 h-1 md:w-1.5 md:h-1.5 rounded-full shrink-0 ${spec.dotBgClass}`} />
+                    <span className={`${isRoomy ? 'w-1.5 h-1.5' : 'w-1 h-1'} rounded-full shrink-0 ${spec.dotBgClass}`} />
                     <span>{sim.pvSan[0] || sim.bestMoveUci}</span>
                     <span className={spec.textClass}>
                       {formatEvalLabel(sim.scoreCp, sim.mateIn)}
@@ -2292,17 +2707,14 @@ export function OpponentSpeechBanner({
           </div>
         )}
 
-        <div className="mt-1 pt-1 md:mt-3.5 md:pt-2.5 border-t border-white/12 flex flex-wrap items-center justify-between gap-1 md:gap-2">
+        <div className={`${sectionDividerClass} flex flex-wrap items-center justify-between gap-1`}>
           <button
             type="button"
             onClick={onContinueFromTree}
-            className="inline-flex items-center gap-0.5 md:gap-1.5 px-1.5 py-0.5 md:px-4 md:py-2 rounded md:rounded-md bg-[#d6ae63] hover:bg-[#e3be78] text-[#111419] text-[8px] md:text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer shadow-sm"
+            className={primaryActionBtnClass}
           >
-            <Play className="w-2 h-2 md:w-3.5 md:h-3.5" />
-            <span className="md:hidden">
-              {treeBrowser.hasPendingBotMove ? 'Play Move' : 'Close'}
-            </span>
-            <span className="hidden md:inline">
+            <Play className={iconSmClass} />
+            <span>
               {treeBrowser.hasPendingBotMove ? 'Continue · Play Move' : 'Done · Close Tree'}
             </span>
           </button>
@@ -2312,84 +2724,82 @@ export function OpponentSpeechBanner({
       </div>
     );
   } else if (!message || angelVoice === 'off') {
-    // 3. Permanent Calm Listening Card (Micro 2-line pill-card on mobile; full card on md+)
+    // 3. Permanent Calm Listening Card (always matching portrait video width and showing full content)
     modalCardContent = (
-      <div className="w-full rounded-md md:rounded-xl bg-black border border-[#d6ae63]/65 shadow-2xl px-1.5 py-1 md:p-4 pointer-events-auto">
-        <div className="flex items-center justify-between gap-1 md:gap-2">
-          <div className="flex items-center gap-1 md:gap-2 min-w-0 text-[8.5px] md:text-xs leading-none">
-            <span className="font-semibold text-[#f7f1e5] whitespace-nowrap shrink-0">
-              <span className="md:hidden">Angel</span>
-              <span className="hidden md:inline">Chess Angel</span>
+      <div className={`w-full bg-black border border-[#d6ae63]/65 shadow-2xl pointer-events-auto ${cardShellClass}`}>
+        <div className={`flex flex-wrap items-center justify-between ${isRoomy ? 'gap-1.5' : 'gap-1'}`}>
+          <div className={`flex flex-wrap items-center ${isRoomy ? 'gap-1.5' : 'gap-1'} min-w-0 ${titleTextClass}`}>
+            <span className="font-semibold text-[#f7f1e5]">
+              Chess Angel
             </span>
             <span className="text-white/30" aria-hidden="true">
               ·
             </span>
-            <span className="font-mono-tabular text-[8px] md:text-[11px] font-medium text-[#d9be95] truncate">
+            <span className={`font-mono-tabular ${tagTextClass} font-medium text-[#d9be95] break-words whitespace-normal`}>
               LISTENING
             </span>
           </div>
 
-          <div className="flex items-center gap-0.5 md:gap-1.5 shrink-0">
+          <div className={`flex items-center ${isRoomy ? 'gap-1.5' : 'gap-0.5'} shrink-0`}>
             {onOpenVideoStudio && (
               <button
                 type="button"
                 onClick={onOpenVideoStudio}
                 title="Assign Chess Angel .mp4 videos per saying or group (auto-silences video sound)"
-                className="inline-flex items-center gap-0.5 md:gap-1 px-1 py-0.5 md:px-2 md:py-1 rounded bg-black hover:bg-[#1a160f] border border-[#d6ae63]/45 text-[8px] md:text-[11px] font-medium text-[#f3cf83] whitespace-nowrap cursor-pointer"
+                className={`inline-flex items-center ${footerBtnCompactPadClass} bg-black hover:bg-[#1a160f] border border-[#d6ae63]/45 font-medium text-[#f3cf83] cursor-pointer`}
               >
-                <Film className="w-2.5 h-2.5 md:w-3 md:h-3 text-[#f3cf83]" />
-                <span className="hidden md:inline">Videos</span>
+                <Film className={`${footerBtnIconClass} text-[#f3cf83] shrink-0`} />
+                <span>Videos</span>
               </button>
             )}
           </div>
         </div>
 
-        <p className="hidden md:block mt-2 text-xs leading-relaxed text-[#e6e1d6]">
+        <p className={bodyQuoteClass}>
           &ldquo;Watching the board quietly — take your time on your next move.&rdquo;
         </p>
 
-        <div className="mt-1 pt-1 md:mt-2.5 md:pt-2.5 border-t border-white/10">
+        <div className={sectionDividerClass}>
           {renderThinkingAndThreeMoves(false)}
         </div>
       </div>
     );
   } else {
-    // 4. Permanent Chess Angel Framed Black Modal Card (Micro-compact on mobile; Undo appears ONLY when she proposes Undo)
+    // 4. Permanent Chess Angel Framed Black Modal Card (always matching portrait video width and showing full content)
     const tagColor = TONE_TAG_COLOR[message.tone];
     const needsAudioGesture = voiceState === 'awaiting-gesture' && soundEnabled;
     const summaryText =
       message.mathSummary || (action?.kind === 'undo-offer' ? action.reasonNote : undefined);
 
     modalCardContent = (
-      <div className="w-full rounded-md md:rounded-xl bg-black border border-[#d6ae63]/65 shadow-2xl px-1.5 py-1 md:p-4 pointer-events-auto">
-        <div className="flex items-center justify-between gap-1 md:gap-2">
-          <div className="flex items-center gap-1 md:gap-2 min-w-0 text-[8.5px] md:text-xs leading-none">
-            <span className="font-semibold text-[#f7f1e5] whitespace-nowrap shrink-0">
-              <span className="md:hidden">Angel</span>
-              <span className="hidden md:inline">{message.speaker}</span>
+      <div className={`w-full bg-black border border-[#d6ae63]/65 shadow-2xl pointer-events-auto ${cardShellClass}`}>
+        <div className={`flex flex-wrap items-center justify-between ${isRoomy ? 'gap-1.5' : 'gap-1'}`}>
+          <div className={`flex flex-wrap items-center ${isRoomy ? 'gap-1.5' : 'gap-1'} min-w-0 ${titleTextClass}`}>
+            <span className="font-semibold text-[#f7f1e5]">
+              {message.speaker}
             </span>
             <span className="text-white/30" aria-hidden="true">
               ·
             </span>
-            <span className={`font-mono-tabular text-[8px] md:text-[11px] font-medium truncate ${tagColor}`}>
+            <span className={`font-mono-tabular ${tagTextClass} font-medium break-words whitespace-normal ${tagColor}`}>
               {message.tag}
             </span>
           </div>
 
-          <div className="flex items-center gap-0.5 md:gap-1.5 shrink-0">
+          <div className={`flex flex-wrap items-center ${isRoomy ? 'gap-1.5' : 'gap-0.5'} shrink-0`}>
             {soundEnabled && (
               <button
                 type="button"
                 onClick={onReplayVoice}
                 title={isSpeaking ? 'Speaking — click to replay' : 'Hear Chess Angel'}
                 aria-label="Replay voice"
-                className={`p-0.5 md:p-1 rounded transition-colors cursor-pointer ${
+                className={`${iconBtnPadClass} rounded transition-colors cursor-pointer ${
                   isSpeaking
                     ? 'text-[#f3cf83] bg-[#d6ae63]/15'
                     : 'text-[#9aa3b2] hover:text-[#f3f1ec] hover:bg-white/10'
                 }`}
               >
-                <Volume2 className="w-2.5 h-2.5 md:w-3.5 md:h-3.5" />
+                <Volume2 className={iconSmClass} />
               </button>
             )}
             {onOpenVideoStudio && (
@@ -2397,10 +2807,10 @@ export function OpponentSpeechBanner({
                 type="button"
                 onClick={onOpenVideoStudio}
                 title="Assign Chess Angel .mp4 videos per saying or group (auto-silences video sound)"
-                className="inline-flex items-center gap-0.5 md:gap-1 px-1 py-0.5 md:px-2 md:py-1 rounded bg-black hover:bg-[#1a160f] border border-[#d6ae63]/45 text-[8px] md:text-[11px] font-medium text-[#f3cf83] whitespace-nowrap cursor-pointer"
+                className={`inline-flex items-center ${footerBtnCompactPadClass} bg-black hover:bg-[#1a160f] border border-[#d6ae63]/45 font-medium text-[#f3cf83] cursor-pointer`}
               >
-                <Film className="w-2.5 h-2.5 md:w-3 md:h-3 text-[#f3cf83]" />
-                <span className="hidden md:inline">Videos</span>
+                <Film className={`${footerBtnIconClass} text-[#f3cf83] shrink-0`} />
+                <span>Videos</span>
               </button>
             )}
             {action?.kind === 'undo-offer' && (
@@ -2408,52 +2818,52 @@ export function OpponentSpeechBanner({
                 type="button"
                 onClick={() => onUndoAndShowBetter(action.alternatives)}
                 title="Undo your last move and see a stronger alternative"
-                className="inline-flex items-center gap-0.5 md:gap-1 px-1 py-0.5 md:px-2.5 md:py-1 rounded bg-[#d6ae63] hover:bg-[#e3be78] text-[#111419] text-[8px] md:text-[11px] font-semibold leading-none transition-colors whitespace-nowrap cursor-pointer shadow-sm"
+                className={primaryActionBtnClass}
               >
-                <RotateCcw className="w-2 h-2 md:w-3 md:h-3" />
-                Undo
+                <RotateCcw className={footerBtnIconClass} />
+                <span>Undo</span>
               </button>
             )}
           </div>
         </div>
 
         {summaryText && (
-          <div className="hidden md:block mt-1.5 text-[11px] font-mono-tabular text-[#aeb7c6] truncate">
+          <div className={`mt-1 font-mono-tabular ${tagTextClass} text-[#aeb7c6] break-words whitespace-normal`}>
             {summaryText}
           </div>
         )}
 
-        <p className="mt-0.5 md:mt-2 text-[8.5px] md:text-xs leading-[1.2] md:leading-relaxed max-h-[21px] md:max-h-none overflow-y-auto thin-scroll text-[#e6e1d6]">
+        <p className={bodyQuoteClass}>
           &ldquo;{message.text}&rdquo;
         </p>
 
         {needsAudioGesture && !action && (
-          <div className="mt-1 md:mt-2.5 flex flex-wrap items-center gap-1 md:gap-2">
+          <div className={`${isRoomy ? 'mt-2 gap-1.5' : 'mt-1 gap-1'} flex flex-wrap items-center`}>
             <button
               type="button"
               onClick={onReplayVoice}
-              className="inline-flex items-center gap-0.5 md:gap-1.5 px-1.5 py-0.5 md:px-3 md:py-1.5 rounded bg-[#d6ae63] hover:bg-[#e3be78] text-[#111419] text-[8px] md:text-xs font-semibold leading-none transition-colors whitespace-nowrap cursor-pointer"
+              className={primaryActionBtnClass}
             >
-              <Volume2 className="w-2 h-2 md:w-3.5 md:h-3.5" />
-              Play Voice
+              <Volume2 className={iconSmClass} />
+              <span>Play Voice</span>
             </button>
           </div>
         )}
 
         {proposeThreeMoves && action?.kind === 'calc-preview' && (
-          <div className="mt-1 md:mt-2.5 flex flex-wrap items-center gap-1 md:gap-2">
+          <div className={`${isRoomy ? 'mt-2 gap-1.5' : 'mt-1 gap-1'} flex flex-wrap items-center`}>
             <button
               type="button"
               onClick={() => onWatchCalculatedLines(action.report)}
-              className="inline-flex items-center gap-0.5 md:gap-1.5 px-1.5 py-0.5 md:px-3 md:py-1.5 rounded bg-[#d6ae63] hover:bg-[#e3be78] text-[#111419] text-[8px] md:text-xs font-semibold leading-none transition-colors whitespace-nowrap cursor-pointer"
+              className={primaryActionBtnClass}
             >
-              <Play className="w-2 h-2 md:w-3.5 md:h-3.5" />
-              {Math.min(3, action.report.triedLines.length)} Lines
+              <Play className={iconSmClass} />
+              <span>{Math.min(3, action.report.triedLines.length)} Lines</span>
             </button>
             <button
               type="button"
               onClick={onDismiss}
-              className="px-1 py-0.5 md:px-2.5 md:py-1.5 rounded bg-black hover:bg-[#151a24] border border-white/14 text-[8px] md:text-xs leading-none text-[#cbd2df] whitespace-nowrap cursor-pointer"
+              className={secondaryActionBtnClass}
             >
               Skip
             </button>
@@ -2461,45 +2871,45 @@ export function OpponentSpeechBanner({
         )}
 
         {action?.kind === 'hint-offer' && (
-          <div className="mt-1 md:mt-2.5 flex flex-wrap items-center gap-1 md:gap-2">
+          <div className={`${isRoomy ? 'mt-2 gap-1.5' : 'mt-1 gap-1'} flex flex-wrap items-center`}>
             <button
               type="button"
               onClick={() => onAcceptHint(action.bestMoveUci, action.bestMoveSan)}
-              className="inline-flex items-center gap-0.5 md:gap-1.5 px-1.5 py-0.5 md:px-3 md:py-1.5 rounded bg-[#d6ae63] hover:bg-[#e3be78] text-[#111419] text-[8px] md:text-xs font-semibold leading-none transition-colors whitespace-nowrap cursor-pointer"
+              className={primaryActionBtnClass}
             >
-              <Lightbulb className="w-2 h-2 md:w-3.5 md:h-3.5" />
-              Hint ({action.bestMoveSan})
+              <Lightbulb className={iconSmClass} />
+              <span>Hint ({action.bestMoveSan})</span>
             </button>
             <button
               type="button"
               onClick={onDismiss}
-              className="px-1 py-0.5 md:px-2.5 md:py-1.5 rounded bg-black hover:bg-[#151a24] border border-white/14 text-[8px] md:text-xs leading-none text-[#cbd2df] whitespace-nowrap cursor-pointer"
+              className={secondaryActionBtnClass}
             >
               Skip
             </button>
           </div>
         )}
 
-        <div className="mt-1 pt-1 md:mt-2.5 md:pt-2.5 border-t border-white/10">
+        <div className={sectionDividerClass}>
           {renderThinkingAndThreeMoves(false)}
         </div>
       </div>
     );
   }
 
-  // Single unified persistent `<aside>` so `<ChessAngelPortraitVideo>` NEVER unmounts across any modal state.
-  // On mobile devices (< 768px and landscape phones <= 540px tall), the portrait and modal shrink into a micro
-  // top-right unit (~164px wide, ~38-60px tall modal) so the 3D chess board is completely clear below.
+  // Unified column width: both Chess Angel's portrait video above and her black modal below
+  // are `w-full` children of `<aside>`, guaranteeing 100% identical width across all states and tiers.
+  const unifiedColumnWidthClass = isCompactPortrait
+    ? tier.compactPortraitWidthClass
+    : tier.portraitWidthClass;
+
   return (
     <aside
+      ref={asideRef}
       aria-live="polite"
-      className={`fixed top-5 right-1 md:top-9 md:right-3 lg:top-10 lg:right-4 [@media(max-height:540px)]:top-4 [@media(max-height:540px)]:right-1 ${
+      className={`fixed ${tier.asidePositionClass} ${
         isElevatedZ ? 'z-40' : 'z-30'
-      } ${
-        isWideCard
-          ? 'w-[min(190px,calc(100vw-0.5rem))] md:w-[344px] lg:w-[385px] [@media(max-height:540px)]:w-[178px]'
-          : 'w-[min(164px,calc(100vw-0.5rem))] md:w-[310px] lg:w-[365px] [@media(max-height:540px)]:w-[152px]'
-      } flex flex-col items-center pointer-events-none transition-[width] duration-200`}
+      } ${unifiedColumnWidthClass} flex flex-col items-stretch pointer-events-none`}
     >
       <ChessAngelPortraitVideo
         clipId={message?.clipId}
@@ -2509,7 +2919,7 @@ export function OpponentSpeechBanner({
         soundEnabled={soundEnabled}
         angelVoice={angelVoice}
         triggerKey={triggerKey}
-        compact={isCompactPortrait}
+        portraitWidthClass="w-full"
         hasCardBelow
         onClick={canClickPortraitToReplay ? onReplayVoice : undefined}
         title={canClickPortraitToReplay ? 'Click to replay Chess Angel voice' : 'Chess Angel'}

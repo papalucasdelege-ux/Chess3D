@@ -1,19 +1,616 @@
 {
   "idleVariants": {
-    "idle_2": "/assets/aistudio/angel_idle_idle_2.mp4",
-    "idle_3": "/assets/aistudio/angel_idle_idle_3.mp4?v=1795359075786",
-    "idle_4": "/assets/aistudio/angel_idle_idle_4.mp4?v=1795359471703"
+    "idle_2": "/assets/aistudio/angel_idle_idle_2.mp4?v=1795423404877",
+    "idle_3": "/assets/aistudio/angel_idle_idle_3.mp4?v=1795423406723",
+    "idle_4": "/assets/aistudio/angel_idle_idle_4.mp4?v=1795423409275",
+    "idle_5": "/assets/aistudio/angel_idle_idle_5.mp4?v=1795423411790",
+    "idle_6": "/assets/aistudio/angel_idle_idle_6.mp4?v=1795423413441",
+    "idle_7": "/assets/aistudio/angel_idle_idle_7.mp4?v=1795423415594",
+    "idle_8": "/assets/aistudio/angel_idle_idle_8.mp4?v=1795424268097"
   },
-  "defaultSpeaking": "/assets/aistudio/angel_default_speaking_default.mp4",
+  "mouseIdleTimeoutSec": 20,
+  "mouseIdleHoldSec": {},
+  "defaultSpeaking": "/assets/aistudio/angel_default_speaking_default.mp4?v=1795423384997",
   "groups": {},
   "cases": {
-    "intro": "/assets/aistudio/angel_case_intro.mp4",
-    "tree_browse": "/assets/aistudio/angel_case_tree_browse.mp4?v=1795359744782",
-    "castled": "/assets/aistudio/angel_case_castled.mp4"
+    "intro": "/assets/aistudio/angel_case_intro.mp4?v=1795423339087",
+    "tree_browse": "/assets/aistudio/angel_case_tree_browse.mp4?v=1795423357496",
+    "castled": "/assets/aistudio/angel_case_castled.mp4?v=1795423329595",
+    "calc_pure": "/assets/aistudio/angel_case_calc_pure.mp4?v=1795423330973",
+    "calc_showing": "/assets/aistudio/angel_case_calc_showing.mp4?v=1795423326704",
+    "checkmate_win": "/assets/aistudio/angel_case_checkmate_win.mp4?v=1795423333508",
+    "draw": "/assets/aistudio/angel_case_draw.mp4?v=1795423337477",
+    "lost_queen": "/assets/aistudio/angel_case_lost_queen.mp4?v=1795428501448",
+    "seduction": "/assets/aistudio/angel_case_seduction.mp4?v=1795423345778",
+    "seduction_2": "/assets/aistudio/angel_case_seduction_2.mp4?v=1795423361674",
+    "seduction_3": "/assets/aistudio/angel_case_seduction_3.mp4?v=1795423365185",
+    "stalemate": "/assets/aistudio/angel_case_stalemate.mp4?v=1795423353918",
+    "trial_confirm_1": "/assets/aistudio/angel_case_trial_confirm_1.mp4?v=1795423363804",
+    "trial_confirm_2": "/assets/aistudio/angel_case_trial_confirm_2.mp4?v=1795423366986",
+    "undo_done": "/assets/aistudio/angel_case_undo_done.mp4?v=1795423370182",
+    "warn_double": "/assets/aistudio/angel_case_warn_double.mp4?v=1795423373004",
+    "warn_fork_2step": "/assets/aistudio/angel_case_warn_fork_2step.mp4?v=1795423375294",
+    "warn_fork_2step_2": "/assets/aistudio/angel_case_warn_fork_2step_2.mp4?v=1795423377074",
+    "warn_king_file": "/assets/aistudio/angel_case_warn_king_file.mp4?v=1795423378912",
+    "warn_pawn_promo": "/assets/aistudio/angel_case_warn_pawn_promo.mp4?v=1795423382202",
+    "watch_bishop": "/assets/aistudio/angel_case_watch_bishop.mp4?v=1795423383798",
+    "hint_shown": "/assets/aistudio/angel_case_hint_shown.mp4?v=1795424991967",
+    "warn_mate": "/assets/aistudio/angel_case_warn_mate.mp4?v=1795425698264",
+    "checkmate_lose": "/assets/aistudio/angel_case_checkmate_lose.mp4?v=1795427088494",
+    "seduction_4": "/assets/aistudio/angel_case_seduction_4.mp4?v=1795427865105",
+    "angel_modal_off": "/assets/aistudio/angel_case_angel_modal_off.mp4?v=1795430251646"
+  },
+  "escapes": {
+    "point_you": "/assets/aistudio/angel_escape_point_you.mp4?v=1795423391395",
+    "point_you_2": "/assets/aistudio/angel_escape_point_you_2.mp4?v=1795423394215",
+    "push_button": "/assets/aistudio/angel_escape_push_button.mp4?v=1795423400200",
+    "push_button_2": "/assets/aistudio/angel_escape_push_button_2.mp4?v=1795423402388",
+    "point_me": "/assets/aistudio/angel_escape_point_me.mp4?v=1795423387709",
+    "point_me_2": "/assets/aistudio/angel_escape_point_me_2.mp4?v=1795423389487",
+    "point_you_5": "/assets/aistudio/angel_escape_point_you_5.mp4?v=1795423397207",
+    "point_you_6": "/assets/aistudio/angel_escape_point_you_6.mp4?v=1795423398887",
+    "point_you_7": "/assets/aistudio/angel_escape_point_you_7.mp4?v=1795424409018"
+  },
+  "escapeEnabled": {
+    "point_you": true,
+    "point_me": true,
+    "push_button": true
+  },
+  "caseEscapeCues": {
+    "lost_queen": {
+      "point_you": "off",
+      "point_me": "off"
+    },
+    "trial_confirm_1": {
+      "point_you": "off",
+      "point_me": "off"
+    },
+    "trial_confirm_2": {
+      "point_you": "off",
+      "point_me": "off"
+    },
+    "tree_browse": {
+      "point_you": "off",
+      "point_me": "off"
+    },
+    "calc_showing": {
+      "point_me": "off"
+    },
+    "warn_mate": {
+      "point_me": "off"
+    },
+    "checkmate_lose": {
+      "point_you": "off",
+      "point_me": "off"
+    }
   },
   "lipSync": {
     "defaultEnabled": true,
     "groups": {},
-    "cases": {}
-  }
+    "cases": {
+      "lost_queen": "off",
+      "calc_showing": "off"
+    }
+  },
+  "videoDurations": {
+    "/assets/aistudio/angel_case_calc_pure.mp4": 8,
+    "/assets/aistudio/angel_case_calc_showing.mp4": 5,
+    "/assets/aistudio/angel_case_castled.mp4": 5,
+    "/assets/aistudio/angel_case_checkmate_win.mp4": 7,
+    "/assets/aistudio/angel_case_draw.mp4": 7,
+    "/assets/aistudio/angel_case_intro.mp4": 5,
+    "/assets/aistudio/angel_case_lost_queen.mp4": 8,
+    "/assets/aistudio/angel_case_seduction.mp4": 5,
+    "/assets/aistudio/angel_case_seduction_2.mp4": 20,
+    "/assets/aistudio/angel_case_seduction_3.mp4": 15,
+    "/assets/aistudio/angel_case_stalemate.mp4": 5,
+    "/assets/aistudio/angel_case_tree_browse.mp4": 6,
+    "/assets/aistudio/angel_case_trial_confirm_1.mp4": 5,
+    "/assets/aistudio/angel_case_trial_confirm_2.mp4": 5,
+    "/assets/aistudio/angel_case_undo_done.mp4": 5,
+    "/assets/aistudio/angel_case_warn_double.mp4": 5,
+    "/assets/aistudio/angel_case_warn_fork_2step.mp4": 5,
+    "/assets/aistudio/angel_case_warn_fork_2step_2.mp4": 5,
+    "/assets/aistudio/angel_case_warn_king_file.mp4": 5,
+    "/assets/aistudio/angel_case_warn_pawn_promo.mp4": 5,
+    "/assets/aistudio/angel_case_watch_bishop.mp4": 5,
+    "/assets/aistudio/angel_default_speaking_default.mp4": 5.6,
+    "/assets/aistudio/angel_escape_point_you.mp4": 5,
+    "/assets/aistudio/angel_escape_point_you_2.mp4": 5,
+    "/assets/aistudio/angel_escape_push_button.mp4": 4,
+    "/assets/aistudio/angel_escape_push_button_2.mp4": 3,
+    "/assets/aistudio/angel_idle_idle_2.mp4": 5,
+    "/assets/aistudio/angel_idle_idle_3.mp4": 5,
+    "/assets/aistudio/angel_idle_idle_4.mp4": 5,
+    "/assets/aistudio/angel_idle_idle_5.mp4": 5,
+    "/assets/aistudio/angel_idle_idle_6.mp4": 5,
+    "/assets/aistudio/angel_idle_idle_7.mp4": 5,
+    "/assets/aistudio/just_lip_movements_e2adb314.mp4": 5,
+    "/assets/aistudio/just_shaking_head_no_words_591ed115.mp4": 5,
+    "/assets/aistudio/waving_hello_abc4f35b.mp4": 5,
+    "/assets/aistudio/angel_escape_point_me.mp4": 5,
+    "/assets/aistudio/angel_escape_point_me_2.mp4": 4,
+    "/assets/aistudio/angel_escape_point_you_5.mp4": 5,
+    "/assets/aistudio/angel_escape_point_you_6.mp4": 5,
+    "/assets/aistudio/angel_idle_idle_8.mp4": 16,
+    "/assets/aistudio/angel_escape_point_you_7.mp4": 7,
+    "/assets/aistudio/builtin_clock_timeout.mp4": 6.8,
+    "/assets/aistudio/builtin_new_match.mp4": 6.8,
+    "/assets/aistudio/builtin_resign.mp4": 6.8,
+    "/assets/aistudio/builtin_save_game.mp4": 6.9,
+    "/assets/aistudio/builtin_level_beginner.mp4": 6.6,
+    "/assets/aistudio/builtin_load_game.mp4": 6.9,
+    "/assets/aistudio/angel_case_hint_shown.mp4": 7,
+    "/assets/aistudio/builtin_level_advanced.mp4": 6.8,
+    "/assets/aistudio/builtin_level_grandmaster.mp4": 7.4,
+    "/assets/aistudio/builtin_level_intermediate.mp4": 6.8,
+    "/assets/aistudio/builtin_level_master.mp4": 6.8,
+    "/assets/aistudio/angel_case_warn_mate.mp4": 5,
+    "/assets/aistudio/angel_group_impressed.mp4": 9,
+    "/assets/aistudio/builtin_mouse_idle_sleep.mp4": 8.6,
+    "/assets/aistudio/builtin_mouse_wake_up.mp4": 6.5,
+    "/assets/aistudio/angel_case_checkmate_lose.mp4": 12,
+    "/assets/aistudio/angel_case_seduction_4.mp4": 9,
+    "/assets/aistudio/builtin_angel_modal_on.mp4": 6.8,
+    "/assets/aistudio/builtin_angel_modal_off.mp4": 6.8,
+    "/assets/aistudio/angel_case_angel_modal_off.mp4": 12
+  },
+  "videoSizes": {
+    "/assets/aistudio/angel_case_angel_modal_off.mp4": 2277356,
+    "/assets/aistudio/angel_case_calc_pure.mp4": 1986053,
+    "/assets/aistudio/angel_case_calc_showing.mp4": 443991,
+    "/assets/aistudio/angel_case_castled.mp4": 402647,
+    "/assets/aistudio/angel_case_checkmate_lose.mp4": 903349,
+    "/assets/aistudio/angel_case_checkmate_win.mp4": 517417,
+    "/assets/aistudio/angel_case_draw.mp4": 605577,
+    "/assets/aistudio/angel_case_hint_shown.mp4": 536883,
+    "/assets/aistudio/angel_case_intro.mp4": 446554,
+    "/assets/aistudio/angel_case_lost_queen.mp4": 593790,
+    "/assets/aistudio/angel_case_seduction.mp4": 661285,
+    "/assets/aistudio/angel_case_seduction_2.mp4": 1743798,
+    "/assets/aistudio/angel_case_seduction_3.mp4": 1704441,
+    "/assets/aistudio/angel_case_seduction_4.mp4": 1254479,
+    "/assets/aistudio/angel_case_stalemate.mp4": 450644,
+    "/assets/aistudio/angel_case_tree_browse.mp4": 535108,
+    "/assets/aistudio/angel_case_trial_confirm_1.mp4": 381965,
+    "/assets/aistudio/angel_case_trial_confirm_2.mp4": 364395,
+    "/assets/aistudio/angel_case_undo_done.mp4": 642578,
+    "/assets/aistudio/angel_case_warn_double.mp4": 559306,
+    "/assets/aistudio/angel_case_warn_fork_2step.mp4": 766704,
+    "/assets/aistudio/angel_case_warn_fork_2step_2.mp4": 458903,
+    "/assets/aistudio/angel_case_warn_king_file.mp4": 381305,
+    "/assets/aistudio/angel_case_warn_mate.mp4": 854737,
+    "/assets/aistudio/angel_case_warn_pawn_promo.mp4": 657799,
+    "/assets/aistudio/angel_case_watch_bishop.mp4": 480303,
+    "/assets/aistudio/angel_default_speaking_default.mp4": 320393,
+    "/assets/aistudio/angel_escape_point_me.mp4": 432633,
+    "/assets/aistudio/angel_escape_point_me_2.mp4": 345841,
+    "/assets/aistudio/angel_escape_point_you.mp4": 422236,
+    "/assets/aistudio/angel_escape_point_you_2.mp4": 432438,
+    "/assets/aistudio/angel_escape_point_you_5.mp4": 583760,
+    "/assets/aistudio/angel_escape_point_you_6.mp4": 493491,
+    "/assets/aistudio/angel_escape_point_you_7.mp4": 801162,
+    "/assets/aistudio/angel_escape_push_button.mp4": 298658,
+    "/assets/aistudio/angel_escape_push_button_2.mp4": 283128,
+    "/assets/aistudio/angel_idle_idle_2.mp4": 306901,
+    "/assets/aistudio/angel_idle_idle_3.mp4": 371050,
+    "/assets/aistudio/angel_idle_idle_4.mp4": 467612,
+    "/assets/aistudio/angel_idle_idle_5.mp4": 467202,
+    "/assets/aistudio/angel_idle_idle_6.mp4": 378874,
+    "/assets/aistudio/angel_idle_idle_7.mp4": 490570,
+    "/assets/aistudio/angel_idle_idle_8.mp4": 1150321,
+    "/assets/aistudio/builtin_angel_modal_off.mp4": 511046,
+    "/assets/aistudio/builtin_angel_modal_on.mp4": 520365,
+    "/assets/aistudio/builtin_clock_timeout.mp4": 521994,
+    "/assets/aistudio/builtin_level_advanced.mp4": 528094,
+    "/assets/aistudio/builtin_level_beginner.mp4": 496834,
+    "/assets/aistudio/builtin_level_grandmaster.mp4": 578931,
+    "/assets/aistudio/builtin_level_intermediate.mp4": 576318,
+    "/assets/aistudio/builtin_level_master.mp4": 1137577,
+    "/assets/aistudio/builtin_load_game.mp4": 712869,
+    "/assets/aistudio/builtin_mouse_idle_sleep.mp4": 585378,
+    "/assets/aistudio/builtin_mouse_wake_up.mp4": 511984,
+    "/assets/aistudio/builtin_new_match.mp4": 486016,
+    "/assets/aistudio/builtin_resign.mp4": 602009,
+    "/assets/aistudio/builtin_save_game.mp4": 537995,
+    "/assets/aistudio/just_lip_movements_e2adb314.mp4": 323732,
+    "/assets/aistudio/just_shaking_head_no_words_591ed115.mp4": 303116,
+    "/assets/aistudio/waving_hello_abc4f35b.mp4": 349462
+  },
+  "videoOptimized": {
+    "/assets/aistudio/angel_case_angel_modal_off.mp4": {
+      "size": 2277356,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_calc_pure.mp4": {
+      "size": 1986053,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_calc_showing.mp4": {
+      "size": 443991,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_castled.mp4": {
+      "size": 402647,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_checkmate_lose.mp4": {
+      "size": 903349,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_checkmate_win.mp4": {
+      "size": 517417,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_draw.mp4": {
+      "size": 605577,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_hint_shown.mp4": {
+      "size": 536883,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_intro.mp4": {
+      "size": 446554,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_lost_queen.mp4": {
+      "size": 593790,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_seduction.mp4": {
+      "size": 661285,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_seduction_2.mp4": {
+      "size": 1743798,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_seduction_3.mp4": {
+      "size": 1704441,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_seduction_4.mp4": {
+      "size": 1254479,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_stalemate.mp4": {
+      "size": 450644,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_tree_browse.mp4": {
+      "size": 535108,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_trial_confirm_1.mp4": {
+      "size": 381965,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_trial_confirm_2.mp4": {
+      "size": 364395,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_undo_done.mp4": {
+      "size": 642578,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_warn_double.mp4": {
+      "size": 559306,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_warn_fork_2step.mp4": {
+      "size": 766704,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_warn_fork_2step_2.mp4": {
+      "size": 458903,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_warn_king_file.mp4": {
+      "size": 381305,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_warn_mate.mp4": {
+      "size": 854737,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_warn_pawn_promo.mp4": {
+      "size": 657799,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_case_watch_bishop.mp4": {
+      "size": 480303,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_default_speaking_default.mp4": {
+      "size": 320393,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_escape_point_me.mp4": {
+      "size": 432633,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_escape_point_me_2.mp4": {
+      "size": 345841,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_escape_point_you.mp4": {
+      "size": 422236,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_escape_point_you_2.mp4": {
+      "size": 432438,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_escape_point_you_5.mp4": {
+      "size": 583760,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_escape_point_you_6.mp4": {
+      "size": 493491,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_escape_point_you_7.mp4": {
+      "size": 801162,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_escape_push_button.mp4": {
+      "size": 298658,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_escape_push_button_2.mp4": {
+      "size": 283128,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_idle_idle_2.mp4": {
+      "size": 306901,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_idle_idle_3.mp4": {
+      "size": 371050,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_idle_idle_4.mp4": {
+      "size": 467612,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_idle_idle_5.mp4": {
+      "size": 467202,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_idle_idle_6.mp4": {
+      "size": 378874,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_idle_idle_7.mp4": {
+      "size": 490570,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/angel_idle_idle_8.mp4": {
+      "size": 1150321,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_angel_modal_off.mp4": {
+      "size": 511046,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_angel_modal_on.mp4": {
+      "size": 520365,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_clock_timeout.mp4": {
+      "size": 521994,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_level_advanced.mp4": {
+      "size": 528094,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_level_beginner.mp4": {
+      "size": 496834,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_level_grandmaster.mp4": {
+      "size": 578931,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_level_intermediate.mp4": {
+      "size": 576318,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_level_master.mp4": {
+      "size": 1137577,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_load_game.mp4": {
+      "size": 712869,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_mouse_idle_sleep.mp4": {
+      "size": 585378,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_mouse_wake_up.mp4": {
+      "size": 511984,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_new_match.mp4": {
+      "size": 486016,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_resign.mp4": {
+      "size": 602009,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/builtin_save_game.mp4": {
+      "size": 537995,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/just_lip_movements_e2adb314.mp4": {
+      "size": 323732,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/just_shaking_head_no_words_591ed115.mp4": {
+      "size": 303116,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    },
+    "/assets/aistudio/waving_hello_abc4f35b.mp4": {
+      "size": 349462,
+      "crf": 21,
+      "width": 554,
+      "height": 740
+    }
+  },
+  "compressionPreset": "lossless_21",
+  "escapeApexes": {
+    "/assets/aistudio/angel_escape_point_you.mp4": 2.3,
+    "/assets/aistudio/angel_escape_point_you_2.mp4": 1.45,
+    "/assets/aistudio/angel_escape_push_button.mp4": 1.3,
+    "/assets/aistudio/angel_escape_push_button_2.mp4": 1.65,
+    "/assets/aistudio/angel_escape_point_me.mp4": 1.65,
+    "/assets/aistudio/angel_escape_point_me_2.mp4": 1.15,
+    "/assets/aistudio/angel_escape_point_you_5.mp4": 1.95,
+    "/assets/aistudio/angel_escape_point_you_6.mp4": 1.05,
+    "/assets/aistudio/angel_escape_point_you_7.mp4": 0.95
+  },
+  "videoMaxPlays": {
+    "case:tree_browse": 2
+  },
+  "videoPlayToEnd": {
+    "case:seduction": true,
+    "case:checkmate_lose": true,
+    "case:lost_queen": true,
+    "case:trial_confirm_1": true,
+    "case:trial_confirm_2": true,
+    "case:calc_pure": true,
+    "idle:idle_8": true,
+    "case:intro": true,
+    "case:castled": true,
+    "case:tree_browse": true,
+    "case:calc_showing": true,
+    "case:warn_mate": true
+  },
+  "seductionAudioUrl": "/voices/female/seduction.mp3?v=1795376662908",
+  "seductionAudioDuration": 4.5,
+  "seductionAudioVariants": {},
+  "seductionAudioDurations": {},
+  "seductionTriggerMode": "balanced"
 }

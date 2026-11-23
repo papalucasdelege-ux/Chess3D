@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { Chess, type Move, type Square } from 'chess.js';
 import { ChessScene3D, type SuggestionArrow } from './three/ChessScene3D';
@@ -14,15 +14,20 @@ import { MultiplayerClient, type ConnectionStatus } from './services/multiplayer
 import {
   CLASSIC_REPLAYS,
   buildPgnFromMoves,
+  exportSavedGameJson,
   loadSavedGames,
+  parseImportedSavedGame,
   persistSavedGames,
 } from './services/gameArchive';
 import { EvalBar } from './components/EvalBar';
 import { TopBar, type DockTab } from './components/TopBar';
 import { ControlDock } from './components/ControlDock';
 import { PromotionModal } from './components/PromotionModal';
-import { DownloadGameModal } from './components/DownloadGameModal';
-import { AngelVideoStudioModal } from './components/AngelVideoStudioModal';
+const LazyAngelVideoStudioModal = lazy(() =>
+  import('./components/AngelVideoStudioModal').then((m) => ({
+    default: m.AngelVideoStudioModal,
+  })),
+);
 import {
   OpponentSpeechBanner,
   type CalcPreviewProgress,
@@ -35,19 +40,34 @@ import {
 } from './chess/treeJpgExporter';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import {
-  IS_VIDEO_STUDIO_DEV_ENV,
+  computeFallbackUpperRightVoid,
+  type UpperRightVoidSpec,
+} from './utils/deviceLayout';
+import {
   VOICE_CLIP_DURATION_SEC,
   extractCaseIdFromClip,
   getAngelVideoOverridesSnapshot,
-  getVideoFileDurationSec,
+  isStudioDeveloperUnlocked,
+  logoutStudioDeveloperSession,
+  prepareHumanCommentaryPlayback,
   resetGameVideoPlayCounts,
+  subscribeStudioDeveloperAuth,
+  unlockStudioDeveloperSession,
 } from './chess/angelPortraitVideos';
 import {
   composeBotMoveCommentary,
   composeHesitationCommentary,
+  createAngelModalOffMessage,
+  createAngelModalOnMessage,
   createCalcShowingMessage,
+  createClockTimeoutMessage,
+  createEngineLevelMessage,
   createHintShownMessage,
   createIntroMessage,
+  createLoadGameMessage,
+  createNewMatchMessage,
+  createResignMessage,
+  createSaveGameMessage,
   createTreeBrowseMessage,
   createTrialConfirmMessage,
   createUndoConfirmedMessage,
@@ -146,7 +166,20 @@ export default function App() {
   const [treeStatusMode, setTreeStatusMode] = useState<'idle' | 'developing' | 'holding'>('idle');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [angelVoice, setAngelVoice] = useState<AngelVoiceMode>('on');
-  const [showSpeechBubbles, setShowSpeechBubbles] = useState<boolean>(true);
+  const [angelModalEnabled, setAngelModalEnabled] = useState<boolean>(true);
+  const [angelVisible, setAngelVisible] = useState<boolean>(true);
+  const angelModalOffTimerRef = useRef<number | null>(null);
+  const [shadowsEnabled, setShadowsEnabled] = useState<boolean>(
+    () => typeof navigator === 'undefined' || !/Android|iPhone|iPad/i.test(navigator.userAgent),
+  );
+  const [upperRightVoid, setUpperRightVoid] = useState<UpperRightVoidSpec>(() =>
+    computeFallbackUpperRightVoid(
+      typeof window !== 'undefined' ? window.innerWidth : 1280,
+      typeof window !== 'undefined' ? window.innerHeight : 800,
+    ),
+  );
+  const angelVisibleRef = useRef<boolean>(true);
+  angelVisibleRef.current = angelModalEnabled;
   const [opponentMessage, setOpponentMessage] = useState<OpponentMessage | null>(() =>
     createIntroMessage(),
   );
@@ -157,7 +190,9 @@ export default function App() {
   const [calcPreview, setCalcPreview] = useState<CalcPreviewProgress | null>(null);
   const [treeBrowser, setTreeBrowser] = useState<TreeBrowserState | null>(null);
   const [botHoldEpoch, setBotHoldEpoch] = useState(0);
-  const [downloadModalOpen, setDownloadModalOpen] = useState(false);
+  const [studioUnlocked, setStudioUnlocked] = useState<boolean>(() =>
+    isStudioDeveloperUnlocked(),
+  );
   const [videoStudioOpen, setVideoStudioOpen] = useState(false);
   const [idlePreviewNonce, setIdlePreviewNonce] = useState(0);
   const [previewIdleUrl, setPreviewIdleUrl] = useState<string | null>(null);
@@ -194,7 +229,17 @@ export default function App() {
   const [activeReplayGame, setActiveReplayGame] = useState<SavedGame | null>(null);
   const [replayPlaying, setReplayPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState<number>(1);
-  const [savedGameFingerprints, setSavedGameFingerprints] = useState<Set<string>>(() => new Set());
+  const [justSaved, setJustSaved] = useState(false);
+  const saveFeedbackTimerRef = useRef<number | null>(null);
+  const currentMatchIdRef = useRef<string>(
+    `game_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+  );
+  const [savedGameFingerprints, setSavedGameFingerprints] = useState<Set<string>>(() => {
+    const initial = loadSavedGames();
+    return new Set(
+      initial.map((g) => `${g.whiteName}|${g.blackName}|${g.moves.map((m) => m.uci).join(',')}`),
+    );
+  });
 
   // === Integrated Analysis Engine ===
   const [analysisEnabled, setAnalysisEnabled] = useState(true);
@@ -264,6 +309,17 @@ export default function App() {
   angelVoiceRef.current = angelVoice;
   const soundEnabledRef = useRef<boolean>(true);
   soundEnabledRef.current = soundEnabled;
+  const opponentMessageRef = useRef<OpponentMessage | null>(opponentMessage);
+  opponentMessageRef.current = opponentMessage;
+  const voiceStateRef = useRef<VoicePlaybackState>(voiceState);
+  voiceStateRef.current = voiceState;
+  const clockTimeoutAnnouncedForIdRef = useRef<string | null>(null);
+  const announceControlEvent = useCallback((msg: OpponentMessage | null) => {
+    if (!msg || angelVoiceRef.current !== 'on') return;
+    setOpponentMessage(msg);
+    opponentSpeech.unlock();
+    opponentSpeech.playClip(msg.clipId, 'on', soundEnabledRef.current);
+  }, []);
   const pendingBotMoveRef = useRef<{
     requestId: number;
     from: string;
@@ -431,25 +487,36 @@ export default function App() {
     [activeMoves, whiteName, blackName, isReplayMode, activeReplayGame, activeResult],
   );
 
-  // === Save Game Helper ===
-  const saveCurrentGameToArchive = useCallback(
-    (overrideResult?: RoomResult | null) => {
-      if (activeMoves.length === 0) return;
+  // === Save & Load Game Helpers ===
+  const buildCurrentSavedGameSnapshot = useCallback(
+    (overrideResult?: RoomResult | null): SavedGame => {
       const res = overrideResult !== undefined ? overrideResult : activeResult;
-      const fp = `${whiteName}|${blackName}|${activeMoves.map((m) => m.uci).join(',')}`;
-      if (savedGameFingerprints.has(fp)) return;
-
       const dateIso = new Date().toISOString();
       const resultLabel = resultToScoreLabel(res);
+      const movesToSave =
+        !isViewingLatest && clampedViewPly < activeMoves.length
+          ? activeMoves.slice(0, clampedViewPly)
+          : [...activeMoves];
+      const finalFen =
+        movesToSave.length > 0
+          ? movesToSave[movesToSave.length - 1].fen
+          : displayedFen || INITIAL_FEN;
+      const moveNum = Math.ceil(movesToSave.length / 2);
+      const progressTag = res ? '' : movesToSave.length > 0 ? ` · Move ${moveNum}` : ' · Start';
       const title =
         gameMode === 'engine'
-          ? `${whiteName} vs ${blackName}`
+          ? `${whiteName} vs ${blackName}${progressTag}`
           : gameMode === 'multiplayer' && activeRoom
             ? `Online #${activeRoom.id} · ${whiteName} vs ${blackName}`
-            : `Local Match · ${whiteName} vs ${blackName}`;
+            : `Pass & Play · ${whiteName} vs ${blackName}${progressTag}`;
 
-      const entry: SavedGame = {
-        id: `game_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      const currentClocks =
+        gameMode === 'multiplayer' && activeRoom
+          ? { w: displayRoomClocks.w, b: displayRoomClocks.b }
+          : { w: localClockMsRef.current.w, b: localClockMsRef.current.b };
+
+      return {
+        id: currentMatchIdRef.current,
         title,
         whiteName,
         blackName,
@@ -459,29 +526,85 @@ export default function App() {
         skinId: DEFAULT_SKIN,
         timeControl: activeTimeControl,
         dateIso,
-        moves: [...activeMoves],
-        finalFen: activeMoves[activeMoves.length - 1]?.fen || INITIAL_FEN,
-        pgn: buildPgnFromMoves(activeMoves, { whiteName, blackName, resultLabel, dateIso }),
+        moves: movesToSave,
+        finalFen,
+        pgn: buildPgnFromMoves(movesToSave, { whiteName, blackName, resultLabel, dateIso }),
+        engineLevel,
+        humanColor: humanColorActual,
+        humanColorPref,
+        clocks: currentClocks,
+        result: res ?? null,
+        moveEvalMeta: { ...moveEvalMeta },
       };
+    },
+    [
+      activeResult,
+      isViewingLatest,
+      clampedViewPly,
+      activeMoves,
+      displayedFen,
+      gameMode,
+      whiteName,
+      blackName,
+      activeRoom,
+      displayRoomClocks.w,
+      displayRoomClocks.b,
+      activeTimeControl,
+      engineLevel,
+      humanColorActual,
+      humanColorPref,
+      moveEvalMeta,
+    ],
+  );
+
+  const triggerJustSavedBadge = useCallback(() => {
+    setJustSaved(true);
+    if (saveFeedbackTimerRef.current !== null) {
+      window.clearTimeout(saveFeedbackTimerRef.current);
+    }
+    saveFeedbackTimerRef.current = window.setTimeout(() => {
+      setJustSaved(false);
+      saveFeedbackTimerRef.current = null;
+    }, 2400);
+  }, []);
+
+  const saveCurrentGameToArchive = useCallback(
+    (overrideResult?: RoomResult | null, isAutoSave = false) => {
+      if (isReplayMode) return;
+      if (isAutoSave && activeMoves.length === 0) return;
+
+      const entry = buildCurrentSavedGameSnapshot(overrideResult);
+      const fp = `${entry.whiteName}|${entry.blackName}|${entry.moves.map((m) => m.uci).join(',')}`;
+      if (isAutoSave && savedGameFingerprints.has(fp)) return;
 
       setSavedGames((prev) => {
-        const next = [entry, ...prev];
+        const filtered = prev.filter((g) => g.id !== entry.id);
+        const next = [entry, ...filtered];
         persistSavedGames(next);
         return next;
       });
       setSavedGameFingerprints((prev) => new Set(prev).add(fp));
+      if (!isAutoSave) {
+        triggerJustSavedBadge();
+        announceControlEvent(createSaveGameMessage(entry.title));
+      }
     },
     [
-      activeMoves,
-      activeResult,
-      whiteName,
-      blackName,
+      isReplayMode,
+      activeMoves.length,
+      buildCurrentSavedGameSnapshot,
       savedGameFingerprints,
-      gameMode,
-      activeRoom,
-      activeTimeControl,
+      triggerJustSavedBadge,
+      announceControlEvent,
     ],
   );
+
+  const handleExportCurrentGame = useCallback(() => {
+    if (isReplayMode) return;
+    const entry = buildCurrentSavedGameSnapshot();
+    saveCurrentGameToArchive();
+    exportSavedGameJson(entry);
+  }, [isReplayMode, buildCurrentSavedGameSnapshot, saveCurrentGameToArchive]);
 
   // Auto-save completed games to archive
   useEffect(() => {
@@ -489,7 +612,7 @@ export default function App() {
     const key = `${currentFingerprint}|${activeResult.reason}`;
     if (autoSavedSessionRef.current === key) return;
     autoSavedSessionRef.current = key;
-    saveCurrentGameToArchive(activeResult);
+    saveCurrentGameToArchive(activeResult, true);
   }, [activeResult, isReplayMode, activeMoves.length, currentFingerprint, saveCurrentGameToArchive]);
 
   // === Execute Local or Engine Move ===
@@ -605,24 +728,35 @@ export default function App() {
               seductionTriggerMode: ov.seductionTriggerMode,
             });
             if (msg) {
+              const prep = prepareHumanCommentaryPlayback(msg.clipId, `msg:${msg.id}`);
               setOpponentMessage(msg);
               opponentSpeech.playClip(msg.clipId, angelVoice, soundEnabled);
-              if (msg.clipId.startsWith('seduction_') && !over) {
+              if (msg.clipId.startsWith('seduction_') && !over && angelVisibleRef.current) {
                 lastSeductionPlyRef.current = nextMoves.length;
                 goodMoveStreakRef.current = 0;
                 awaitingDistractionModalRef.current = false;
-                const seductionVideoSec =
-                  getVideoFileDurationSec(ov.cases.seduction, ov) ?? 0;
-                const seductionAudioSec =
-                  ov.seductionAudioDuration ?? (VOICE_CLIP_DURATION_SEC[msg.clipId] ?? 4.5);
+                const seductionVideoHold = prep.playToEnd ? prep.videoSec : 0;
                 const seductionHoldMs =
-                  Math.round(Math.max(seductionAudioSec, seductionVideoSec, 4.5) * 1000) + 450;
+                  Math.round(Math.max(prep.audioSec, seductionVideoHold, 4.5) * 1000) + 450;
                 holdBotUntilRef.current = performance.now() + seductionHoldMs;
-              } else if (msg.action?.kind === 'undo-offer' && !over) {
+              } else if (msg.action?.kind === 'undo-offer' && !over && angelVisibleRef.current) {
                 awaitingDistractionModalRef.current = false;
-                const undoClipSec = VOICE_CLIP_DURATION_SEC[msg.clipId] ?? 6.2;
+                const undoMediaSec = Math.max(
+                  prep.audioSec || 6.2,
+                  prep.playToEnd ? prep.videoSec : 0,
+                );
                 holdBotUntilRef.current =
-                  performance.now() + Math.round(undoClipSec * 1000) + 4200;
+                  performance.now() + Math.round(undoMediaSec * 1000) + 4200;
+              } else if (!over && angelVisibleRef.current) {
+                awaitingDistractionModalRef.current = false;
+                const reactionHoldSec = Math.max(
+                  soundEnabled ? prep.audioSec : 0,
+                  prep.playToEnd ? prep.videoSec : 0,
+                );
+                holdBotUntilRef.current =
+                  reactionHoldSec > 0
+                    ? performance.now() + Math.round(reactionHoldSec * 1000) + 350
+                    : 0;
               } else {
                 awaitingDistractionModalRef.current = false;
                 holdBotUntilRef.current = 0;
@@ -819,6 +953,7 @@ export default function App() {
     const scene = new ChessScene3D(container, 'walnut-maple', 'warm-studio', {
       onSquareClick: (sq) => squareClickRef.current(sq),
       onTreeSquareClick: (sq) => treeSquareClickRef.current(sq),
+      onUpperRightVoidChange: (spec) => setUpperRightVoid(spec),
       onContextLost: () => setWebglLost(true),
       onContextRestored: () => setWebglLost(false),
     });
@@ -827,6 +962,23 @@ export default function App() {
     return () => {
       scene.dispose();
       sceneRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    sceneRef.current?.setShadowsEnabled(shadowsEnabled);
+  }, [shadowsEnabled]);
+
+  useEffect(() => {
+    sceneRef.current?.setAngelOverlayVisible(angelVisible);
+  }, [angelVisible]);
+
+  useEffect(() => {
+    return () => {
+      if (angelModalOffTimerRef.current !== null) {
+        window.clearTimeout(angelModalOffTimerRef.current);
+        angelModalOffTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -924,11 +1076,26 @@ export default function App() {
             b: localClockMsRef.current.b,
           });
           if (nextMs <= 0) {
+            const winner: PieceColor = activeTurn === 'w' ? 'b' : 'w';
             setLocalResult({
-              winner: activeTurn === 'w' ? 'b' : 'w',
+              winner,
               reason: 'timeout',
             });
             soundEngine.playGameOver();
+            if (clockTimeoutAnnouncedForIdRef.current !== currentMatchIdRef.current) {
+              clockTimeoutAnnouncedForIdRef.current = currentMatchIdRef.current;
+              if (snap.angelVoice === 'on') {
+                const timeoutMsg = createClockTimeoutMessage(
+                  winner,
+                  snap.humanColorActual,
+                  snap.gameMode,
+                );
+                if (timeoutMsg) {
+                  setOpponentMessage(timeoutMsg);
+                  opponentSpeech.playClip(timeoutMsg.clipId, 'on', snap.soundEnabled);
+                }
+              }
+            }
           }
         }
       }
@@ -1361,6 +1528,21 @@ export default function App() {
               } else if (room.moves.length < prevRoomMoveCountRef.current) {
                 setViewPly(room.moves.length);
               }
+              if (
+                room.result?.reason === 'timeout' &&
+                clockTimeoutAnnouncedForIdRef.current !== room.id
+              ) {
+                clockTimeoutAnnouncedForIdRef.current = room.id;
+                soundEngine.playGameOver();
+                const roomWinner: PieceColor = room.result.winner === 'b' ? 'b' : 'w';
+                if (angelVoiceRef.current === 'on') {
+                  const timeoutMsg = createClockTimeoutMessage(roomWinner, undefined, 'multiplayer');
+                  if (timeoutMsg) {
+                    setOpponentMessage(timeoutMsg);
+                    opponentSpeech.playClip(timeoutMsg.clipId, 'on', soundEnabledRef.current);
+                  }
+                }
+              }
               prevRoomMoveCountRef.current = room.moves.length;
               break;
             }
@@ -1659,6 +1841,8 @@ export default function App() {
       setOpponentMessage(null);
       opponentSpeech.stop();
       autoSavedSessionRef.current = null;
+      clockTimeoutAnnouncedForIdRef.current = null;
+      currentMatchIdRef.current = `game_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
       const ms = TIME_CONTROLS[tc].initialMs;
       localClockMsRef.current = { w: ms, b: ms };
       lastRenderedLocalSecRef.current = {
@@ -1671,7 +1855,12 @@ export default function App() {
   );
 
   const handleStartEngineGame = useCallback(
-    (level: EngineLevel, colorPref: PieceColor | 'random', tc: TimeControlId) => {
+    (
+      level: EngineLevel,
+      colorPref: PieceColor | 'random',
+      tc: TimeControlId,
+      announcement: 'intro' | 'new_match' | 'none' = 'intro',
+    ) => {
       if (activeRoom) {
         mpClientRef.current?.leaveRoom();
         setActiveRoom(null);
@@ -1688,13 +1877,17 @@ export default function App() {
       setHumanColorActual(actual);
       setGameMode('engine');
       resetLocalState(tc);
-      const introMsg = createIntroMessage();
-      setOpponentMessage(introMsg);
-      if (introMsg && angelVoiceRef.current === 'on') {
-        opponentSpeech.unlock();
-        opponentSpeech.playClip(introMsg.clipId, 'on', soundEnabledRef.current);
+      if (announcement !== 'none') {
+        const startMsg =
+          announcement === 'new_match' ? createNewMatchMessage() : createIntroMessage();
+        setOpponentMessage(startMsg);
+        if (startMsg && angelVoiceRef.current === 'on') {
+          opponentSpeech.unlock();
+          opponentSpeech.playClip(startMsg.clipId, 'on', soundEnabledRef.current);
+        }
       }
       const cam: CameraPreset = actual === 'b' ? 'black' : 'white';
+      setDockCollapsed(true);
       setCameraPreset(cam);
       sceneRef.current?.setCameraPreset(cam);
     },
@@ -1702,7 +1895,7 @@ export default function App() {
   );
 
   const handleStartLocalGame = useCallback(
-    (tc: TimeControlId) => {
+    (tc: TimeControlId, announcement: 'new_match' | 'none' = 'none') => {
       if (activeRoom) {
         mpClientRef.current?.leaveRoom();
         setActiveRoom(null);
@@ -1714,10 +1907,14 @@ export default function App() {
       setTimeControl(tc);
       setGameMode('local');
       resetLocalState(tc);
+      if (announcement === 'new_match') {
+        announceControlEvent(createNewMatchMessage());
+      }
+      setDockCollapsed(true);
       setCameraPreset('white');
       sceneRef.current?.setCameraPreset('white');
     },
-    [activeRoom, resetLocalState],
+    [activeRoom, resetLocalState, announceControlEvent],
   );
 
   const handleLeaveMultiplayer = useCallback(() => {
@@ -1890,6 +2087,35 @@ export default function App() {
 
     drawSearchTreeTopViewOnCanvas(canvas, edgesToDraw, schematicFen);
   }, [frontalTreeViewOpen, treeBrowser, opponentMessage, analysis, displayedFen]);
+
+  useEffect(() => {
+    return subscribeStudioDeveloperAuth(() => {
+      const unlocked = isStudioDeveloperUnlocked();
+      setStudioUnlocked(unlocked);
+      if (!unlocked) {
+        setVideoStudioOpen(false);
+      }
+    });
+  }, []);
+
+  const handleSecretStudioTrigger = useCallback(() => {
+    unlockStudioDeveloperSession();
+    setStudioUnlocked(true);
+    setVideoStudioOpen(true);
+  }, []);
+
+  useEffect(() => {
+    const onSecretKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v') {
+        const tag = (e.target as HTMLElement | null)?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        e.preventDefault();
+        handleSecretStudioTrigger();
+      }
+    };
+    window.addEventListener('keydown', onSecretKeyDown);
+    return () => window.removeEventListener('keydown', onSecretKeyDown);
+  }, [handleSecretStudioTrigger]);
 
   useEffect(() => {
     if (!frontalTreeViewOpen) return;
@@ -2183,6 +2409,147 @@ export default function App() {
     [angelVoice, soundEnabled],
   );
 
+  const handleLoadSavedGame = useCallback(
+    (game: SavedGame) => {
+      if (activeRoom) {
+        mpClientRef.current?.leaveRoom();
+        setActiveRoom(null);
+        setMyRoomRole(null);
+        const url = new URL(window.location.href);
+        url.searchParams.delete('room');
+        window.history.replaceState({}, '', url.toString());
+      }
+
+      botReqIdRef.current++;
+      flushPendingBotMove(false);
+      awaitingDistractionModalRef.current = false;
+      preserveMessageOnBotCommitRef.current = false;
+      holdBotUntilRef.current = 0;
+      turnStartedAtRef.current = performance.now();
+      hesitationStageRef.current = 0;
+      sceneRef.current?.stopCalculationPreview(false);
+      sceneRef.current?.stopSearchTreeThinLines();
+      treeActiveOnScreenRef.current = false;
+      setTreeStatusMode('idle');
+      setCalcPreview(null);
+      setCoachArrows([]);
+      setIsThinkingAi(false);
+      setReplayPlaying(false);
+      setActiveReplayGame(null);
+      setSelectedSquare(null);
+      setPendingPromotion(null);
+      const keepActiveLoadSpeech = Boolean(
+        opponentMessageRef.current?.clipId.startsWith('load_game_') &&
+          voiceStateRef.current === 'speaking',
+      );
+      if (!keepActiveLoadSpeech) {
+        opponentSpeech.stop();
+        setOpponentMessage(null);
+      }
+
+      currentMatchIdRef.current = game.id;
+      const nextTc: TimeControlId = TIME_CONTROLS[game.timeControl] ? game.timeControl : '10+0';
+      setTimeControl(nextTc);
+
+      const fallbackMs = TIME_CONTROLS[nextTc].initialMs;
+      const restoredClocks =
+        game.clocks &&
+        typeof game.clocks.w === 'number' &&
+        typeof game.clocks.b === 'number' &&
+        (fallbackMs === 0 || game.clocks.w > 0 || game.clocks.b > 0)
+          ? { w: game.clocks.w, b: game.clocks.b }
+          : { w: fallbackMs, b: fallbackMs };
+      localClockMsRef.current = { ...restoredClocks };
+      lastRenderedLocalSecRef.current = {
+        w: Math.ceil(restoredClocks.w / 1000),
+        b: Math.ceil(restoredClocks.b / 1000),
+      };
+      setLocalClocks({ ...restoredClocks });
+
+      const targetMode: 'engine' | 'local' = game.mode === 'local' ? 'local' : 'engine';
+      const restoredHumanColor: PieceColor = game.humanColor === 'b' ? 'b' : 'w';
+      if (targetMode === 'engine') {
+        if (game.engineLevel && ENGINE_LEVELS[game.engineLevel]) {
+          setEngineLevel(game.engineLevel);
+        }
+        setHumanColorActual(restoredHumanColor);
+        setHumanColorPref(game.humanColorPref ?? restoredHumanColor);
+      }
+      setGameMode(targetMode);
+
+      const targetFen =
+        game.moves.length > 0
+          ? game.moves[game.moves.length - 1].fen
+          : game.finalFen || INITIAL_FEN;
+
+      let restoredResult: RoomResult | null = game.result ?? null;
+      if (!restoredResult && game.reason !== 'in-progress') {
+        try {
+          const checkChess = new Chess(targetFen);
+          if (checkChess.isCheckmate()) {
+            restoredResult = {
+              winner: checkChess.turn() === 'w' ? 'b' : 'w',
+              reason: 'checkmate',
+            };
+          } else if (checkChess.isStalemate()) {
+            restoredResult = { winner: 'draw', reason: 'stalemate' };
+          } else if (checkChess.isDraw()) {
+            restoredResult = { winner: 'draw', reason: 'agreement' };
+          }
+        } catch {
+          // keep null so game remains playable
+        }
+      }
+
+      clockTimeoutAnnouncedForIdRef.current =
+        restoredResult?.reason === 'timeout' ? game.id : null;
+      setLocalMoves([...game.moves]);
+      setLocalFen(targetFen);
+      setLocalResult(restoredResult);
+      setMoveEvalMeta(game.moveEvalMeta ? { ...game.moveEvalMeta } : {});
+      setViewPly(game.moves.length);
+      setActiveTab('play');
+      setDockCollapsed(true);
+
+      const cam: CameraPreset =
+        targetMode === 'engine' && restoredHumanColor === 'b' ? 'black' : 'white';
+      setCameraPreset(cam);
+      sceneRef.current?.setCameraPreset(cam);
+      if (keepActiveLoadSpeech) {
+        setOpponentMessage((prev) =>
+          prev ? { ...prev, mathSummary: `Restored: ${game.title}` } : prev,
+        );
+      } else {
+        announceControlEvent(createLoadGameMessage(game.title));
+      }
+      setBotHoldEpoch((n) => n + 1);
+    },
+    [activeRoom, flushPendingBotMove, announceControlEvent],
+  );
+
+  const handleImportSaveFile = useCallback(
+    async (file: File): Promise<boolean> => {
+      try {
+        const rawText = await file.text();
+        const imported = parseImportedSavedGame(rawText, file.name);
+        if (!imported) return false;
+
+        setSavedGames((prev) => {
+          const next = [imported, ...prev.filter((g) => g.id !== imported.id)];
+          persistSavedGames(next);
+          return next;
+        });
+        const fp = `${imported.whiteName}|${imported.blackName}|${imported.moves.map((m) => m.uci).join(',')}`;
+        setSavedGameFingerprints((prev) => new Set(prev).add(fp));
+        handleLoadSavedGame(imported);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [handleLoadSavedGame],
+  );
+
   const handleLoadReplay = useCallback(
     (game: SavedGame) => {
       botReqIdRef.current++;
@@ -2243,9 +2610,9 @@ export default function App() {
       return;
     }
     if (gameMode === 'local') {
-      handleStartLocalGame(timeControl);
+      handleStartLocalGame(timeControl, 'new_match');
     } else {
-      handleStartEngineGame(engineLevel, humanColorPref, timeControl);
+      handleStartEngineGame(engineLevel, humanColorPref, timeControl, 'new_match');
     }
   }, [
     isReplayMode,
@@ -2293,7 +2660,19 @@ export default function App() {
   }, [isThinkingAi, treeStatusMode]);
 
   return (
-    <div className="relative w-full h-full overflow-hidden bg-black select-none">
+    <div
+      onContextMenu={(e) => {
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+        e.preventDefault();
+      }}
+      onDragStart={(e) => {
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+        e.preventDefault();
+      }}
+      className="relative w-full h-full overflow-hidden bg-black select-none"
+    >
       {/* Isolated Full-Viewport 3D WebGL Canvas Container (Explicit Non-Zero Sizing) */}
       <div ref={canvasContainerRef} className="webgl-viewport-container z-0" />
 
@@ -2303,7 +2682,7 @@ export default function App() {
           <div className="max-w-sm text-center p-6 rounded-lg border border-white/12 bg-[#141820]">
             <h2 className="font-display text-lg text-[#f4efe4] mb-2">3D Viewport Suspended</h2>
             <p className="text-xs text-[#9aa3b2]">
-              WebGL context was temporarily paused by the browser. Touch or restore the tab to resume ChessAngel3D.
+              WebGL context was temporarily paused by the browser. Touch or restore the tab to resume ChessAngel 3D.
             </p>
           </div>
         </div>
@@ -2387,8 +2766,9 @@ export default function App() {
         onChangeEngineLevel={(lvl) => {
           setEngineLevel(lvl);
           if (gameMode !== 'engine') {
-            handleStartEngineGame(lvl, humanColorPref, timeControl);
+            handleStartEngineGame(lvl, humanColorPref, timeControl, 'none');
           }
+          announceControlEvent(createEngineLevelMessage(lvl));
         }}
         humanColorVsAi={humanColorPref}
         onChangeHumanColorVsAi={(side) => {
@@ -2433,17 +2813,84 @@ export default function App() {
             opponentSpeech.playClip(introMsg.clipId, 'on', soundEnabled);
           }
         }}
-        showSpeechBubbles={showSpeechBubbles}
-        onToggleSpeechBubbles={() => {
-          setShowSpeechBubbles((prev) => !prev);
+        angelVisible={angelModalEnabled}
+        onChangeAngelVisible={(vis) => {
+          if (vis) {
+            if (angelModalOffTimerRef.current !== null) {
+              window.clearTimeout(angelModalOffTimerRef.current);
+              angelModalOffTimerRef.current = null;
+            }
+            setAngelModalEnabled(true);
+            setAngelVisible(true);
+            setPreviewIdleUrl(null);
+            const onMsg = createAngelModalOnMessage();
+            if (onMsg) {
+              setOpponentMessage(onMsg);
+              if (angelVoice === 'on') {
+                opponentSpeech.unlock();
+                opponentSpeech.playClip(onMsg.clipId, 'on', soundEnabled);
+              }
+            }
+            return;
+          }
+
+          setAngelModalEnabled(false);
+          if (awaitingDistractionModalRef.current || holdBotUntilRef.current > 0) {
+            awaitingDistractionModalRef.current = false;
+            holdBotUntilRef.current = 0;
+            setBotHoldEpoch((n) => n + 1);
+          }
+
+          // If already hidden or farewell is already running and user clicks Off again, hide immediately
+          if (!angelVisible || angelModalOffTimerRef.current !== null) {
+            if (angelModalOffTimerRef.current !== null) {
+              window.clearTimeout(angelModalOffTimerRef.current);
+              angelModalOffTimerRef.current = null;
+            }
+            opponentSpeech.stop();
+            setOpponentMessage(null);
+            setAngelVisible(false);
+            return;
+          }
+
+          const offMsg = createAngelModalOffMessage();
+          if (!offMsg) {
+            opponentSpeech.stop();
+            setOpponentMessage(null);
+            setAngelVisible(false);
+            return;
+          }
+
+          setPreviewIdleUrl(null);
+          const prep = prepareHumanCommentaryPlayback(offMsg.clipId, `msg:${offMsg.id}`);
+          setOpponentMessage(offMsg);
+          if (angelVoice === 'on') {
+            opponentSpeech.unlock();
+            opponentSpeech.playClip(offMsg.clipId, 'on', soundEnabled);
+          }
+          const farewellSec = Math.max(
+            angelVoice === 'on' && soundEnabled ? prep.audioSec : 0,
+            prep.videoUrl ? prep.videoSec : 0,
+          );
+          if (farewellSec > 0.25) {
+            angelModalOffTimerRef.current = window.setTimeout(() => {
+              angelModalOffTimerRef.current = null;
+              opponentSpeech.stop();
+              setOpponentMessage(null);
+              setAngelVisible(false);
+            }, Math.round(farewellSec * 1000) + 220);
+          } else {
+            setAngelVisible(false);
+          }
         }}
+        shadowsEnabled={shadowsEnabled}
+        onToggleShadows={() => setShadowsEnabled((s) => !s)}
         showCoordinates={showCoordinates}
         onToggleCoordinates={() => setShowCoordinates((c) => !c)}
         showSearchTree={showSearchTree}
         onToggleSearchTree={handleToggleSearchTree}
         onReplaySearchTree={() => handleShowFullSearchTree()}
         onExportTreeJpg={handleOpenFrontalTreeView}
-        onOpenDownload={() => setDownloadModalOpen(true)}
         canUndo={gameMode !== 'multiplayer' && !isReplayMode && localMoves.length > 0}
         onUndo={handleUndoLocal}
         onResignLocal={() => {
@@ -2462,6 +2909,7 @@ export default function App() {
                 : 'w';
           setLocalResult({ winner, reason: 'resignation' });
           soundEngine.playGameOver();
+          announceControlEvent(createResignMessage(winner));
         }}
         isGameActive={!activeResult && !isReplayMode}
         analysisEnabled={analysisEnabled}
@@ -2498,9 +2946,13 @@ export default function App() {
         }}
         savedGames={savedGames}
         classicReplays={CLASSIC_REPLAYS}
+        onLoadSavedGame={handleLoadSavedGame}
         onLoadReplay={handleLoadReplay}
         onExitReplay={handleExitReplay}
         onSaveCurrentGame={() => saveCurrentGameToArchive()}
+        onExportCurrentGame={handleExportCurrentGame}
+        onExportSavedGame={(g) => exportSavedGameJson(g)}
+        onImportSaveFile={handleImportSaveFile}
         onDeleteSavedGame={(id) => {
           setSavedGames((prev) => {
             const next = prev.filter((g) => g.id !== id);
@@ -2511,7 +2963,10 @@ export default function App() {
             handleExitReplay();
           }
         }}
-        canSaveCurrent={activeMoves.length > 0}
+        canSaveCurrent={!isReplayMode}
+        justSaved={justSaved}
+        onOpenLoadDrawer={() => announceControlEvent(createLoadGameMessage())}
+        onSecretStudioTrigger={handleSecretStudioTrigger}
       />
 
       {/* Pawn Promotion Chooser Modal */}
@@ -2527,18 +2982,10 @@ export default function App() {
         />
       )}
 
-      {/* Download & Offline Install Modal */}
-      {downloadModalOpen && (
-        <DownloadGameModal
-          onClose={() => setDownloadModalOpen(false)}
-          currentPgn={currentPgn}
-          canExportPgn={activeMoves.length > 0}
-          onExportTreeJpg={handleOpenFrontalTreeView}
-        />
-      )}
-
-      {/* Chess Angel Frameless 3:4 Portrait Video & Permanent Framed Black Modal (Never Closes) */}
+      {/* Chess Angel Frameless 3:4 Portrait Video & Framed Black Modal (Fits 95% of Upper-Right Void) */}
       <OpponentSpeechBanner
+        visible={angelVisible}
+        upperRightVoid={upperRightVoid}
         message={opponentMessage}
         angelVoice={angelVoice}
         soundEnabled={soundEnabled}
@@ -2570,6 +3017,14 @@ export default function App() {
         onUndoAndShowBetter={handleUndoAndShowBetter}
         onAcceptHint={handleAcceptHint}
         onDismiss={() => {
+          if (angelModalOffTimerRef.current !== null) {
+            window.clearTimeout(angelModalOffTimerRef.current);
+            angelModalOffTimerRef.current = null;
+            opponentSpeech.stop();
+            setOpponentMessage(null);
+            setAngelVisible(false);
+            return;
+          }
           opponentSpeech.stop();
           setOpponentMessage((prev) =>
             prev ? { ...prev, action: undefined, concernedFigures: undefined } : prev,
@@ -2581,49 +3036,67 @@ export default function App() {
           }
         }}
         onOpenVideoStudio={
-          IS_VIDEO_STUDIO_DEV_ENV ? () => setVideoStudioOpen(true) : undefined
+          studioUnlocked ? () => setVideoStudioOpen(true) : undefined
         }
       />
 
-      {/* Dev-Only Chess Angel Video Studio (Hidden in deployed production build; all saved .mp4s & rules bundle via angel_video_map.json) */}
-      {IS_VIDEO_STUDIO_DEV_ENV && videoStudioOpen && (
-        <AngelVideoStudioModal
-          onClose={() => setVideoStudioOpen(false)}
-          onPreviewCase={(clipId, text, tag) => {
-            setPreviewIdleUrl(null);
-            const caseId = extractCaseIdFromClip(clipId);
-            const previewFigures = caseId
-              ? resolvePreviewConcernedFigures(caseId, displayedFen, humanColorActual)
-              : undefined;
-            const previewAction: OpponentMessage['action'] = caseId?.startsWith('wrong_')
-              ? {
-                  kind: 'undo-offer',
-                  preFen: displayedFen,
-                  reasonNote: 'Preview Undo proposal',
-                  alternatives: [],
-                }
-              : undefined;
-            setOpponentMessage({
-              id: Date.now(),
-              clipId,
-              text,
-              tag,
-              tone: 'opening',
-              speaker: getSpeakerName(),
-              isStudioPreview: true,
-              concernedFigures: previewFigures,
-              action: previewAction,
-            });
-            opponentSpeech.unlock();
-            opponentSpeech.playClip(clipId, 'on', soundEnabled);
-          }}
-          onPreviewIdle={(specificIdleUrl) => {
-            opponentSpeech.stop();
-            setPreviewIdleUrl(specificIdleUrl || null);
-            setOpponentMessage(null);
-            setIdlePreviewNonce((n) => n + 1);
-          }}
-        />
+      {/* Hidden Chess Angel Video Studio (Opened directly via 5 clicks on game title; lazy chunk never loaded for normal players) */}
+      {studioUnlocked && videoStudioOpen && (
+        <Suspense fallback={null}>
+          <LazyAngelVideoStudioModal
+            onClose={() => setVideoStudioOpen(false)}
+            onLockStudio={() => {
+              logoutStudioDeveloperSession();
+              setVideoStudioOpen(false);
+            }}
+            onPreviewCase={(clipId, text, tag) => {
+              if (angelModalOffTimerRef.current !== null) {
+                window.clearTimeout(angelModalOffTimerRef.current);
+                angelModalOffTimerRef.current = null;
+              }
+              setAngelModalEnabled(true);
+              setAngelVisible(true);
+              setPreviewIdleUrl(null);
+              const caseId = extractCaseIdFromClip(clipId);
+              const previewFigures = caseId
+                ? resolvePreviewConcernedFigures(caseId, displayedFen, humanColorActual)
+                : undefined;
+              const previewAction: OpponentMessage['action'] = caseId?.startsWith('wrong_')
+                ? {
+                    kind: 'undo-offer',
+                    preFen: displayedFen,
+                    reasonNote: 'Preview Undo proposal',
+                    alternatives: [],
+                  }
+                : undefined;
+              setOpponentMessage({
+                id: Date.now(),
+                clipId,
+                text,
+                tag,
+                tone: 'opening',
+                speaker: getSpeakerName(),
+                isStudioPreview: true,
+                concernedFigures: previewFigures,
+                action: previewAction,
+              });
+              opponentSpeech.unlock();
+              opponentSpeech.playClip(clipId, 'on', soundEnabled);
+            }}
+            onPreviewIdle={(specificIdleUrl) => {
+              if (angelModalOffTimerRef.current !== null) {
+                window.clearTimeout(angelModalOffTimerRef.current);
+                angelModalOffTimerRef.current = null;
+              }
+              setAngelModalEnabled(true);
+              setAngelVisible(true);
+              opponentSpeech.stop();
+              setPreviewIdleUrl(specificIdleUrl || null);
+              setOpponentMessage(null);
+              setIdlePreviewNonce((n) => n + 1);
+            }}
+          />
+        </Suspense>
       )}
 
       {/* Subtle Offline Mode Indicator */}

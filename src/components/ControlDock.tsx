@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronUp,
@@ -13,14 +13,17 @@ import {
   Volume2,
   VolumeX,
   RotateCcw,
-  Copy,
   Check,
   Save,
+  FolderOpen,
+  Upload,
+  ArrowLeft,
   Trash2,
   Flag,
   Eye,
   Download,
   GitBranch,
+  Sun,
 } from 'lucide-react';
 import {
   ENGINE_LEVELS,
@@ -65,15 +68,16 @@ interface ControlDockProps {
   onToggleSound: () => void;
   angelVoice: AngelVoiceMode;
   onChangeAngelVoice: (mode: AngelVoiceMode) => void;
-  showSpeechBubbles: boolean;
-  onToggleSpeechBubbles: () => void;
+  angelVisible: boolean;
+  onChangeAngelVisible: (visible: boolean) => void;
+  shadowsEnabled: boolean;
+  onToggleShadows: () => void;
   showCoordinates: boolean;
   onToggleCoordinates: () => void;
   showSearchTree: boolean;
   onToggleSearchTree: () => void;
   onReplaySearchTree: () => void;
   onExportTreeJpg: () => void;
-  onOpenDownload: () => void;
   canUndo: boolean;
   onUndo: () => void;
   onResignLocal: () => void;
@@ -104,11 +108,18 @@ interface ControlDockProps {
   onFastForwardStep: () => void;
   savedGames: SavedGame[];
   classicReplays: SavedGame[];
+  onLoadSavedGame: (game: SavedGame) => void;
   onLoadReplay: (game: SavedGame) => void;
   onExitReplay: () => void;
   onSaveCurrentGame: () => void;
+  onExportCurrentGame: () => void;
+  onExportSavedGame: (game: SavedGame) => void;
+  onImportSaveFile: (file: File) => Promise<boolean>;
   onDeleteSavedGame: (id: string) => void;
   canSaveCurrent: boolean;
+  justSaved: boolean;
+  onOpenLoadDrawer?: () => void;
+  onSecretStudioTrigger?: () => void;
 }
 
 const QUALITY_COLORS: Record<string, string> = {
@@ -133,6 +144,37 @@ export function ControlDock(props: ControlDockProps) {
   const [emblemBroken, setEmblemBroken] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [replayListTab, setReplayListTab] = useState<'saved' | 'classics'>('saved');
+  const [loadDrawerOpen, setLoadDrawerOpen] = useState(false);
+  const [importNotice, setImportNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const secretTapTimesRef = useRef<number[]>([]);
+
+  const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const ok = await props.onImportSaveFile(file);
+    if (ok) {
+      setImportNotice({ ok: true, text: `Loaded "${file.name}"` });
+      setLoadDrawerOpen(false);
+    } else {
+      setImportNotice({ ok: false, text: 'Could not parse file (.json or .pgn expected)' });
+    }
+    window.setTimeout(() => setImportNotice(null), 3200);
+  };
+
+  const handleBrandSecretTap = () => {
+    if (!props.onSecretStudioTrigger) return;
+    const now = performance.now();
+    const recent = secretTapTimesRef.current.filter((t) => now - t <= 2800);
+    recent.push(now);
+    if (recent.length >= 5) {
+      secretTapTimesRef.current = [];
+      props.onSecretStudioTrigger();
+    } else {
+      secretTapTimesRef.current = recent;
+    }
+  };
 
   const copyText = (key: string, value: string) => {
     navigator.clipboard?.writeText(value).catch(() => {});
@@ -163,26 +205,36 @@ export function ControlDock(props: ControlDockProps) {
         )}
       </button>
 
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json,.pgn,application/json,text/plain"
+        onChange={handleFileInputChange}
+        className="hidden"
+      />
+
       {/* Unified Horizontal Bottom Control Dock (solid/rgba surface — zero backdrop-filter over WebGL) */}
       <div
         className={`pointer-events-auto w-full rounded-t-xl mb-0 sm:rounded-xl sm:mb-3 bg-[#11151d]/95 border border-white/12 shadow-2xl transition-all duration-200 ease-out overflow-hidden ${
           props.collapsed
             ? 'max-h-0 opacity-0 translate-y-4 pointer-events-none border-transparent sm:mb-0'
-            : 'max-h-[380px] opacity-100 translate-y-0'
+            : 'max-h-[440px] opacity-100 translate-y-0'
         }`}
       >
-        {/* Unified Menu Header Bar: ChessAngel3D Title + Logo + Tab Switcher + Coords/Sound/Download + New Match */}
+        {/* Unified Menu Header Bar: Logo + ChessAngel 3D + Version + Copyright on Left | Controls + Play/Analysis/Replay on Far Right */}
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 border-b border-white/10 bg-[#0d1017]/95">
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Brand Title & ChessAngel3D Logo Emblem */}
-            <div className="inline-flex items-center gap-2 whitespace-nowrap shrink-0 pr-1">
-              <span className="font-display text-base font-medium tracking-tight text-[#f5f0e6] whitespace-nowrap">
-                ChessAngel3D
-              </span>
+          <div
+            onClick={handleBrandSecretTap}
+            className="flex flex-wrap items-center gap-2 select-none cursor-default"
+          >
+            {/* ChessAngel 3D Logo Emblem on the Very Left Before Game Title */}
+            <div className="inline-flex items-center gap-2 whitespace-nowrap shrink-0">
               {!emblemBroken ? (
                 <img
                   src="/assets/aistudio/chess3D-angel_414f5812.png"
-                  alt="ChessAngel3D logo"
+                  alt="ChessAngel 3D logo"
+                  draggable={false}
+                  onContextMenu={(e) => e.preventDefault()}
                   referrerPolicy="no-referrer"
                   onError={() => setEmblemBroken(true)}
                   className="w-7 h-7 rounded-md object-cover border border-white/15 shadow-sm shrink-0"
@@ -195,25 +247,14 @@ export function ControlDock(props: ControlDockProps) {
                   ♞
                 </span>
               )}
+              <span className="font-display text-base font-medium tracking-tight text-[#f5f0e6] whitespace-nowrap">
+                ChessAngel 3D v1.4
+              </span>
             </div>
 
-            {/* Tab Switcher */}
-            <div className="flex items-center gap-1 bg-[#171c26] border border-white/8 rounded-md p-0.5 text-xs">
-              {(['play', 'analysis', 'replay'] as DockTab[]).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => props.onSelectTab(t)}
-                  className={`px-3 py-1 rounded capitalize transition-colors whitespace-nowrap cursor-pointer ${
-                    props.activeTab === t
-                      ? 'bg-[#d6ae63] text-[#111419] font-semibold'
-                      : 'text-[#9aa3b2] hover:text-white'
-                  }`}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
+            <span className="text-[11px] text-[#9aa3b2] whitespace-nowrap">
+              © Jan Rom 2026
+            </span>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -242,6 +283,21 @@ export function ControlDock(props: ControlDockProps) {
                 Show Now
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={props.onToggleShadows}
+              aria-pressed={props.shadowsEnabled}
+              title="Switch dynamic 3D board & piece shadows on or off"
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded border transition-colors whitespace-nowrap cursor-pointer ${
+                props.shadowsEnabled
+                  ? 'bg-[#1f2634] border-[#c89d54]/50 text-[#f3efe4]'
+                  : 'bg-[#171c26] border-white/10 text-[#8d96a6] hover:text-white'
+              }`}
+            >
+              <Sun className="w-3.5 h-3.5 text-[#c89d54]" />
+              Shadows: {props.shadowsEnabled ? 'On' : 'Off'}
+            </button>
 
             <button
               type="button"
@@ -281,27 +337,192 @@ export function ControlDock(props: ControlDockProps) {
 
             <button
               type="button"
-              onClick={props.onOpenDownload}
-              title="Download full ChessAngel3D game (.zip) or Windows .bat installer"
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#171c26] hover:bg-[#1f2634] border border-white/10 text-[11px] font-medium text-[#cfd5e0] transition-colors cursor-pointer whitespace-nowrap"
-            >
-              <Download className="w-3.5 h-3.5 text-[#c89d54]" />
-              Download
-            </button>
-
-            <button
-              type="button"
               onClick={props.onPrimaryAction}
               className="px-3.5 py-1 text-xs font-semibold text-[#111419] bg-[#d6ae63] hover:bg-[#e3be78] rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#e3be78]"
             >
               {props.isReplayMode ? 'Exit Replay' : 'New Match'}
             </button>
+
+            {/* Tab Switcher at the Far Right End of the Rollout Header */}
+            <div className="flex items-center gap-1 bg-[#171c26] border border-white/8 rounded-md p-0.5 text-xs">
+              {(['play', 'analysis', 'replay'] as DockTab[]).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => {
+                    setLoadDrawerOpen(false);
+                    props.onSelectTab(t);
+                  }}
+                  className={`px-3 py-1 rounded capitalize transition-colors whitespace-nowrap cursor-pointer ${
+                    props.activeTab === t && !(t === 'play' && loadDrawerOpen)
+                      ? 'bg-[#d6ae63] text-[#111419] font-semibold'
+                      : 'text-[#9aa3b2] hover:text-white'
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
         <div className="p-4">
-          {/* ==================== PLAY TAB ==================== */}
-          {props.activeTab === 'play' && (
+          {/* ==================== PLAY TAB (OR INLINE LOAD DRAWER) ==================== */}
+          {props.activeTab === 'play' && loadDrawerOpen && (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2.5 border-b border-white/8">
+                <div className="flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setLoadDrawerOpen(false)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded bg-[#181d27] hover:bg-[#222937] border border-white/12 text-[#e5e9f0] cursor-pointer whitespace-nowrap"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5 text-[#d6ae63]" />
+                    Back
+                  </button>
+                  <span className="text-xs font-semibold text-[#f3efe4] whitespace-nowrap">
+                    Load &amp; Save Games
+                  </span>
+                  <span className="text-[11px] text-[#8d96a6] whitespace-nowrap font-mono-tabular">
+                    · {props.savedGames.length} saved
+                  </span>
+                  {importNotice && (
+                    <span
+                      className={`text-[11px] whitespace-nowrap ${
+                        importNotice.ok ? 'text-[#6ee7b7]' : 'text-[#fca5a5]'
+                      }`}
+                    >
+                      · {importNotice.text}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={props.onSaveCurrentGame}
+                    disabled={!props.canSaveCurrent}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded border transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap ${
+                      props.justSaved
+                        ? 'bg-[#192b24] border-[#6ee7b7]/55 text-[#6ee7b7]'
+                        : 'bg-[#181d27] hover:bg-[#222937] border-white/12 text-[#e5e9f0]'
+                    }`}
+                  >
+                    {props.justSaved ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        Saved!
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-3.5 h-3.5 text-[#d6ae63]" />
+                        Save Current
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={props.onExportCurrentGame}
+                    disabled={!props.canSaveCurrent}
+                    title="Save current match as a .json file on your device"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded bg-[#181d27] hover:bg-[#222937] border border-white/12 text-[#cfd5e0] disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed whitespace-nowrap"
+                  >
+                    <Download className="w-3.5 h-3.5 text-[#d6ae63]" />
+                    Save to File
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Load a saved .json or .pgn chess file from your device"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded bg-[#d6ae63] hover:bg-[#e3be78] text-[#111419] transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    Load File
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[164px] overflow-y-auto thin-scroll pr-0.5">
+                {props.savedGames.length === 0 ? (
+                  <p className="text-xs text-[#8d96a6] col-span-full py-3">
+                    No saved games yet. Click <span className="text-[#f3efe4]">Save Current</span>{' '}
+                    during any match to store your position and clock here, or use{' '}
+                    <span className="text-[#f3efe4]">Load File</span> to open a .json or .pgn file.
+                  </p>
+                ) : (
+                  props.savedGames.map((g) => {
+                    const isInProgress = g.reason === 'in-progress' && !g.result;
+                    const statusText = isInProgress ? 'In progress' : g.resultLabel;
+                    const levelLabel = g.engineLevel ? ENGINE_LEVELS[g.engineLevel]?.label : null;
+                    const dateShort = g.dateIso.slice(0, 16).replace('T', ' ');
+                    return (
+                      <div
+                        key={g.id}
+                        className="flex items-center justify-between gap-2.5 px-3 py-2 rounded border bg-[#171c25] border-white/10 hover:border-[#d6ae63]/45 transition-colors"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-medium text-[#f3f1ec] truncate">
+                            {g.title}
+                          </div>
+                          <div className="text-[11px] text-[#8d96a6] truncate font-mono-tabular">
+                            {statusText} · {g.moves.length} plies
+                            {levelLabel ? ` · ${levelLabel}` : ''} · {dateShort}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLoadDrawerOpen(false);
+                              props.onLoadSavedGame(g);
+                            }}
+                            title="Load game onto the 3D board and continue playing"
+                            className="px-2.5 py-1 text-[11px] font-semibold rounded bg-[#d6ae63] hover:bg-[#e3be78] text-[#111419] transition-colors cursor-pointer whitespace-nowrap"
+                          >
+                            Load
+                          </button>
+                          {g.moves.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setLoadDrawerOpen(false);
+                                props.onLoadReplay(g);
+                              }}
+                              title="Step through moves from the start in Replay Theatre"
+                              className="px-2 py-1 text-[11px] font-medium rounded bg-[#1e2636] hover:bg-[#283247] border border-white/10 text-[#cbd5e1] transition-colors cursor-pointer whitespace-nowrap"
+                            >
+                              Replay
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => props.onExportSavedGame(g)}
+                            aria-label={`Export ${g.title}`}
+                            title="Download save file (.json)"
+                            className="p-1.5 text-[#8d96a6] hover:text-[#f3efe4] cursor-pointer"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => props.onDeleteSavedGame(g.id)}
+                            aria-label={`Delete ${g.title}`}
+                            title="Delete saved game"
+                            className="p-1.5 text-[#7f8999] hover:text-[#f87171] cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
+          {props.activeTab === 'play' && !loadDrawerOpen && (
             <div className="flex flex-col gap-3.5">
               {/* Row 1: Mode + Time Control + Camera Presets */}
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -421,8 +642,8 @@ export function ControlDock(props: ControlDockProps) {
                     ))}
                   </div>
 
-                  {/* Warm Female Chess Angel Voice (On / Off only) + Speech Bubbles toggle */}
-                  <div className="flex items-center gap-2 flex-wrap">
+                  {/* Warm Female Chess Angel Voice (On / Off) + Angel & Modal Visibility Switch + Auto Tree */}
+                  <div className="flex items-center gap-2.5 flex-wrap">
                     <div className="flex items-center gap-1.5">
                       <span className="text-[11px] text-[#8d96a6] whitespace-nowrap">
                         Angel Voice
@@ -440,6 +661,29 @@ export function ControlDock(props: ControlDockProps) {
                             }`}
                           >
                             {mode === 'on' ? 'On' : 'Off'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-[#8d96a6] whitespace-nowrap">
+                        Angel &amp; Modal
+                      </span>
+                      <div className="flex items-center gap-1 p-1 bg-[#191f2a] rounded-md border border-white/8">
+                        {([true, false] as const).map((vis) => (
+                          <button
+                            key={vis ? 'on' : 'off'}
+                            type="button"
+                            onClick={() => props.onChangeAngelVisible(vis)}
+                            aria-pressed={props.angelVisible === vis}
+                            className={`px-2.5 py-1 text-[11px] rounded transition-colors whitespace-nowrap cursor-pointer ${
+                              props.angelVisible === vis
+                                ? 'bg-[#d6ae63]/20 text-[#f0d192] font-semibold border border-[#d6ae63]/50'
+                                : 'text-[#8e98a8] hover:text-white border border-transparent'
+                            }`}
+                          >
+                            {vis ? 'On' : 'Off'}
                           </button>
                         ))}
                       </div>
@@ -463,7 +707,7 @@ export function ControlDock(props: ControlDockProps) {
                 </div>
 
                 {/* Match actions */}
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={props.onUndo}
@@ -477,10 +721,36 @@ export function ControlDock(props: ControlDockProps) {
                     type="button"
                     onClick={props.onSaveCurrentGame}
                     disabled={!props.canSaveCurrent}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-[#181d27] hover:bg-[#222937] border border-white/10 text-[#d7dce5] disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed whitespace-nowrap"
+                    title="Save current match progress, clock, and board state"
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border transition-colors disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed whitespace-nowrap ${
+                      props.justSaved
+                        ? 'bg-[#192b24] border-[#6ee7b7]/55 text-[#6ee7b7]'
+                        : 'bg-[#181d27] hover:bg-[#222937] border-white/10 text-[#d7dce5]'
+                    }`}
                   >
-                    <Save className="w-3.5 h-3.5" />
-                    Save
+                    {props.justSaved ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        Saved!
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-3.5 h-3.5 text-[#d6ae63]" />
+                        Save
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoadDrawerOpen(true);
+                      props.onOpenLoadDrawer?.();
+                    }}
+                    title="Open saved games or load a .json / .pgn save file"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-[#181d27] hover:bg-[#222937] border border-white/10 text-[#d7dce5] cursor-pointer whitespace-nowrap"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5 text-[#d6ae63]" />
+                    Load{props.savedGames.length > 0 ? ` (${props.savedGames.length})` : ''}
                   </button>
                   {props.gameMode !== 'multiplayer' && props.isGameActive && (
                     <button
@@ -812,12 +1082,34 @@ export function ControlDock(props: ControlDockProps) {
                       type="button"
                       onClick={props.onSaveCurrentGame}
                       disabled={!props.canSaveCurrent}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded bg-[#1d2533] hover:bg-[#273144] border border-white/12 text-[#f3f1ec] disabled:opacity-40 cursor-pointer whitespace-nowrap ml-1"
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded border transition-colors disabled:opacity-40 cursor-pointer whitespace-nowrap ml-1 ${
+                        props.justSaved
+                          ? 'bg-[#192b24] border-[#6ee7b7]/55 text-[#6ee7b7]'
+                          : 'bg-[#1d2533] hover:bg-[#273144] border-white/12 text-[#f3f1ec]'
+                      }`}
                     >
-                      <Save className="w-3 h-3" />
-                      Save Current
+                      {props.justSaved ? (
+                        <>
+                          <Check className="w-3 h-3" />
+                          Saved!
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-3 h-3" />
+                          Save Current
+                        </>
+                      )}
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Import a .json or .pgn save file"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded bg-[#1d2533] hover:bg-[#273144] border border-white/12 text-[#f3f1ec] cursor-pointer whitespace-nowrap"
+                  >
+                    <Upload className="w-3 h-3 text-[#d6ae63]" />
+                    Load File
+                  </button>
                   {props.isReplayMode && (
                     <button
                       type="button"
@@ -853,7 +1145,7 @@ export function ControlDock(props: ControlDockProps) {
                     </button>
                   </div>
                   <span className="text-[11px] text-[#8d96a6] hidden sm:inline">
-                    Completed games save automatically · click any game to review in 3D
+                    Click a title to review in Replay · click Load to resume playing
                   </span>
                 </div>
 
@@ -862,7 +1154,7 @@ export function ControlDock(props: ControlDockProps) {
                   0 ? (
                     <p className="text-xs text-[#6f7888] col-span-full py-2">
                       No saved games yet. Finish a match or click &ldquo;Save Current&rdquo; to
-                      archive it for replay.
+                      archive it for replay or resume.
                     </p>
                   ) : (
                     (replayListTab === 'saved' ? props.savedGames : props.classicReplays).map(
@@ -887,8 +1179,17 @@ export function ControlDock(props: ControlDockProps) {
                                 {g.title}
                               </div>
                               <div className="text-[11px] text-[#8d96a6] truncate font-mono-tabular">
-                                {g.resultLabel} · {g.moves.length} plies · {g.dateIso.slice(0, 10)}
+                                {g.reason === 'in-progress' && !g.result ? 'In progress' : g.resultLabel}{' '}
+                                · {g.moves.length} plies · {g.dateIso.slice(0, 10)}
                               </div>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => props.onLoadSavedGame(g)}
+                              title="Load onto the 3D board and resume playing"
+                              className="px-2 py-0.5 text-[11px] font-semibold rounded bg-[#d6ae63]/90 hover:bg-[#e3be78] text-[#111419] cursor-pointer shrink-0"
+                            >
+                              Load
                             </button>
                             {replayListTab === 'saved' && (
                               <button

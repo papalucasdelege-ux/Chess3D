@@ -3,11 +3,12 @@ import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { execFileSync, spawnSync } from 'child_process';
+import crypto from 'crypto';
+import { execFile, execFileSync } from 'child_process';
+import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Chess } from 'chess.js';
-import JSZip from 'jszip';
 import { TIME_CONTROLS } from './src/shared/types.ts';
 import type {
   BoardSkinId,
@@ -79,16 +80,32 @@ function sanitizeName(raw: unknown): string {
   return cleaned.length > 0 ? cleaned : 'Player';
 }
 
+const MAX_ACTIVE_ROOMS = 500;
+
+function isSafeMapKey(key: string): boolean {
+  if (!/^[a-z0-9_]{1,40}$/.test(key)) return false;
+  return key !== '__proto__' && key !== 'constructor' && key !== 'prototype';
+}
+
+function isSafeLocalMediaUrl(u: unknown): u is string {
+  return (
+    typeof u === 'string' &&
+    u.length > 0 &&
+    u.length <= 240 &&
+    (u.startsWith('/assets/') || u.startsWith('/voices/'))
+  );
+}
+
 function generateRoomCode(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   for (let attempt = 0; attempt < 20; attempt++) {
     let code = '';
     for (let i = 0; i < 6; i++) {
-      code += alphabet[Math.floor(Math.random() * alphabet.length)];
+      code += alphabet[crypto.randomInt(0, alphabet.length)];
     }
     if (!rooms.has(code)) return code;
   }
-  return Math.random().toString(36).slice(2, 8).toUpperCase();
+  return crypto.randomBytes(4).toString('hex').slice(0, 6).toUpperCase();
 }
 
 function send(ws: WebSocket, msg: ServerToClientMessage): void {
@@ -121,8 +138,12 @@ function serializeRoom(room: InternalRoom): RoomState {
     turn: room.chess.turn() as PieceColor,
     moves: room.moves,
     players: {
-      w: room.players.w ? { ...room.players.w } : null,
-      b: room.players.b ? { ...room.players.b } : null,
+      w: room.players.w
+        ? { name: room.players.w.name, connected: room.players.w.connected }
+        : null,
+      b: room.players.b
+        ? { name: room.players.b.name, connected: room.players.b.connected }
+        : null,
     },
     spectatorCount: getSpectatorCount(room),
     clocks: { ...room.clocks },
@@ -323,8 +344,19 @@ function handleMessage(ws: WebSocket, raw: string): void {
 
   switch (msg.type) {
     case 'client:hello': {
-      if (typeof msg.clientId === 'string' && msg.clientId.length >= 6 && msg.clientId.length <= 64) {
-        client.clientId = msg.clientId;
+      if (
+        typeof msg.clientId === 'string' &&
+        /^[A-Za-z0-9_-]{16,64}$/.test(msg.clientId)
+      ) {
+        const claimedByActiveSocket = Array.from(clients.values()).some(
+          (other) =>
+            other !== client &&
+            other.clientId === msg.clientId &&
+            other.ws.readyState === WebSocket.OPEN,
+        );
+        if (!claimedByActiveSocket) {
+          client.clientId = msg.clientId;
+        }
       }
       client.name = sanitizeName(msg.name);
       send(ws, {
@@ -342,6 +374,10 @@ function handleMessage(ws: WebSocket, raw: string): void {
     }
 
     case 'room:create': {
+      if (rooms.size >= MAX_ACTIVE_ROOMS) {
+        send(ws, { type: 'room:error', message: 'Server room capacity reached. Try again shortly.' });
+        return;
+      }
       removeFromQueue(ws);
       leaveCurrentRoom(ws);
 
@@ -355,7 +391,7 @@ function handleMessage(ws: WebSocket, raw: string): void {
       const chosenColor: PieceColor =
         msg.preferredColor === 'w' || msg.preferredColor === 'b'
           ? msg.preferredColor
-          : Math.random() < 0.5
+          : crypto.randomInt(0, 2) === 0
             ? 'w'
             : 'b';
 
@@ -595,7 +631,7 @@ function handleMessage(ws: WebSocket, raw: string): void {
 
     case 'game:resign': {
       const room = rooms.get(msg.roomId);
-      if (!room || room.status !== 'active') return;
+      if (!room || client.roomId !== room.id || room.status !== 'active') return;
       const role: PieceColor | null =
         room.players.w?.clientId === client.clientId
           ? 'w'
@@ -616,7 +652,7 @@ function handleMessage(ws: WebSocket, raw: string): void {
 
     case 'game:draw-offer': {
       const room = rooms.get(msg.roomId);
-      if (!room || room.status !== 'active') return;
+      if (!room || client.roomId !== room.id || room.status !== 'active') return;
       const role: PieceColor | null =
         room.players.w?.clientId === client.clientId
           ? 'w'
@@ -631,7 +667,7 @@ function handleMessage(ws: WebSocket, raw: string): void {
 
     case 'game:draw-respond': {
       const room = rooms.get(msg.roomId);
-      if (!room || room.status !== 'active' || !room.drawOfferFrom) return;
+      if (!room || client.roomId !== room.id || room.status !== 'active' || !room.drawOfferFrom) return;
       const role: PieceColor | null =
         room.players.w?.clientId === client.clientId
           ? 'w'
@@ -652,7 +688,7 @@ function handleMessage(ws: WebSocket, raw: string): void {
 
     case 'game:rematch': {
       const room = rooms.get(msg.roomId);
-      if (!room || room.status !== 'finished') return;
+      if (!room || client.roomId !== room.id || room.status !== 'finished') return;
       const role: PieceColor | null =
         room.players.w?.clientId === client.clientId
           ? 'w'
@@ -698,7 +734,7 @@ function handleMessage(ws: WebSocket, raw: string): void {
 
     case 'room:skin': {
       const room = rooms.get(msg.roomId);
-      if (!room || !VALID_SKINS.has(msg.skinId)) return;
+      if (!room || client.roomId !== room.id || !VALID_SKINS.has(msg.skinId)) return;
       const isPlayer =
         room.players.w?.clientId === client.clientId ||
         room.players.b?.clientId === client.clientId;
@@ -726,7 +762,31 @@ setInterval(() => {
 
 async function startServer(): Promise<void> {
   const app = express();
-  app.use(express.json());
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1);
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    const pathname = req.path || '';
+    const lowerPath = pathname.toLowerCase();
+    // Block source maps and raw project/server configuration files from being copied
+    if (
+      lowerPath.endsWith('.map') ||
+      lowerPath === '/server.ts' ||
+      lowerPath === '/package.json' ||
+      lowerPath === '/package-lock.json' ||
+      lowerPath === '/tsconfig.json' ||
+      lowerPath === '/vite.config.ts' ||
+      lowerPath.startsWith('/.env') ||
+      lowerPath.startsWith('/.git') ||
+      (IS_PROD && lowerPath.startsWith('/src/') && !lowerPath.startsWith('/src/assets/'))
+    ) {
+      res.status(403).json({ error: 'Access denied.' });
+      return;
+    }
+    next();
+  });
+  app.use(express.json({ limit: '64kb' }));
 
   app.get('/api/health', (_req, res) => {
     res.json({
@@ -839,11 +899,13 @@ async function startServer(): Promise<void> {
       }
     }
   };
-  sanitizeAllAssetVideosRecursive(publicAssetsDir);
+  if (!IS_PROD) {
+    sanitizeAllAssetVideosRecursive(publicAssetsDir);
+  }
 
   // Serve public media assets (including Chess Angel 3:4 portrait MP4 videos, guaranteed audio-free) with Range support
   app.use('/assets', (req, _res, next) => {
-    if (/\.(mp4|webm|mov|m4v)$/i.test(req.path)) {
+    if (!IS_PROD && /\.(mp4|webm|mov|m4v)$/i.test(req.path)) {
       const candidate = path.resolve(publicAssetsDir, '.' + req.path);
       if (candidate.startsWith(publicAssetsDir + path.sep)) {
         ensureSilentVideoFile(candidate);
@@ -863,21 +925,40 @@ async function startServer(): Promise<void> {
   const aistudioAssetsDir = path.resolve(publicAssetsDir, 'aistudio');
   const angelVideoMapPath = path.join(aistudioAssetsDir, 'angel_video_map.json');
 
+  type AngelCompressionPreset = 'lossless_21' | 'balanced_24' | 'mobile_27' | 'mute_only';
+
+  interface StoredVideoOptimizedInfo {
+    size: number;
+    crf: number;
+    width: number;
+    height: number;
+  }
+
   interface StoredAngelVideoMap {
     idle?: string;
     idleVariants: Record<string, string>;
+    mouseIdle?: string;
+    mouseIdleWake?: string;
+    mouseIdleTimeoutSec?: number;
+    mouseIdleHoldSec?: Record<string, number>;
     defaultSpeaking?: string;
     groups: Record<string, string>;
     cases: Record<string, string>;
     escapes: Record<string, string>;
     escapeEnabled?: Record<string, boolean>;
-    caseEscapeCues?: Record<string, Partial<Record<'point_you' | 'push_button', 'on' | 'off'>>>;
+    caseEscapeCues?: Record<
+      string,
+      Partial<Record<'point_you' | 'point_me' | 'push_button', 'on' | 'off'>>
+    >;
     lipSync?: {
       defaultEnabled: boolean;
       groups: Record<string, 'on' | 'off'>;
       cases: Record<string, 'on' | 'off'>;
     };
     videoDurations?: Record<string, number>;
+    videoSizes?: Record<string, number>;
+    videoOptimized?: Record<string, StoredVideoOptimizedInfo>;
+    compressionPreset?: AngelCompressionPreset;
     escapeApexes?: Record<string, number>;
     videoMaxPlays?: Record<string, number>;
     videoPlayToEnd?: Record<string, boolean>;
@@ -888,6 +969,359 @@ async function startServer(): Promise<void> {
     seductionTriggerMode?: 'balanced' | 'frequent' | 'dominant' | 'tactical';
   }
   const seductionAssetMp3Path = path.join(aistudioAssetsDir, 'seduction.mp3');
+  const execFileAsync = promisify(execFile);
+
+  const presetToCrf = (preset: AngelCompressionPreset | undefined): number | null => {
+    if (preset === 'mute_only') return null;
+    if (preset === 'balanced_24') return 24;
+    if (preset === 'mobile_27') return 27;
+    return 21;
+  };
+
+  interface BackdropCalibrationSpec {
+    cutR: number;
+    cutG: number;
+    cutB: number;
+    gammaR: number;
+    gammaG: number;
+    gammaB: number;
+    whiteBalanceAdjusted: boolean;
+    needsBackdropFix: boolean;
+  }
+
+  /**
+   * Probes up to 12 frames across a portrait video to measure its outer dark-background RGB
+   * and any chromatic color cast, returning per-channel black-point cuts + white-balance gammas
+   * so the video's dark background becomes 100% identical to the game's #000000 (0, 0, 0).
+   */
+  const probeVideoBackdropCalibration = (inputPath: string): BackdropCalibrationSpec => {
+    const fallback: BackdropCalibrationSpec = {
+      cutR: 3,
+      cutG: 3,
+      cutB: 3,
+      gammaR: 1,
+      gammaG: 1,
+      gammaB: 1,
+      whiteBalanceAdjusted: false,
+      needsBackdropFix: true,
+    };
+
+    try {
+      const metaOut = execFileSync(
+        'ffprobe',
+        [
+          '-v',
+          'error',
+          '-select_streams',
+          'v:0',
+          '-show_entries',
+          'stream=color_range,color_space,color_transfer,color_primaries',
+          '-of',
+          'csv=p=0',
+          inputPath,
+        ],
+        { encoding: 'utf8', timeout: 4000 },
+      ).trim();
+      const hasExactBt709Tags = metaOut.startsWith('tv,bt709,bt709,bt709');
+
+      const raw = execFileSync(
+        'ffmpeg',
+        [
+          '-v',
+          'error',
+          '-i',
+          inputPath,
+          '-vf',
+          'fps=3,scale=96:128:flags=area',
+          '-frames:v',
+          '12',
+          '-f',
+          'rawvideo',
+          '-pix_fmt',
+          'rgb24',
+          '-',
+        ],
+        { maxBuffer: 6 * 1024 * 1024, timeout: 10000 },
+      );
+
+      const W = 96;
+      const H = 128;
+      const frameBytes = W * H * 3;
+      const frameCount = Math.floor(raw.length / frameBytes);
+      if (frameCount <= 0) return fallback;
+
+      const bgR: number[] = [];
+      const bgG: number[] = [];
+      const bgB: number[] = [];
+      const cornerR: number[] = [];
+      const cornerG: number[] = [];
+      const cornerB: number[] = [];
+      let maxObservedBg = 0;
+
+      for (let fr = 0; fr < frameCount; fr++) {
+        const base = fr * frameBytes;
+        for (let y = 0; y < 88; y++) {
+          for (let x = 0; x < W; x++) {
+            const isStrictCorner = y < 12 && (x < 6 || x >= W - 6);
+            const isMargin =
+              y < 5 ||
+              ((x < 11 || x >= W - 11) && y < 48) ||
+              ((x < 5 || x >= W - 5) && y < 88);
+            if (!isMargin) continue;
+
+            const idx = base + (y * W + x) * 3;
+            const r = raw[idx];
+            const g = raw[idx + 1];
+            const b = raw[idx + 2];
+            const peak = Math.max(r, g, b);
+            if (peak < 62) {
+              bgR.push(r);
+              bgG.push(g);
+              bgB.push(b);
+              if (peak > maxObservedBg) maxObservedBg = peak;
+              if (isStrictCorner) {
+                cornerR.push(r);
+                cornerG.push(g);
+                cornerB.push(b);
+              }
+            }
+          }
+        }
+      }
+
+      if (bgR.length < 16) return fallback;
+
+      bgR.sort((a, b) => a - b);
+      bgG.sort((a, b) => a - b);
+      bgB.sort((a, b) => a - b);
+      cornerR.sort((a, b) => a - b);
+      cornerG.sort((a, b) => a - b);
+      cornerB.sort((a, b) => a - b);
+
+      const pct = (arr: number[], q: number) =>
+        arr.length > 0 ? arr[Math.min(arr.length - 1, Math.floor(arr.length * q))] : 0;
+
+      const medR = pct(bgR, 0.5);
+      const medG = pct(bgG, 0.5);
+      const medB = pct(bgB, 0.5);
+      const p90R = pct(bgR, 0.9);
+      const p90G = pct(bgG, 0.9);
+      const p90B = pct(bgB, 0.9);
+      const c95R = pct(cornerR, 0.95);
+      const c95G = pct(cornerG, 0.95);
+      const c95B = pct(cornerB, 0.95);
+
+      const cutR = Math.min(48, Math.max(3, Math.max(c95R, p90R) + 3));
+      const cutG = Math.min(48, Math.max(3, Math.max(c95G, p90G) + 3));
+      const cutB = Math.min(48, Math.max(3, Math.max(c95B, p90B) + 3));
+
+      const avgMed = (medR + medG + medB) / 3;
+      const maxCast = Math.max(
+        Math.abs(medR - avgMed),
+        Math.abs(medG - avgMed),
+        Math.abs(medB - avgMed),
+      );
+      const gammaR = Math.max(0.92, Math.min(1.08, 1 + (medR - avgMed) * 0.0065));
+      const gammaG = Math.max(0.92, Math.min(1.08, 1 + (medG - avgMed) * 0.0065));
+      const gammaB = Math.max(0.92, Math.min(1.08, 1 + (medB - avgMed) * 0.0065));
+
+      const hasNonZeroBg =
+        c95R > 0 || c95G > 0 || c95B > 0 || p90R > 0 || p90G > 0 || p90B > 0 || maxObservedBg > 1;
+
+      return {
+        cutR,
+        cutG,
+        cutB,
+        gammaR,
+        gammaG,
+        gammaB,
+        whiteBalanceAdjusted: maxCast >= 1.5,
+        needsBackdropFix: hasNonZeroBg || !hasExactBt709Tags,
+      };
+    } catch {
+      return fallback;
+    }
+  };
+
+  const buildLutRgbChannelExpr = (cut: number, knee: number, gamma: number): string => {
+    const denom = Math.max(1, 255 - cut).toFixed(1);
+    return `if(lte(val,${cut}),0,clip(pow((val-${cut})/${denom}*if(lt(val,${cut + knee}),(val-${cut})/${knee},1),${gamma.toFixed(4)})*255,0,255))`;
+  };
+
+  /**
+   * Visually lossless 3:4 portrait compression & color-calibration routine (554x740 Lanczos,
+   * automatic #000000 dark-background + white-balance LUT calibration, BT.709 VUI tags, libx264 slow,
+   * yuv420p, audio-stripped -an, +faststart).
+   */
+  const compressPortraitMp4Async = async (
+    inputPath: string,
+    outputPath: string,
+    opts: { crf: number | null; trimEndSec?: number | null; enforceBackdropMatch?: boolean },
+  ): Promise<{
+    inBytes: number;
+    outBytes: number;
+    compressed: boolean;
+    crfApplied: number;
+    backdropCalibrated: boolean;
+    whiteBalanceAdjusted: boolean;
+  }> => {
+    const inBytes = fs.statSync(inputPath).size;
+    const trimArgs =
+      opts.trimEndSec !== null && opts.trimEndSec !== undefined
+        ? ['-to', opts.trimEndSec.toFixed(3)]
+        : [];
+    const enforceBackdrop = opts.enforceBackdropMatch !== false;
+    const calib = enforceBackdrop
+      ? probeVideoBackdropCalibration(inputPath)
+      : {
+          cutR: 3,
+          cutG: 3,
+          cutB: 3,
+          gammaR: 1,
+          gammaG: 1,
+          gammaB: 1,
+          whiteBalanceAdjusted: false,
+          needsBackdropFix: false,
+        };
+
+    if (opts.crf === null && trimArgs.length === 0 && !calib.needsBackdropFix) {
+      await execFileAsync(
+        'ffmpeg',
+        ['-y', '-loglevel', 'error', '-i', inputPath, '-c:v', 'copy', '-an', '-movflags', '+faststart', outputPath],
+        { timeout: 25000 },
+      );
+      const outBytes = fs.statSync(outputPath).size;
+      return {
+        inBytes,
+        outBytes,
+        compressed: false,
+        crfApplied: 0,
+        backdropCalibrated: false,
+        whiteBalanceAdjusted: false,
+      };
+    }
+
+    const effectiveCrf = opts.crf ?? 19;
+    const knee = 9;
+    const rExpr = buildLutRgbChannelExpr(calib.cutR, knee, calib.gammaR);
+    const gExpr = buildLutRgbChannelExpr(calib.cutG, knee, calib.gammaG);
+    const bExpr = buildLutRgbChannelExpr(calib.cutB, knee, calib.gammaB);
+    const vfChain = [
+      'scale=554:740:force_original_aspect_ratio=increase:flags=lanczos',
+      'crop=554:740',
+      'format=rgb24',
+      `lutrgb=r='${rExpr}':g='${gExpr}':b='${bExpr}'`,
+      'scale=out_color_matrix=bt709:out_range=tv',
+      'format=yuv420p',
+    ].join(',');
+
+    await execFileAsync(
+      'ffmpeg',
+      [
+        '-y',
+        '-loglevel',
+        'error',
+        '-i',
+        inputPath,
+        ...trimArgs,
+        '-vf',
+        vfChain,
+        '-c:v',
+        'libx264',
+        '-preset',
+        'slow',
+        '-crf',
+        String(effectiveCrf),
+        '-pix_fmt',
+        'yuv420p',
+        '-color_range',
+        'tv',
+        '-colorspace',
+        'bt709',
+        '-color_primaries',
+        'bt709',
+        '-color_trc',
+        'bt709',
+        '-an',
+        '-movflags',
+        '+faststart',
+        outputPath,
+      ],
+      { timeout: 90000 },
+    );
+
+    let outBytes = fs.statSync(outputPath).size;
+    // Never revert to uncalibrated `-c:v copy` if the input needed dark-background or BT.709 color calibration!
+    if (trimArgs.length === 0 && !calib.needsBackdropFix && outBytes >= inBytes) {
+      await execFileAsync(
+        'ffmpeg',
+        ['-y', '-loglevel', 'error', '-i', inputPath, '-c:v', 'copy', '-an', '-movflags', '+faststart', outputPath],
+        { timeout: 25000 },
+      );
+      outBytes = fs.statSync(outputPath).size;
+      return {
+        inBytes,
+        outBytes,
+        compressed: outBytes < inBytes,
+        crfApplied: effectiveCrf,
+        backdropCalibrated: false,
+        whiteBalanceAdjusted: false,
+      };
+    }
+
+    return {
+      inBytes,
+      outBytes,
+      compressed: outBytes < inBytes,
+      crfApplied: effectiveCrf,
+      backdropCalibrated: true,
+      whiteBalanceAdjusted: calib.whiteBalanceAdjusted,
+    };
+  };
+
+  const cachedVideoDims = new Map<string, { mtimeMs: number; width: number; height: number }>();
+  const getVideoDimensions = (
+    absPath: string,
+    mtimeMs: number,
+  ): { width: number; height: number } | null => {
+    const prev = cachedVideoDims.get(absPath);
+    if (prev && prev.mtimeMs === mtimeMs) {
+      return { width: prev.width, height: prev.height };
+    }
+    try {
+      const out = execFileSync(
+        'ffprobe',
+        [
+          '-v',
+          'error',
+          '-select_streams',
+          'v:0',
+          '-show_entries',
+          'stream=width,height',
+          '-of',
+          'csv=s=x:p=0',
+          absPath,
+        ],
+        { encoding: 'utf8', timeout: 4000 },
+      )
+        .trim()
+        .split('\n')[0];
+      const parts = out.split('x');
+      if (parts.length >= 2) {
+        const w = parseInt(parts[0], 10);
+        const h = parseInt(parts[1], 10);
+        if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+          cachedVideoDims.set(absPath, { mtimeMs, width: w, height: h });
+          return { width: w, height: h };
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  };
+
+  const recordedVideoOptByPath = new Map<string, StoredVideoOptimizedInfo>();
 
   const cachedVideoDurations = new Map<string, { mtimeMs: number; sec: number }>();
   const getVideoDurationSec = (absPath: string, mtimeMs: number): number | null => {
@@ -998,6 +1432,84 @@ async function startServer(): Promise<void> {
     }
   };
 
+  /**
+   * Detects if a custom Mouse-Idle video contains BOTH falling-asleep AND waking-up in a single clip
+   * (e.g., standing -> laying head down in middle -> standing back up at end). If so, returns the exact
+   * timestamp inside the deep-sleep trough where playback should pause and hold until the mouse moves again!
+   * Returns `null` when the clip ends in the sleeping pose (meaning play to the final frame and hold there).
+   */
+  const cachedMouseSleepHolds = new Map<string, { mtimeMs: number; sec: number | null }>();
+  const getMouseIdleSleepHoldSec = (absPath: string, mtimeMs: number): number | null => {
+    const prev = cachedMouseSleepHolds.get(absPath);
+    if (prev && prev.mtimeMs === mtimeMs) return prev.sec;
+    try {
+      const buf = execFileSync(
+        'ffmpeg',
+        [
+          '-v',
+          'error',
+          '-i',
+          absPath,
+          '-vf',
+          'fps=4,crop=iw:ih*0.45:0:0,scale=16:16,format=gray',
+          '-f',
+          'rawvideo',
+          '-pix_fmt',
+          'gray',
+          '-',
+        ],
+        { maxBuffer: 4 * 1024 * 1024, timeout: 6000 },
+      );
+      const frameBytes = 16 * 16;
+      const frameCount = Math.floor(buf.length / frameBytes);
+      if (frameCount < 10) {
+        cachedMouseSleepHolds.set(absPath, { mtimeMs, sec: null });
+        return null;
+      }
+
+      const upperMeans: number[] = new Array(frameCount);
+      for (let k = 0; k < frameCount; k++) {
+        const offset = k * frameBytes;
+        let sum = 0;
+        for (let i = 0; i < frameBytes; i++) {
+          sum += buf[offset + i];
+        }
+        upperMeans[k] = sum / frameBytes;
+      }
+
+      const startAvg = (upperMeans[0] + upperMeans[1] + upperMeans[2]) / 3;
+      const endAvg =
+        (upperMeans[frameCount - 1] + upperMeans[frameCount - 2] + upperMeans[frameCount - 3]) / 3;
+      let minVal = Infinity;
+      for (let k = 2; k < frameCount - 2; k++) {
+        if (upperMeans[k] < minVal) minVal = upperMeans[k];
+      }
+
+      // If she starts upright (startAvg > 28), lowers her head to sleep (minVal < startAvg * 0.55),
+      // AND rises back upright before the end of the file (endAvg > startAvg * 0.72):
+      if (startAvg > 28 && minVal < startAvg * 0.55 && endAvg > startAvg * 0.72) {
+        let lastTroughIdx = -1;
+        const troughCeil = minVal + Math.max(2.5, (startAvg - minVal) * 0.14);
+        for (let k = 2; k < frameCount - 2; k++) {
+          if (upperMeans[k] <= troughCeil) {
+            lastTroughIdx = k;
+          }
+        }
+        if (lastTroughIdx >= 3) {
+          const holdIdx = Math.max(2, lastTroughIdx - 1);
+          const holdSec = Number((holdIdx / 4).toFixed(2));
+          cachedMouseSleepHolds.set(absPath, { mtimeMs, sec: holdSec });
+          return holdSec;
+        }
+      }
+
+      cachedMouseSleepHolds.set(absPath, { mtimeMs, sec: null });
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
   const stripQueryFromAssetUrl = (u: string | undefined): string | null => {
     if (!u || typeof u !== 'string') return null;
     const clean = u.split('?')[0];
@@ -1008,11 +1520,14 @@ async function startServer(): Promise<void> {
   const readAngelVideoMap = (): StoredAngelVideoMap => {
     const result: StoredAngelVideoMap = {
       idleVariants: {},
+      mouseIdleTimeoutSec: 20,
+      mouseIdleHoldSec: {},
       groups: {},
       cases: {},
       escapes: {},
       escapeEnabled: {
         point_you: true,
+        point_me: true,
         push_button: true,
       },
       caseEscapeCues: {},
@@ -1022,61 +1537,95 @@ async function startServer(): Promise<void> {
         cases: {},
       },
       videoDurations: {},
+      videoSizes: {},
+      videoOptimized: {},
+      compressionPreset: 'lossless_21',
       escapeApexes: {},
       videoMaxPlays: {
         'case:tree_browse': 2,
-        'case:seduction': 1,
       },
       videoPlayToEnd: {
         'case:seduction': true,
       },
     };
 
+    const persistedOpt: Record<string, StoredVideoOptimizedInfo> = {};
+
     try {
       if (fs.existsSync(angelVideoMapPath)) {
         const parsed = JSON.parse(
           fs.readFileSync(angelVideoMapPath, 'utf8'),
         ) as Partial<StoredAngelVideoMap>;
-        if (typeof parsed.idle === 'string') {
+        if (isSafeLocalMediaUrl(parsed.idle)) {
           result.idle = parsed.idle;
           result.idleVariants.idle_1 = parsed.idle;
         }
         if (parsed.idleVariants && typeof parsed.idleVariants === 'object') {
           for (const [k, v] of Object.entries(parsed.idleVariants)) {
-            if (typeof v === 'string') result.idleVariants[k] = v;
+            if (isSafeMapKey(k) && isSafeLocalMediaUrl(v)) result.idleVariants[k] = v;
           }
         }
-        if (typeof parsed.defaultSpeaking === 'string') {
+        if (isSafeLocalMediaUrl(parsed.mouseIdle)) {
+          result.mouseIdle = parsed.mouseIdle;
+        }
+        if (isSafeLocalMediaUrl(parsed.mouseIdleWake)) {
+          result.mouseIdleWake = parsed.mouseIdleWake;
+        }
+        if (
+          typeof parsed.mouseIdleTimeoutSec === 'number' &&
+          Number.isFinite(parsed.mouseIdleTimeoutSec) &&
+          (parsed.mouseIdleTimeoutSec === 0 ||
+            (parsed.mouseIdleTimeoutSec >= 5 && parsed.mouseIdleTimeoutSec <= 600))
+        ) {
+          result.mouseIdleTimeoutSec = Math.round(parsed.mouseIdleTimeoutSec);
+        }
+        if (
+          parsed.mouseIdleHoldSec &&
+          typeof parsed.mouseIdleHoldSec === 'object' &&
+          result.mouseIdleHoldSec
+        ) {
+          for (const [k, v] of Object.entries(parsed.mouseIdleHoldSec)) {
+            if (isSafeLocalMediaUrl(k) && typeof v === 'number' && Number.isFinite(v) && v > 0) {
+              result.mouseIdleHoldSec[k] = v;
+            }
+          }
+        }
+        if (isSafeLocalMediaUrl(parsed.defaultSpeaking)) {
           result.defaultSpeaking = parsed.defaultSpeaking;
         }
         if (parsed.groups && typeof parsed.groups === 'object') {
           for (const [k, v] of Object.entries(parsed.groups)) {
-            if (typeof v === 'string') result.groups[k] = v;
+            if (isSafeMapKey(k) && isSafeLocalMediaUrl(v)) result.groups[k] = v;
           }
         }
         if (parsed.cases && typeof parsed.cases === 'object') {
           for (const [k, v] of Object.entries(parsed.cases)) {
-            if (typeof v === 'string') result.cases[k] = v;
+            if (isSafeMapKey(k) && isSafeLocalMediaUrl(v)) result.cases[k] = v;
           }
         }
         if (parsed.escapes && typeof parsed.escapes === 'object') {
           for (const [k, v] of Object.entries(parsed.escapes)) {
-            if (typeof v === 'string') result.escapes[k] = v;
+            if (isSafeMapKey(k) && isSafeLocalMediaUrl(v)) result.escapes[k] = v;
           }
         }
         if (parsed.escapeEnabled && typeof parsed.escapeEnabled === 'object') {
           for (const [k, v] of Object.entries(parsed.escapeEnabled)) {
-            if (typeof v === 'boolean' && result.escapeEnabled) {
+            if (isSafeMapKey(k) && typeof v === 'boolean' && result.escapeEnabled) {
               result.escapeEnabled[k] = v;
             }
           }
         }
         if (parsed.caseEscapeCues && typeof parsed.caseEscapeCues === 'object') {
           for (const [caseId, cueMap] of Object.entries(parsed.caseEscapeCues)) {
-            if (cueMap && typeof cueMap === 'object' && result.caseEscapeCues) {
-              const cleaned: Partial<Record<'point_you' | 'push_button', 'on' | 'off'>> = {};
+            if (isSafeMapKey(caseId) && cueMap && typeof cueMap === 'object' && result.caseEscapeCues) {
+              const cleaned: Partial<
+                Record<'point_you' | 'point_me' | 'push_button', 'on' | 'off'>
+              > = {};
               if (cueMap.point_you === 'on' || cueMap.point_you === 'off') {
                 cleaned.point_you = cueMap.point_you;
+              }
+              if (cueMap.point_me === 'on' || cueMap.point_me === 'off') {
+                cleaned.point_me = cueMap.point_me;
               }
               if (cueMap.push_button === 'on' || cueMap.push_button === 'off') {
                 cleaned.push_button = cueMap.push_button;
@@ -1095,44 +1644,58 @@ async function startServer(): Promise<void> {
           };
           if (parsed.lipSync.groups && typeof parsed.lipSync.groups === 'object') {
             for (const [k, v] of Object.entries(parsed.lipSync.groups)) {
-              if (v === 'on' || v === 'off') result.lipSync.groups[k] = v;
+              if (isSafeMapKey(k) && (v === 'on' || v === 'off')) result.lipSync.groups[k] = v;
             }
           }
           if (parsed.lipSync.cases && typeof parsed.lipSync.cases === 'object') {
             for (const [k, v] of Object.entries(parsed.lipSync.cases)) {
-              if (v === 'on' || v === 'off') result.lipSync.cases[k] = v;
+              if (isSafeMapKey(k) && (v === 'on' || v === 'off')) result.lipSync.cases[k] = v;
             }
           }
         }
         if (parsed.videoDurations && typeof parsed.videoDurations === 'object' && result.videoDurations) {
           for (const [k, v] of Object.entries(parsed.videoDurations)) {
-            if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+            if (isSafeLocalMediaUrl(k) && typeof v === 'number' && Number.isFinite(v) && v > 0) {
               result.videoDurations[k] = v;
             }
           }
         }
         if (parsed.escapeApexes && typeof parsed.escapeApexes === 'object' && result.escapeApexes) {
           for (const [k, v] of Object.entries(parsed.escapeApexes)) {
-            if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+            if (isSafeLocalMediaUrl(k) && typeof v === 'number' && Number.isFinite(v) && v > 0) {
               result.escapeApexes[k] = v;
             }
           }
         }
         if (parsed.videoMaxPlays && typeof parsed.videoMaxPlays === 'object' && result.videoMaxPlays) {
           for (const [k, v] of Object.entries(parsed.videoMaxPlays)) {
-            if (typeof v === 'number' && Number.isFinite(v) && v >= -1) {
+            if (
+              /^(idle|mouse_idle|default|group|case|escape):[a-z0-9_]{1,40}$/.test(k) &&
+              !k.endsWith(':__proto__') &&
+              !k.endsWith(':constructor') &&
+              !k.endsWith(':prototype') &&
+              typeof v === 'number' &&
+              Number.isFinite(v) &&
+              v >= -1
+            ) {
               result.videoMaxPlays[k] = Math.floor(v);
             }
           }
         }
         if (parsed.videoPlayToEnd && typeof parsed.videoPlayToEnd === 'object' && result.videoPlayToEnd) {
           for (const [k, v] of Object.entries(parsed.videoPlayToEnd)) {
-            if (typeof v === 'boolean') {
+            if (
+              /^(idle|mouse_idle|default|group|case|escape):[a-z0-9_]{1,40}$/.test(k) &&
+              !k.endsWith(':__proto__') &&
+              !k.endsWith(':constructor') &&
+              !k.endsWith(':prototype') &&
+              typeof v === 'boolean'
+            ) {
               result.videoPlayToEnd[k] = v;
             }
           }
         }
-        if (typeof parsed.seductionAudioUrl === 'string' && parsed.seductionAudioUrl.length > 0) {
+        if (isSafeLocalMediaUrl(parsed.seductionAudioUrl)) {
           result.seductionAudioUrl = parsed.seductionAudioUrl;
         }
         if (
@@ -1145,7 +1708,7 @@ async function startServer(): Promise<void> {
         if (parsed.seductionAudioVariants && typeof parsed.seductionAudioVariants === 'object') {
           result.seductionAudioVariants = {};
           for (const [k, v] of Object.entries(parsed.seductionAudioVariants)) {
-            if (typeof v === 'string' && v.length > 0) {
+            if (isSafeMapKey(k) && isSafeLocalMediaUrl(v)) {
               result.seductionAudioVariants[k] = v;
             }
           }
@@ -1166,6 +1729,33 @@ async function startServer(): Promise<void> {
         ) {
           result.seductionTriggerMode = parsed.seductionTriggerMode;
         }
+        if (
+          parsed.compressionPreset === 'lossless_21' ||
+          parsed.compressionPreset === 'balanced_24' ||
+          parsed.compressionPreset === 'mobile_27' ||
+          parsed.compressionPreset === 'mute_only'
+        ) {
+          result.compressionPreset = parsed.compressionPreset;
+        }
+        if (parsed.videoOptimized && typeof parsed.videoOptimized === 'object') {
+          for (const [k, v] of Object.entries(parsed.videoOptimized)) {
+            if (
+              v &&
+              typeof v === 'object' &&
+              typeof v.size === 'number' &&
+              typeof v.crf === 'number' &&
+              typeof v.width === 'number' &&
+              typeof v.height === 'number'
+            ) {
+              persistedOpt[k] = {
+                size: v.size,
+                crf: v.crf,
+                width: v.width,
+                height: v.height,
+              };
+            }
+          }
+        }
       }
     } catch {
       // Fall back to disk discovery
@@ -1175,9 +1765,11 @@ async function startServer(): Promise<void> {
     try {
       if (fs.existsSync(seductionVoiceMp3Path)) {
         const sStat = fs.statSync(seductionVoiceMp3Path);
-        const sDur = getVideoDurationSec(seductionVoiceMp3Path, sStat.mtimeMs);
-        if (sDur !== null) {
-          result.seductionAudioDuration = sDur;
+        if (!IS_PROD || !result.seductionAudioDuration) {
+          const sDur = getVideoDurationSec(seductionVoiceMp3Path, sStat.mtimeMs);
+          if (sDur !== null) {
+            result.seductionAudioDuration = sDur;
+          }
         }
         if (!result.seductionAudioUrl) {
           result.seductionAudioUrl = `/voices/female/seduction.mp3?v=${Math.floor(sStat.mtimeMs)}`;
@@ -1187,7 +1779,7 @@ async function startServer(): Promise<void> {
       // ignore
     }
 
-    // Auto-discover all .mp4 files in public/assets/aistudio (and record durations + escape gesture apexes)
+    // Auto-discover all .mp4 files in public/assets/aistudio (in production, reuse pre-baked angel_video_map.json metadata without spawning ffprobe)
     try {
       if (fs.existsSync(aistudioAssetsDir)) {
         for (const entry of fs.readdirSync(aistudioAssetsDir, { withFileTypes: true })) {
@@ -1202,12 +1794,45 @@ async function startServer(): Promise<void> {
           const full = path.join(aistudioAssetsDir, entry.name);
           const stat = fs.statSync(full);
           const cleanPublicPath = `/assets/aistudio/${entry.name}`;
-          const dur = getVideoDurationSec(full, stat.mtimeMs);
-          if (dur !== null && result.videoDurations) {
-            result.videoDurations[cleanPublicPath] = dur;
+          if (result.videoSizes) {
+            result.videoSizes[cleanPublicPath] = stat.size;
+          }
+          let dur: number | null = result.videoDurations?.[cleanPublicPath] ?? null;
+          if (!IS_PROD || dur === null) {
+            const probedDur = getVideoDurationSec(full, stat.mtimeMs);
+            if (probedDur !== null) {
+              dur = probedDur;
+              if (result.videoDurations) {
+                result.videoDurations[cleanPublicPath] = probedDur;
+              }
+            }
+          }
+          if (result.videoOptimized) {
+            const memOpt = recordedVideoOptByPath.get(cleanPublicPath);
+            const diskOpt = persistedOpt[cleanPublicPath];
+            if (memOpt && memOpt.size === stat.size) {
+              result.videoOptimized[cleanPublicPath] = memOpt;
+            } else if (diskOpt && diskOpt.size === stat.size) {
+              result.videoOptimized[cleanPublicPath] = diskOpt;
+            } else if (!IS_PROD) {
+              const dims = getVideoDimensions(full, stat.mtimeMs);
+              const kbps = dur && dur > 0 ? (stat.size * 8) / (dur * 1000) : 9999;
+              const autoOptimized =
+                Boolean(dims && dims.width === 554 && dims.height === 740 && kbps <= 2300);
+              const inferred: StoredVideoOptimizedInfo = {
+                size: stat.size,
+                crf: autoOptimized ? 21 : 0,
+                width: dims?.width || 0,
+                height: dims?.height || 0,
+              };
+              result.videoOptimized[cleanPublicPath] = inferred;
+              recordedVideoOptByPath.set(cleanPublicPath, inferred);
+            }
           }
 
-          const m = /^angel_(idle|default|group|case|escape)_([a-z0-9_]+)\.mp4$/i.exec(entry.name);
+          const m = /^angel_(idle|mouse_idle|default|group|case|escape)_([a-z0-9_]+)\.mp4$/i.exec(
+            entry.name,
+          );
           if (!m) continue;
           const kind = m[1].toLowerCase();
           const key = m[2].toLowerCase();
@@ -1216,32 +1841,56 @@ async function startServer(): Promise<void> {
           if (kind === 'idle') {
             const normKey = key === 'idle_listening' ? 'idle_1' : key;
             const existing = result.idleVariants[normKey];
-            if (!existing || stripQueryFromAssetUrl(existing) === entry.name) {
+            if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
               result.idleVariants[normKey] = versionedUrl;
+            }
+          } else if (kind === 'mouse_idle') {
+            if (key === 'wake') {
+              const existing = result.mouseIdleWake;
+              if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
+                result.mouseIdleWake = versionedUrl;
+              }
+            } else {
+              const existing = result.mouseIdle;
+              if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
+                result.mouseIdle = versionedUrl;
+              }
+              if (!IS_PROD || result.mouseIdleHoldSec?.[cleanPublicPath] === undefined) {
+                const holdSec = getMouseIdleSleepHoldSec(full, stat.mtimeMs);
+                if (result.mouseIdleHoldSec) {
+                  if (holdSec !== null) {
+                    result.mouseIdleHoldSec[cleanPublicPath] = holdSec;
+                  } else {
+                    delete result.mouseIdleHoldSec[cleanPublicPath];
+                  }
+                }
+              }
             }
           } else if (kind === 'default') {
             const existing = result.defaultSpeaking;
-            if (!existing || stripQueryFromAssetUrl(existing) === entry.name) {
+            if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
               result.defaultSpeaking = versionedUrl;
             }
           } else if (kind === 'group') {
             const existing = result.groups[key];
-            if (!existing || stripQueryFromAssetUrl(existing) === entry.name) {
+            if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
               result.groups[key] = versionedUrl;
             }
           } else if (kind === 'case') {
             const existing = result.cases[key];
-            if (!existing || stripQueryFromAssetUrl(existing) === entry.name) {
+            if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
               result.cases[key] = versionedUrl;
             }
           } else if (kind === 'escape') {
             const existing = result.escapes[key];
-            if (!existing || stripQueryFromAssetUrl(existing) === entry.name) {
+            if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
               result.escapes[key] = versionedUrl;
             }
-            const apex = getEscapeGestureApexSec(full, stat.mtimeMs);
-            if (apex !== null && result.escapeApexes) {
-              result.escapeApexes[cleanPublicPath] = apex;
+            if (!IS_PROD || result.escapeApexes?.[cleanPublicPath] === undefined) {
+              const apex = getEscapeGestureApexSec(full, stat.mtimeMs);
+              if (apex !== null && result.escapeApexes) {
+                result.escapeApexes[cleanPublicPath] = apex;
+              }
             }
           }
         }
@@ -1255,6 +1904,18 @@ async function startServer(): Promise<void> {
       const base = stripQueryFromAssetUrl(v);
       if (base && base.startsWith('angel_') && !fs.existsSync(path.join(aistudioAssetsDir, base))) {
         delete result.idleVariants[k];
+      }
+    }
+    if (result.mouseIdle) {
+      const base = stripQueryFromAssetUrl(result.mouseIdle);
+      if (base && base.startsWith('angel_') && !fs.existsSync(path.join(aistudioAssetsDir, base))) {
+        delete result.mouseIdle;
+      }
+    }
+    if (result.mouseIdleWake) {
+      const base = stripQueryFromAssetUrl(result.mouseIdleWake);
+      if (base && base.startsWith('angel_') && !fs.existsSync(path.join(aistudioAssetsDir, base))) {
+        delete result.mouseIdleWake;
       }
     }
     if (result.defaultSpeaking) {
@@ -1307,16 +1968,30 @@ async function startServer(): Promise<void> {
     const toDisk: StoredAngelVideoMap = {
       idle: data.idle,
       idleVariants: data.idleVariants,
+      mouseIdle: data.mouseIdle,
+      mouseIdleWake: data.mouseIdleWake,
+      mouseIdleTimeoutSec:
+        typeof data.mouseIdleTimeoutSec === 'number' ? data.mouseIdleTimeoutSec : 20,
+      mouseIdleHoldSec: data.mouseIdleHoldSec || {},
       defaultSpeaking: data.defaultSpeaking,
       groups: data.groups,
       cases: data.cases,
       escapes: data.escapes || {},
-      escapeEnabled: data.escapeEnabled || { point_you: true, push_button: true },
+      escapeEnabled: data.escapeEnabled || {
+        point_you: true,
+        point_me: true,
+        push_button: true,
+      },
       caseEscapeCues: data.caseEscapeCues || {},
       lipSync: data.lipSync || { defaultEnabled: true, groups: {}, cases: {} },
       videoDurations: data.videoDurations || {},
+      videoSizes: data.videoSizes || {},
+      videoOptimized: data.videoOptimized || {},
+      compressionPreset: data.compressionPreset || 'lossless_21',
       escapeApexes: data.escapeApexes || {},
-      videoMaxPlays: data.videoMaxPlays || { 'case:tree_browse': 2, 'case:seduction': 1 },
+      videoMaxPlays: data.videoMaxPlays || {
+        'case:tree_browse': 2,
+      },
       videoPlayToEnd: data.videoPlayToEnd || { 'case:seduction': true },
       seductionAudioUrl: data.seductionAudioUrl,
       seductionAudioDuration: data.seductionAudioDuration,
@@ -1328,12 +2003,53 @@ async function startServer(): Promise<void> {
     fs.writeFileSync(angelVideoMapPath, JSON.stringify(toDisk, null, 2), 'utf8');
   };
 
-  // Sync public/assets/aistudio/angel_video_map.json on startup so static builds & ZIP exports stay 100% self-contained
-  try {
-    writeAngelVideoMap(readAngelVideoMap());
-  } catch {
-    // Ignore read-only filesystem in restricted environments
+  // Sync public/assets/aistudio/angel_video_map.json in dev so static builds & ZIP exports stay 100% self-contained
+  if (!IS_PROD) {
+    try {
+      writeAngelVideoMap(readAngelVideoMap());
+    } catch {
+      // Ignore read-only filesystem in restricted environments
+    }
   }
+
+  // ============================================================================
+  // Video Studio Cross-Site Request Guard (No Password Prompt; 5-Tap Title Unlock)
+  // ============================================================================
+  const requireStudioDeveloperAuth = (
+    req: express.Request,
+    res: express.Response,
+  ): boolean => {
+    const requestedWith = String(req.headers['x-requested-with'] || '');
+    if (requestedWith !== 'ChessAngelVideoStudio') {
+      res.status(403).json({ error: 'Forbidden cross-origin Studio request.' });
+      return false;
+    }
+
+    const originHeader = req.headers.origin;
+    if (typeof originHeader === 'string' && originHeader.length > 0) {
+      try {
+        const originHost = new URL(originHeader).host.toLowerCase();
+        const forwardedHost = String(req.headers['x-forwarded-host'] || '')
+          .split(',')[0]
+          .trim()
+          .toLowerCase();
+        const directHost = String(req.headers.host || '').trim().toLowerCase();
+        if (
+          originHost &&
+          ((forwardedHost && originHost !== forwardedHost && originHost !== directHost) ||
+            (!forwardedHost && directHost && originHost !== directHost))
+        ) {
+          res.status(403).json({ error: 'Cross-origin Studio mutation blocked.' });
+          return false;
+        }
+      } catch {
+        res.status(403).json({ error: 'Invalid Origin header.' });
+        return false;
+      }
+    }
+
+    return true;
+  };
 
   app.get('/api/angel-videos', (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -1341,6 +2057,7 @@ async function startServer(): Promise<void> {
   });
 
   app.put('/api/angel-videos/lip-sync', express.json(), (req, res) => {
+    if (!requireStudioDeveloperAuth(req, res)) return;
     const body = (req.body || {}) as {
       scope?: string;
       key?: string;
@@ -1350,10 +2067,6 @@ async function startServer(): Promise<void> {
     const key = String(body.key || '');
     const rule = String(body.rule || '');
 
-    if (IS_PROD) {
-      res.status(403).json({ error: 'Video Studio editing is disabled in production.' });
-      return;
-    }
     if (!['global', 'group', 'case'].includes(scope)) {
       res.status(400).json({ error: 'Invalid lip-sync scope.' });
       return;
@@ -1362,7 +2075,7 @@ async function startServer(): Promise<void> {
       res.status(400).json({ error: 'Invalid lip-sync rule.' });
       return;
     }
-    if (scope !== 'global' && !/^[a-z0-9_]{1,40}$/.test(key)) {
+    if (scope !== 'global' && !isSafeMapKey(key)) {
       res.status(400).json({ error: 'Invalid lip-sync target key.' });
       return;
     }
@@ -1392,20 +2105,22 @@ async function startServer(): Promise<void> {
     res.json({ ok: true, map });
   });
 
+  const VALID_ESCAPE_CUE_KEYS = ['point_you', 'point_me', 'push_button'] as const;
+
   app.put('/api/angel-videos/escape-toggle', express.json(), (req, res) => {
-    if (IS_PROD) {
-      res.status(403).json({ error: 'Video Studio editing is disabled in production.' });
-      return;
-    }
+    if (!requireStudioDeveloperAuth(req, res)) return;
     const body = (req.body || {}) as { key?: string; enabled?: boolean };
     const key = String(body.key || '');
-    if (!['point_you', 'push_button'].includes(key) || typeof body.enabled !== 'boolean') {
+    if (
+      !VALID_ESCAPE_CUE_KEYS.includes(key as (typeof VALID_ESCAPE_CUE_KEYS)[number]) ||
+      typeof body.enabled !== 'boolean'
+    ) {
       res.status(400).json({ error: 'Invalid escape toggle payload.' });
       return;
     }
     const map = readAngelVideoMap();
     if (!map.escapeEnabled) {
-      map.escapeEnabled = { point_you: true, push_button: true };
+      map.escapeEnabled = { point_you: true, point_me: true, push_button: true };
     }
     map.escapeEnabled[key] = body.enabled;
     writeAngelVideoMap(map);
@@ -1413,21 +2128,18 @@ async function startServer(): Promise<void> {
   });
 
   app.put('/api/angel-videos/case-cue', express.json(), (req, res) => {
-    if (IS_PROD) {
-      res.status(403).json({ error: 'Video Studio editing is disabled in production.' });
-      return;
-    }
+    if (!requireStudioDeveloperAuth(req, res)) return;
     const body = (req.body || {}) as {
       caseId?: string;
       cueKey?: string;
       rule?: string;
     };
     const caseId = String(body.caseId || '');
-    const cueKey = String(body.cueKey || '') as 'point_you' | 'push_button';
+    const cueKey = String(body.cueKey || '') as 'point_you' | 'point_me' | 'push_button';
     const rule = String(body.rule || '');
     if (
-      !/^[a-z0-9_]{1,40}$/.test(caseId) ||
-      !['point_you', 'push_button'].includes(cueKey) ||
+      !isSafeMapKey(caseId) ||
+      !VALID_ESCAPE_CUE_KEYS.includes(cueKey) ||
       !['on', 'off', 'inherit'].includes(rule)
     ) {
       res.status(400).json({ error: 'Invalid per-case cue payload.' });
@@ -1438,7 +2150,7 @@ async function startServer(): Promise<void> {
     if (!map.caseEscapeCues) {
       map.caseEscapeCues = {};
     }
-    if (!map.caseEscapeCues[caseId]) {
+    if (!Object.hasOwn(map.caseEscapeCues, caseId) || !map.caseEscapeCues[caseId]) {
       map.caseEscapeCues[caseId] = {};
     }
     if (rule === 'inherit') {
@@ -1454,18 +2166,17 @@ async function startServer(): Promise<void> {
   });
 
   app.put('/api/angel-videos/max-plays', express.json(), (req, res) => {
-    if (IS_PROD) {
-      res.status(403).json({ error: 'Video Studio editing is disabled in production.' });
-      return;
-    }
+    if (!requireStudioDeveloperAuth(req, res)) return;
     const body = (req.body || {}) as {
       slotId?: string;
       maxPlays?: number;
     };
     const slotId = String(body.slotId || '');
+    const slotSuffix = slotId.split(':')[1] || '';
     const rawMax = Number(body.maxPlays);
     if (
-      !/^(idle|default|group|case|escape):[a-z0-9_]{1,40}$/.test(slotId) ||
+      !/^(idle|mouse_idle|default|group|case|escape):[a-z0-9_]{1,40}$/.test(slotId) ||
+      !isSafeMapKey(slotSuffix) ||
       !Number.isFinite(rawMax) ||
       rawMax < -1 ||
       rawMax > 999
@@ -1481,7 +2192,12 @@ async function startServer(): Promise<void> {
     }
 
     if (intMax === -1) {
-      if (slotId === 'case:tree_browse') {
+      if (
+        slotId === 'case:tree_browse' ||
+        slotId === 'case:seduction' ||
+        slotId === 'idle:idle_7' ||
+        slotId === 'idle:idle_8'
+      ) {
         map.videoMaxPlays[slotId] = -1;
       } else {
         delete map.videoMaxPlays[slotId];
@@ -1495,17 +2211,16 @@ async function startServer(): Promise<void> {
   });
 
   app.put('/api/angel-videos/play-to-end', express.json(), (req, res) => {
-    if (IS_PROD) {
-      res.status(403).json({ error: 'Video Studio editing is disabled in production.' });
-      return;
-    }
+    if (!requireStudioDeveloperAuth(req, res)) return;
     const body = (req.body || {}) as {
       slotId?: string;
       playToEnd?: boolean;
     };
     const slotId = String(body.slotId || '');
+    const slotSuffix = slotId.split(':')[1] || '';
     if (
-      !/^(idle|default|group|case|escape):[a-z0-9_]{1,40}$/.test(slotId) ||
+      !/^(idle|mouse_idle|default|group|case|escape):[a-z0-9_]{1,40}$/.test(slotId) ||
+      !isSafeMapKey(slotSuffix) ||
       typeof body.playToEnd !== 'boolean'
     ) {
       res.status(400).json({ error: 'Invalid play-to-end payload.' });
@@ -1516,23 +2231,28 @@ async function startServer(): Promise<void> {
     if (!map.videoPlayToEnd) {
       map.videoPlayToEnd = { 'case:seduction': true };
     }
-    if (body.playToEnd) {
-      map.videoPlayToEnd[slotId] = true;
-    } else if (/^case:seduction(_\d+)?$/.test(slotId)) {
-      map.videoPlayToEnd[slotId] = false;
-    } else {
-      delete map.videoPlayToEnd[slotId];
-    }
+    // Persist both explicit `true` (No Cut) and explicit `false` (Developer Consented to Allow Cut)
+    map.videoPlayToEnd[slotId] = body.playToEnd;
 
     writeAngelVideoMap(map);
     res.json({ ok: true, map });
   });
 
-  app.put('/api/angel-videos/seduction-mode', express.json(), (req, res) => {
-    if (IS_PROD) {
-      res.status(403).json({ error: 'Video Studio editing is disabled in production.' });
+  app.put('/api/angel-videos/mouse-idle-timeout', express.json(), (req, res) => {
+    if (!requireStudioDeveloperAuth(req, res)) return;
+    const raw = Number((req.body || {}).timeoutSec);
+    if (!Number.isFinite(raw) || (raw !== 0 && (raw < 5 || raw > 600))) {
+      res.status(400).json({ error: 'Invalid mouse-idle timeout.' });
       return;
     }
+    const map = readAngelVideoMap();
+    map.mouseIdleTimeoutSec = Math.round(raw);
+    writeAngelVideoMap(map);
+    res.json({ ok: true, map });
+  });
+
+  app.put('/api/angel-videos/seduction-mode', express.json(), (req, res) => {
+    if (!requireStudioDeveloperAuth(req, res)) return;
     const mode = String((req.body || {}).mode || '');
     if (
       mode !== 'balanced' &&
@@ -1553,10 +2273,7 @@ async function startServer(): Promise<void> {
     '/api/angel-videos/seduction-audio',
     express.raw({ type: '*/*', limit: '50mb' }),
     (req, res) => {
-      if (IS_PROD) {
-        res.status(403).json({ error: 'Video Studio editing is disabled in production.' });
-        return;
-      }
+      if (!requireStudioDeveloperAuth(req, res)) return;
       const body = req.body;
       if (!Buffer.isBuffer(body) || body.length < 64) {
         res.status(400).json({ error: 'Empty or invalid audio file.' });
@@ -1631,20 +2348,182 @@ async function startServer(): Promise<void> {
     },
   );
 
+  app.put('/api/angel-videos/compression-preset', express.json(), (req, res) => {
+    if (!requireStudioDeveloperAuth(req, res)) return;
+    const preset = String((req.body || {}).preset || '') as AngelCompressionPreset;
+    if (!['lossless_21', 'balanced_24', 'mobile_27', 'mute_only'].includes(preset)) {
+      res.status(400).json({ error: 'Invalid compression preset.' });
+      return;
+    }
+    const map = readAngelVideoMap();
+    map.compressionPreset = preset;
+    writeAngelVideoMap(map);
+    res.json({ ok: true, map });
+  });
+
+  app.post('/api/angel-videos/compress', express.json(), async (req, res) => {
+    if (!requireStudioDeveloperAuth(req, res)) return;
+    const body = (req.body || {}) as {
+      preset?: AngelCompressionPreset;
+      targetUrl?: string;
+      force?: boolean;
+    };
+    const initialMap = readAngelVideoMap();
+    const chosenPreset: AngelCompressionPreset =
+      body.preset && ['lossless_21', 'balanced_24', 'mobile_27'].includes(body.preset)
+        ? body.preset
+        : initialMap.compressionPreset && initialMap.compressionPreset !== 'mute_only'
+          ? initialMap.compressionPreset
+          : 'lossless_21';
+    const targetCrf = presetToCrf(chosenPreset) ?? 21;
+    const force = Boolean(body.force);
+
+    let targetFileName: string | null = null;
+    if (typeof body.targetUrl === 'string' && body.targetUrl.trim().length > 0) {
+      targetFileName = stripQueryFromAssetUrl(body.targetUrl.trim());
+      if (!targetFileName) {
+        res.status(400).json({ error: 'Target video is not a local Studio MP4 asset.' });
+        return;
+      }
+    }
+
+    try {
+      if (!fs.existsSync(aistudioAssetsDir)) {
+        res.json({
+          ok: true,
+          crf: targetCrf,
+          totalFiles: 0,
+          compressedCount: 0,
+          skippedCount: 0,
+          beforeBytes: 0,
+          afterBytes: 0,
+          map: initialMap,
+        });
+        return;
+      }
+
+      const entries = fs
+        .readdirSync(aistudioAssetsDir, { withFileTypes: true })
+        .filter(
+          (e) =>
+            e.isFile() &&
+            /\.(mp4|webm|mov|m4v)$/i.test(e.name) &&
+            !e.name.includes('.opt.') &&
+            !e.name.includes('.tmp') &&
+            (!targetFileName || e.name === targetFileName),
+        );
+
+      let compressedCount = 0;
+      let skippedCount = 0;
+      let beforeBytes = 0;
+      let afterBytes = 0;
+
+      for (const entry of entries) {
+        const full = path.join(aistudioAssetsDir, entry.name);
+        if (!full.startsWith(aistudioAssetsDir + path.sep)) continue;
+        const cleanPublicPath = `/assets/aistudio/${entry.name}`;
+        const statBefore = fs.statSync(full);
+        beforeBytes += statBefore.size;
+
+        const existingOpt = initialMap.videoOptimized?.[cleanPublicPath];
+        const alreadyAtTarget =
+          !force &&
+          Boolean(
+            existingOpt &&
+              existingOpt.size === statBefore.size &&
+              existingOpt.width === 554 &&
+              existingOpt.height === 740 &&
+              existingOpt.crf >= targetCrf,
+          );
+
+        if (alreadyAtTarget) {
+          skippedCount += 1;
+          afterBytes += statBefore.size;
+          continue;
+        }
+
+        const tmpOpt = path.join(
+          os.tmpdir(),
+          `angel_batch_opt_${process.pid}_${Date.now()}_${entry.name}`,
+        );
+        try {
+          const comp = await compressPortraitMp4Async(full, tmpOpt, {
+            crf: targetCrf,
+            trimEndSec: null,
+            enforceBackdropMatch: true,
+          });
+          const needsDimNormalize =
+            !existingOpt || existingOpt.width !== 554 || existingOpt.height !== 740;
+          if (
+            comp.outBytes > 1000 &&
+            (comp.outBytes < statBefore.size || comp.backdropCalibrated || (needsDimNormalize && force))
+          ) {
+            fs.copyFileSync(tmpOpt, full);
+            const statAfter = fs.statSync(full);
+            verifiedSilentVideos.set(full, statAfter.mtimeMs);
+            afterBytes += statAfter.size;
+            compressedCount += 1;
+            const info: StoredVideoOptimizedInfo = {
+              size: statAfter.size,
+              crf: targetCrf,
+              width: 554,
+              height: 740,
+            };
+            recordedVideoOptByPath.set(cleanPublicPath, info);
+          } else {
+            skippedCount += 1;
+            afterBytes += statBefore.size;
+            const dims = getVideoDimensions(full, statBefore.mtimeMs);
+            const info: StoredVideoOptimizedInfo = {
+              size: statBefore.size,
+              crf: Math.max(existingOpt?.crf || 0, targetCrf),
+              width: dims?.width || 554,
+              height: dims?.height || 740,
+            };
+            recordedVideoOptByPath.set(cleanPublicPath, info);
+          }
+        } finally {
+          try {
+            if (fs.existsSync(tmpOpt)) fs.unlinkSync(tmpOpt);
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      const updatedMap = readAngelVideoMap();
+      if (body.preset && ['lossless_21', 'balanced_24', 'mobile_27'].includes(body.preset)) {
+        updatedMap.compressionPreset = body.preset;
+      }
+      writeAngelVideoMap(updatedMap);
+
+      res.json({
+        ok: true,
+        crf: targetCrf,
+        totalFiles: entries.length,
+        compressedCount,
+        skippedCount,
+        beforeBytes,
+        afterBytes,
+        map: updatedMap,
+      });
+    } catch (err) {
+      console.error('Failed to compress Studio portrait videos:', err);
+      res.status(500).json({ error: 'Video compression routine failed.' });
+    }
+  });
+
   app.post(
     '/api/angel-videos/:kind/:key',
     express.raw({ type: '*/*', limit: '80mb' }),
-    (req, res) => {
-      if (IS_PROD) {
-        res.status(403).json({ error: 'Video Studio editing is disabled in production.' });
-        return;
-      }
+    async (req, res) => {
+      if (!requireStudioDeveloperAuth(req, res)) return;
       const kind = String(req.params.kind || '');
       const rawKey = String(req.params.key || '');
       const key = kind === 'idle' && rawKey === 'idle_listening' ? 'idle_1' : rawKey;
       if (
-        !['idle', 'default', 'group', 'case', 'escape'].includes(kind) ||
-        !/^[a-z0-9_]{1,40}$/.test(key)
+        !['idle', 'mouse_idle', 'default', 'group', 'case', 'escape'].includes(kind) ||
+        !isSafeMapKey(key)
       ) {
         res.status(400).json({ error: 'Invalid video slot key.' });
         return;
@@ -1658,6 +2537,7 @@ async function startServer(): Promise<void> {
 
       fs.mkdirSync(aistudioAssetsDir, { recursive: true });
       const fileName = `angel_${kind}_${key}.mp4`;
+      const cleanUploadedPath = `/assets/aistudio/${fileName}`;
       const destAbs = path.join(aistudioAssetsDir, fileName);
       if (!destAbs.startsWith(aistudioAssetsDir + path.sep)) {
         res.status(400).json({ error: 'Invalid destination path.' });
@@ -1675,62 +2555,13 @@ async function startServer(): Promise<void> {
 
       try {
         fs.writeFileSync(tmpIn, body);
+        const inBytesRaw = body.length;
         try {
-          // Detect if the uploaded video fades/cuts to black at the tail so Chess Angel never disappears
-          let trimEndSec: number | null = null;
-          try {
-            const durOut = execFileSync(
-              'ffprobe',
-              [
-                '-v',
-                'error',
-                '-show_entries',
-                'format=duration',
-                '-of',
-                'default=noprint_wrappers=1:nokey=1',
-                tmpIn,
-              ],
-              { encoding: 'utf8', timeout: 5000 },
-            ).trim();
-            const duration = parseFloat(durOut);
-            if (Number.isFinite(duration) && duration > 1.2) {
-              const bd = spawnSync(
-                'ffmpeg',
-                [
-                  '-hide_banner',
-                  '-i',
-                  tmpIn,
-                  '-vf',
-                  'blackdetect=d=0.03:pix_th=0.12',
-                  '-an',
-                  '-f',
-                  'null',
-                  '-',
-                ],
-                { encoding: 'utf8', timeout: 12000 },
-              );
-              const logText = `${bd.stdout || ''}\n${bd.stderr || ''}`;
-              const regex = /black_start:([0-9.]+)\s+black_end:([0-9.]+)/g;
-              let match: RegExpExecArray | null;
-              while ((match = regex.exec(logText)) !== null) {
-                const bStart = parseFloat(match[1]);
-                const bEnd = parseFloat(match[2]);
-                if (
-                  Number.isFinite(bStart) &&
-                  Number.isFinite(bEnd) &&
-                  bStart >= 0.8 &&
-                  bEnd >= duration - 0.2
-                ) {
-                  trimEndSec = Math.max(0.8, bStart - 0.08);
-                }
-              }
-            }
-          } catch {
-            // Ignore blackdetect errors and proceed with standard silent remux
-          }
+          // Never auto-trim uploaded .mp4 files on disk without developer consent;
+          // dark mid-clip choreography (e.g. ducking out of frame in lost_queen) and full tails are preserved 100%.
 
           // Special exception for "seduction": before stripping video sound (-an), automatically separate
-          // any embedded audio track into "seduction.mp3" so her original video voice/sound plays in sync!
+          // any embedded audio track into "<key>.mp3" so her original video voice/sound plays in sync!
           let extractedSeductionAudio = false;
           let extractedAudioUrl: string | undefined;
           let extractedAudioDuration: number | undefined;
@@ -1767,7 +2598,6 @@ async function startServer(): Promise<void> {
                   'error',
                   '-i',
                   tmpIn,
-                  ...(trimEndSec !== null ? ['-to', trimEndSec.toFixed(3)] : []),
                   '-vn',
                   '-ac',
                   '1',
@@ -1806,60 +2636,25 @@ async function startServer(): Promise<void> {
             }
           }
 
-          // Visually lossless 3:4 portrait compression (554x740, SSIM > 0.99, ~4.5x smaller than raw uploads)
-          // + optional frame-exact cut before trailing black frames + 100% audio removal (-an)
-          const encodeArgs = [
-            '-y',
-            '-loglevel',
-            'error',
-            '-i',
-            tmpIn,
-            ...(trimEndSec !== null ? ['-to', trimEndSec.toFixed(3)] : []),
-            '-vf',
-            'scale=554:740:force_original_aspect_ratio=increase:flags=lanczos,crop=554:740',
-            '-c:v',
-            'libx264',
-            '-preset',
-            'slow',
-            '-crf',
-            '21',
-            '-tune',
-            'film',
-            '-pix_fmt',
-            'yuv420p',
-            '-an',
-            '-movflags',
-            '+faststart',
-            tmpOut,
-          ];
-          execFileSync('ffmpeg', encodeArgs, { timeout: 60000 });
-
-          const inSize = fs.statSync(tmpIn).size;
-          const outSize = fs.statSync(tmpOut).size;
-          if (trimEndSec === null && outSize >= inSize) {
-            // Input was already smaller than CRF 21: keep original video stream, strip audio + faststart only
-            execFileSync(
-              'ffmpeg',
-              [
-                '-y',
-                '-loglevel',
-                'error',
-                '-i',
-                tmpIn,
-                '-c:v',
-                'copy',
-                '-an',
-                '-movflags',
-                '+faststart',
-                tmpOut,
-              ],
-              { timeout: 20000 },
-            );
-          }
+          const preMap = readAngelVideoMap();
+          const activePreset = preMap.compressionPreset || 'lossless_21';
+          const targetCrf = presetToCrf(activePreset);
+          const comp = await compressPortraitMp4Async(tmpIn, tmpOut, {
+            crf: targetCrf,
+            trimEndSec: null,
+            enforceBackdropMatch: true,
+          });
 
           fs.copyFileSync(tmpOut, destAbs);
           const stat = fs.statSync(destAbs);
           verifiedSilentVideos.set(destAbs, stat.mtimeMs);
+          const dims = getVideoDimensions(destAbs, stat.mtimeMs);
+          recordedVideoOptByPath.set(cleanUploadedPath, {
+            size: stat.size,
+            crf: comp.crfApplied,
+            width: dims?.width || 554,
+            height: dims?.height || 740,
+          });
 
           const publicUrl = `/assets/aistudio/${fileName}?v=${Date.now()}`;
           const map = readAngelVideoMap();
@@ -1868,12 +2663,29 @@ async function startServer(): Promise<void> {
             if (key === 'idle_1') {
               map.idle = publicUrl;
             }
+          } else if (kind === 'mouse_idle') {
+            if (key === 'wake') {
+              map.mouseIdleWake = publicUrl;
+            } else {
+              map.mouseIdle = publicUrl;
+              const freshHold = getMouseIdleSleepHoldSec(destAbs, stat.mtimeMs);
+              if (!map.mouseIdleHoldSec) map.mouseIdleHoldSec = {};
+              if (freshHold !== null) {
+                map.mouseIdleHoldSec[cleanUploadedPath] = freshHold;
+              } else {
+                delete map.mouseIdleHoldSec[cleanUploadedPath];
+              }
+            }
           } else if (kind === 'default') {
             map.defaultSpeaking = publicUrl;
           } else if (kind === 'group') {
             map.groups[key] = publicUrl;
           } else if (kind === 'escape') {
             map.escapes[key] = publicUrl;
+            const freshApex = getEscapeGestureApexSec(destAbs, stat.mtimeMs);
+            if (freshApex !== null && map.escapeApexes) {
+              map.escapeApexes[cleanUploadedPath] = freshApex;
+            }
           } else {
             map.cases[key] = publicUrl;
           }
@@ -1893,7 +2705,16 @@ async function startServer(): Promise<void> {
           }
           writeAngelVideoMap(map);
 
-          res.json({ ok: true, url: publicUrl, extractedAudio: extractedSeductionAudio, map });
+          res.json({
+            ok: true,
+            url: publicUrl,
+            extractedAudio: extractedSeductionAudio,
+            inBytes: comp.inBytes,
+            outBytes: stat.size,
+            compressed: stat.size < comp.inBytes,
+            crf: comp.crfApplied,
+            map,
+          });
           return;
         } catch {
           // Fallback if container codec needs re-mux or ffmpeg unavailable: save & run sanitizer
@@ -1911,6 +2732,12 @@ async function startServer(): Promise<void> {
           if (key === 'idle_1') {
             map.idle = publicUrl;
           }
+        } else if (kind === 'mouse_idle') {
+          if (key === 'wake') {
+            map.mouseIdleWake = publicUrl;
+          } else {
+            map.mouseIdle = publicUrl;
+          }
         } else if (kind === 'default') {
           map.defaultSpeaking = publicUrl;
         } else if (kind === 'group') {
@@ -1922,7 +2749,16 @@ async function startServer(): Promise<void> {
         }
         writeAngelVideoMap(map);
 
-        res.json({ ok: true, url: publicUrl, extractedAudio: false, map });
+        res.json({
+          ok: true,
+          url: publicUrl,
+          extractedAudio: false,
+          inBytes: inBytesRaw,
+          outBytes: stat.size,
+          compressed: stat.size < inBytesRaw,
+          crf: 0,
+          map,
+        });
       } catch (err) {
         console.error('Failed to store silent Chess Angel video:', err);
         res.status(500).json({ error: 'Failed to process uploaded video.' });
@@ -1942,22 +2778,20 @@ async function startServer(): Promise<void> {
   );
 
   app.delete('/api/angel-videos/:kind/:key', (req, res) => {
-    if (IS_PROD) {
-      res.status(403).json({ error: 'Video Studio editing is disabled in production.' });
-      return;
-    }
+    if (!requireStudioDeveloperAuth(req, res)) return;
     const kind = String(req.params.kind || '');
     const rawKey = String(req.params.key || '');
     const key = kind === 'idle' && rawKey === 'idle_listening' ? 'idle_1' : rawKey;
     if (
-      !['idle', 'default', 'group', 'case', 'escape'].includes(kind) ||
-      !/^[a-z0-9_]{1,40}$/.test(key)
+      !['idle', 'mouse_idle', 'default', 'group', 'case', 'escape'].includes(kind) ||
+      !isSafeMapKey(key)
     ) {
       res.status(400).json({ error: 'Invalid video slot key.' });
       return;
     }
 
     const fileName = `angel_${kind}_${key}.mp4`;
+    const cleanDeletedPath = `/assets/aistudio/${fileName}`;
     const destAbs = path.join(aistudioAssetsDir, fileName);
     if (destAbs.startsWith(aistudioAssetsDir + path.sep) && fs.existsSync(destAbs)) {
       try {
@@ -1982,6 +2816,15 @@ async function startServer(): Promise<void> {
       delete map.idleVariants[key];
       if (key === 'idle_1') {
         delete map.idle;
+      }
+    } else if (kind === 'mouse_idle') {
+      if (key === 'wake') {
+        delete map.mouseIdleWake;
+      } else {
+        delete map.mouseIdle;
+        if (map.mouseIdleHoldSec) {
+          delete map.mouseIdleHoldSec[cleanDeletedPath];
+        }
       }
     } else if (kind === 'default') {
       delete map.defaultSpeaking;
@@ -2079,287 +2922,18 @@ async function startServer(): Promise<void> {
     res.sendFile(thinkingTreeMp4Path);
   });
 
-  const buildWindowsPlayBat = (): string =>
-    [
-      '@echo off',
-      'setlocal EnableExtensions',
-      'title ChessAngel3D',
-      'cd /d "%~dp0"',
-      '',
-      'where node >nul 2>&1',
-      'if errorlevel 1 (',
-      '  if exist "%ProgramFiles%\\nodejs\\node.exe" set "PATH=%ProgramFiles%\\nodejs;%PATH%"',
-      '  if exist "%LOCALAPPDATA%\\Programs\\nodejs\\node.exe" set "PATH=%LOCALAPPDATA%\\Programs\\nodejs;%PATH%"',
-      ')',
-      '',
-      'if not exist "node_modules" (',
-      '  call "%~dp0install-and-play.bat"',
-      '  exit /b %errorlevel%',
-      ')',
-      'if not exist "dist\\index.html" (',
-      '  call "%~dp0install-and-play.bat"',
-      '  exit /b %errorlevel%',
-      ')',
-      '',
-      'rem If ChessAngel3D is already running on port 3000, just open the browser',
-      'powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 http://localhost:3000/api/health; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1',
-      'if not errorlevel 1 (',
-      '  echo ChessAngel3D is already running. Opening http://localhost:3000 ...',
-      '  start "" "http://localhost:3000"',
-      '  exit /b 0',
-      ')',
-      '',
-      'echo ============================================================',
-      'echo   ChessAngel3D is starting...',
-      'echo   Browser URL: http://localhost:3000',
-      'echo   Keep this window open while playing. Close it to stop.',
-      'echo ============================================================',
-      'echo.',
-      '',
-      'set "NODE_ENV=production"',
-      'set "PORT=3000"',
-      'start "" /b cmd /c "timeout /t 2 /nobreak >nul && start http://localhost:3000"',
-      '',
-      'if exist "node_modules\\.bin\\tsx.cmd" (',
-      '  call "node_modules\\.bin\\tsx.cmd" server.ts',
-      ') else (',
-      '  call npx tsx server.ts',
-      ')',
-      '',
-      'if errorlevel 1 (',
-      '  echo.',
-      '  echo ChessAngel3D stopped with an error.',
-      '  pause',
-      ')',
-      'exit /b %errorlevel%',
-      '',
-    ].join('\r\n');
-
-  const buildWindowsInstallBat = (): string =>
-    [
-      '@echo off',
-      'setlocal EnableExtensions EnableDelayedExpansion',
-      'title ChessAngel3D - Windows Installer',
-      'cd /d "%~dp0"',
-      '',
-      'echo ============================================================',
-      'echo   ChessAngel3D - One-Click Windows Installer',
-      'echo ============================================================',
-      'echo.',
-      '',
-      'if not exist "package.json" (',
-      '  echo [ERROR] package.json was not found in this folder.',
-      '  echo Please extract the full chessangel3d.zip archive first, then run',
-      '  echo install-and-play.bat from inside the extracted chessangel3d folder.',
-      '  echo.',
-      '  pause',
-      '  exit /b 1',
-      ')',
-      '',
-      'echo [1/4] Checking Node.js installation...',
-      'where node >nul 2>&1',
-      'if errorlevel 1 (',
-      '  if exist "%ProgramFiles%\\nodejs\\node.exe" set "PATH=%ProgramFiles%\\nodejs;%PATH%"',
-      '  if exist "%LOCALAPPDATA%\\Programs\\nodejs\\node.exe" set "PATH=%LOCALAPPDATA%\\Programs\\nodejs;%PATH%"',
-      ')',
-      '',
-      'where node >nul 2>&1',
-      'if errorlevel 1 (',
-      '  echo Node.js was not found. Attempting automatic install via winget...',
-      '  where winget >nul 2>&1',
-      '  if not errorlevel 1 (',
-      '    winget install -e --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements',
-      '    if exist "%ProgramFiles%\\nodejs\\node.exe" set "PATH=%ProgramFiles%\\nodejs;%PATH%"',
-      '    if exist "%LOCALAPPDATA%\\Programs\\nodejs\\node.exe" set "PATH=%LOCALAPPDATA%\\Programs\\nodejs;%PATH%"',
-      '  )',
-      ')',
-      '',
-      'where node >nul 2>&1',
-      'if errorlevel 1 (',
-      '  echo.',
-      '  echo [ACTION REQUIRED] Node.js 20+ is needed to run ChessAngel3D locally.',
-      '  echo Opening https://nodejs.org/ in your browser...',
-      '  start "" "https://nodejs.org/"',
-      '  echo Install Node.js LTS, then double-click install-and-play.bat again.',
-      '  echo.',
-      '  pause',
-      '  exit /b 1',
-      ')',
-      '',
-      'for /f "delims=" %%v in (\'node -v\') do echo       Found Node.js %%v',
-      'echo.',
-      '',
-      'echo [2/4] Installing ChessAngel3D packages (this may take 1-2 minutes)...',
-      'call npm install --no-audit --no-fund',
-      'if errorlevel 1 (',
-      '  echo.',
-      '  echo [ERROR] npm install failed. Check your internet connection and try again.',
-      '  echo.',
-      '  pause',
-      '  exit /b 1',
-      ')',
-      'echo.',
-      '',
-      'echo [3/4] Building ChessAngel3D for fast local play...',
-      'call npm run build',
-      'if errorlevel 1 (',
-      '  echo.',
-      '  echo [ERROR] Build failed. See messages above for details.',
-      '  echo.',
-      '  pause',
-      '  exit /b 1',
-      ')',
-      'echo.',
-      '',
-      'echo [4/4] Creating Desktop shortcut (ChessAngel3D)...',
-      'set "APP_DIR=%~dp0"',
-      'if "%APP_DIR:~-1%"=="\\" set "APP_DIR=%APP_DIR:~0,-1%"',
-      'set "TARGET_BAT=%APP_DIR%\\play-chessangel3d.bat"',
-      'if not exist "%TARGET_BAT%" set "TARGET_BAT=%APP_DIR%\\install-and-play.bat"',
-      'powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $desktop = [Environment]::GetFolderPath(\'Desktop\'); $s = $ws.CreateShortcut((Join-Path $desktop \'ChessAngel3D.lnk\')); $s.TargetPath = $env:TARGET_BAT; $s.WorkingDirectory = $env:APP_DIR; $s.Description = \'Play ChessAngel3D\'; $s.Save()" >nul 2>&1',
-      'if errorlevel 1 (',
-      '  echo       Skipped Desktop shortcut. You can launch anytime via play-chessangel3d.bat.',
-      ') else (',
-      '  echo       Desktop shortcut "ChessAngel3D" created!',
-      ')',
-      'echo.',
-      'echo Installation complete! Launching ChessAngel3D...',
-      'echo.',
-      'if exist "%~dp0play-chessangel3d.bat" (',
-      '  call "%~dp0play-chessangel3d.bat"',
-      '  exit /b %errorlevel%',
-      ')',
-      'set "NODE_ENV=production"',
-      'set "PORT=3000"',
-      'start "" /b cmd /c "timeout /t 2 /nobreak >nul && start http://localhost:3000"',
-      'if exist "node_modules\\.bin\\tsx.cmd" (',
-      '  call "node_modules\\.bin\\tsx.cmd" server.ts',
-      ') else (',
-      '  call npx tsx server.ts',
-      ')',
-      'exit /b %errorlevel%',
-      '',
-    ].join('\r\n');
-
-  // Standalone download for the Windows installer batch file
-  app.get('/api/download-bat', (_req, res) => {
-    const content = buildWindowsInstallBat();
-    res.setHeader('Content-Type', 'application/x-bat; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="install-and-play.bat"');
-    res.send(content);
-  });
-
-  // Download the entire game as a clean, runnable ZIP archive (includes Windows .bat installers)
-  app.get('/api/download-game', async (_req, res) => {
-    try {
-      const zip = new JSZip();
-      const rootDir = __dirname;
-      const rootFolder = zip.folder('chessangel3d')!;
-
-      const topLevelFiles = [
-        'package.json',
-        'tsconfig.json',
-        'vite.config.ts',
-        'index.html',
-        'server.ts',
-        'metadata.json',
-        '.env.example',
-        '.gitignore',
-      ];
-
-      for (const fileName of topLevelFiles) {
-        const fullPath = path.join(rootDir, fileName);
-        if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-          rootFolder.file(fileName, fs.readFileSync(fullPath));
-        }
-      }
-
-      const addDirRecursive = (dirRel: string) => {
-        const absDir = path.join(rootDir, dirRel);
-        if (!fs.existsSync(absDir)) return;
-        for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
-          if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'dist') {
-            continue;
-          }
-          const relPath = path.posix.join(dirRel.replace(/\\/g, '/'), entry.name);
-          const absPath = path.join(absDir, entry.name);
-          if (entry.isDirectory()) {
-            addDirRecursive(relPath);
-          } else if (entry.isFile()) {
-            rootFolder.file(relPath, fs.readFileSync(absPath));
-          }
-        }
-      };
-
-      try {
-        writeAngelVideoMap(readAngelVideoMap());
-      } catch {
-        // Ignore if read-only
-      }
-
-      addDirRecursive('src');
-      addDirRecursive('public');
-
-      rootFolder.file('install-and-play.bat', buildWindowsInstallBat());
-      rootFolder.file('play-chessangel3d.bat', buildWindowsPlayBat());
-
-      const readme = [
-        '# ChessAngel3D',
-        '',
-        'A full-stack 3D chess application featuring hand-carved wooden Staunton pieces, Chess Angel (a mathematical routine opponent with bundled offline female voice commentary & 3D search-tree animations), real-time multiplayer, game replays, and an integrated multi-PV analysis engine.',
-        '',
-        '## Windows Easy Install (One-Click)',
-        '',
-        '1. Extract this ZIP archive to any folder (for example `C:\\Games\\chessangel3d`).',
-        '2. Double-click **`install-and-play.bat`**.',
-        '   - Automatically checks for Node.js (and installs Node.js LTS via `winget` if missing).',
-        '   - Installs dependencies and builds ChessAngel3D for fast local play.',
-        '   - Creates a **ChessAngel3D** shortcut on your Windows Desktop.',
-        '   - Opens ChessAngel3D automatically in your browser at `http://localhost:3000`.',
-        '3. Next time, just double-click the **ChessAngel3D** Desktop shortcut (or `play-chessangel3d.bat`).',
-        '',
-        '## Manual Start (macOS / Linux / Windows)',
-        '',
-        '1. Make sure you have Node.js 20+ installed.',
-        '2. Install dependencies:',
-        '   ```bash',
-        '   npm install',
-        '   ```',
-        '3. Build and start the game server:',
-        '   ```bash',
-        '   npm run build',
-        '   NODE_ENV=production npx tsx server.ts',
-        '   ```',
-        '4. Open http://localhost:3000 in your browser.',
-        '',
-        '## Offline App Mode',
-        '',
-        'Once running in Chrome, Edge, or Safari, you can install ChessAngel3D to your desktop or home screen as an offline-capable PWA.',
-        '',
-      ].join('\n');
-      rootFolder.file('README.md', readme);
-
-      const buffer = await zip.generateAsync({
-        type: 'nodebuffer',
-        compression: 'DEFLATE',
-        compressionOptions: { level: 6 },
-      });
-
-      res.setHeader('Content-Type', 'application/zip');
-      res.setHeader('Content-Disposition', 'attachment; filename="chessangel3d.zip"');
-      res.setHeader('Content-Length', String(buffer.length));
-      res.send(buffer);
-    } catch (err) {
-      console.error('Failed to package game ZIP:', err);
-      res.status(500).json({ error: 'Unable to package game archive.' });
-    }
+  // Application copy protection: reject archive and installer download endpoints
+  app.all(['/api/download-game', '/api/download-bat'], (_req, res) => {
+    res.status(403).json({
+      error: 'Protected application: downloading or copying this game is disabled.',
+    });
   });
 
   const server = http.createServer(app);
 
   // Attach WebSocket server on dedicated /ws endpoint via explicit upgrade routing
-  const wss = new WebSocketServer({ noServer: true });
-  const viteHmrWss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+  const viteHmrWss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
   viteHmrWss.on('connection', (ws) => {
     if (ws.readyState === WebSocket.OPEN) {
@@ -2385,7 +2959,7 @@ async function startServer(): Promise<void> {
   });
 
   wss.on('connection', (ws) => {
-    const tempId = `p_${Math.random().toString(36).slice(2, 10)}`;
+    const tempId = `p_${crypto.randomBytes(16).toString('hex')}`;
     clients.set(ws, {
       ws,
       clientId: tempId,

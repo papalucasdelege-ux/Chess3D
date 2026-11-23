@@ -14,18 +14,14 @@ interface MultiplayerListener {
   onMessage: (msg: ServerToClientMessage) => void;
 }
 
-const CLIENT_ID_STORAGE_KEY = 'staunton3d_client_id';
-
-function getOrCreateClientId(): string {
-  try {
-    const existing = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
-    if (existing && existing.length >= 6) return existing;
-    const fresh = `st_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
-    localStorage.setItem(CLIENT_ID_STORAGE_KEY, fresh);
-    return fresh;
-  } catch {
-    return `st_${Math.random().toString(36).slice(2, 12)}`;
+function createInMemoryClientId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    return `st_${hex}`;
   }
+  return `st_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
 }
 
 export class MultiplayerClient {
@@ -42,7 +38,7 @@ export class MultiplayerClient {
   constructor(listener: MultiplayerListener, initialName: string) {
     this.listener = listener;
     this.playerName = initialName;
-    this.clientId = getOrCreateClientId();
+    this.clientId = createInMemoryClientId();
   }
 
   public connect(): void {

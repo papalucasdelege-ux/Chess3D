@@ -39,27 +39,45 @@ export type AngelExpressionGroup =
   | 'warning'
   | 'attack'
   | 'impressed'
-  | 'ending';
+  | 'ending'
+  | 'controls';
 
 export type LipSyncRule = 'on' | 'off';
 
-export type AngelEscapeCueKey = 'point_you' | 'push_button';
+export type AngelEscapeCueKey = 'point_you' | 'point_me' | 'push_button';
+
+export const ALL_ESCAPE_CUE_KEYS: readonly AngelEscapeCueKey[] = [
+  'point_you',
+  'point_me',
+  'push_button',
+] as const;
 
 export type CaseEscapeCueRule = 'on' | 'off';
 
-export type AngelEscapeSlotKey =
-  | 'point_you'
-  | 'point_you_2'
-  | 'push_button'
-  | 'push_button_2';
+export type AngelEscapeSlotKey = AngelEscapeCueKey | `${AngelEscapeCueKey}_${number}`;
 
-export const ESCAPE_CUE_SLOT_KEYS: Record<
-  AngelEscapeCueKey,
-  readonly [AngelEscapeSlotKey, AngelEscapeSlotKey]
-> = {
-  point_you: ['point_you', 'point_you_2'],
-  push_button: ['push_button', 'push_button_2'],
+export const ESCAPE_CUE_SLOT_KEYS: Record<AngelEscapeCueKey, readonly AngelEscapeSlotKey[]> = {
+  point_you: ['point_you', 'point_you_2', 'point_you_3', 'point_you_4'],
+  point_me: ['point_me', 'point_me_2', 'point_me_3'],
+  push_button: ['push_button', 'push_button_2', 'push_button_3', 'push_button_4'],
 };
+
+export function parseEscapeSlotNumber(cueKey: AngelEscapeCueKey, key: string): number {
+  if (key === cueKey) return 1;
+  const prefix = `${cueKey}_`;
+  if (key.startsWith(prefix)) {
+    const tail = key.slice(prefix.length);
+    if (/^\d+$/.test(tail)) {
+      const n = parseInt(tail, 10);
+      if (Number.isFinite(n) && n >= 2) return n;
+    }
+  }
+  return 0;
+}
+
+export function getEscapeSlotKey(cueKey: AngelEscapeCueKey, slotNum: number): AngelEscapeSlotKey {
+  return slotNum <= 1 ? cueKey : (`${cueKey}_${slotNum}` as AngelEscapeSlotKey);
+}
 
 export interface DetectedTextEscapeCue {
   key: AngelEscapeCueKey;
@@ -102,12 +120,18 @@ export const MULTI_SLOT_CASE_IDS: ReadonlySet<CommentaryCaseId> = new Set<Commen
 
 export const DEFAULT_VIDEO_MAX_PLAYS: Readonly<Record<string, number>> = {
   'case:tree_browse': 2,
-  'case:seduction': 1,
 };
 
 export const DEFAULT_VIDEO_PLAY_TO_END: Readonly<Record<string, boolean>> = {
   'case:seduction': true,
 };
+
+/**
+ * Any custom or built-in portrait video longer than `LONG_VIDEO_AUTO_NO_CUT_MIN_SEC`
+ * defaults to `No Cut - Play to End` (`true`) automatically and can NEVER be cut short
+ * unless the developer explicitly unlocks it (`videoPlayToEnd[slotId] = false`) in Video Studio.
+ */
+export const LONG_VIDEO_AUTO_NO_CUT_MIN_SEC = 5.2;
 
 export function parseSeductionSlotNumber(key: string): number {
   if (key === 'seduction') return 1;
@@ -123,6 +147,19 @@ export function getSeductionSlotKey(slotNum: number): AnyCaseSlotKey {
   return slotNum <= 1 ? 'seduction' : (`seduction_${slotNum}` as AnyCaseSlotKey);
 }
 
+export type AngelCompressionPreset =
+  | 'lossless_21'
+  | 'balanced_24'
+  | 'mobile_27'
+  | 'mute_only';
+
+export interface AngelVideoOptimizedInfo {
+  size: number;
+  crf: number;
+  width: number;
+  height: number;
+}
+
 export interface AngelVideoMapPayload {
   idle?: string;
   idleVariants: Record<string, string>;
@@ -136,6 +173,9 @@ export interface AngelVideoMapPayload {
   videoPlayToEnd?: Record<string, boolean>;
   lipSync?: AngelLipSyncConfig;
   videoDurations?: Record<string, number>;
+  videoSizes?: Record<string, number>;
+  videoOptimized?: Record<string, AngelVideoOptimizedInfo>;
+  compressionPreset?: AngelCompressionPreset;
   escapeApexes?: Record<string, number>;
   seductionAudioUrl?: string;
   seductionAudioDuration?: number;
@@ -280,69 +320,162 @@ export const VOICE_CLIP_DURATION_SEC: Record<VoiceClipId, number> = {
   wrong_walk_mate_v1: 7.6,
   wrong_walk_mate_v2: 5.9,
   wrong_walk_mate_v3: 6.1,
+  new_match_v1: 7.7,
+  new_match_v2: 6.4,
+  new_match_v3: 4.0,
+  resign_v1: 8.4,
+  resign_v2: 6.7,
+  resign_v3: 6.0,
+  save_game_v1: 9.0,
+  save_game_v2: 6.4,
+  save_game_v3: 5.5,
+  load_game_v1: 8.3,
+  load_game_v2: 6.3,
+  load_game_v3: 5.9,
+  level_beginner_v1: 8.2,
+  level_beginner_v2: 6.3,
+  level_beginner_v3: 4.0,
+  level_intermediate_v1: 7.2,
+  level_intermediate_v2: 6.1,
+  level_intermediate_v3: 5.0,
+  level_advanced_v1: 8.7,
+  level_advanced_v2: 7.3,
+  level_advanced_v3: 4.9,
+  level_master_v1: 8.4,
+  level_master_v2: 6.0,
+  level_master_v3: 4.9,
+  level_grandmaster_v1: 9.2,
+  level_grandmaster_v2: 7.1,
+  level_grandmaster_v3: 4.1,
+  clock_timeout_v1: 9.7,
+  clock_timeout_v2: 9.5,
+  clock_timeout_v3: 6.1,
+  angel_modal_on_v1: 5.7,
+  angel_modal_on_v2: 5.7,
+  angel_modal_on_v3: 3.6,
+  angel_modal_off_v1: 4.6,
+  angel_modal_off_v2: 4.6,
+  angel_modal_off_v3: 3.1,
 };
 
 /**
  * Exact acoustic timestamps (in seconds) measured directly from `/public/voices/female/*.mp3`
- * (using silence-interval segmentation + syllable alignment) for every spoken `"you"` and
- * `"button"` / `"Show Hint"` / `"Undo"` / `"confirm"` focal word across all bundled voice clips.
+ * (using silence-interval segmentation + syllable alignment) for every spoken `"you"`,
+ * `"me"` / `"I"`, and `"button"` / `"Show Hint"` / `"Undo"` / `"confirm"` focal word across all bundled voice clips.
  */
 export const ACOUSTIC_CLIP_CUE_WORDS: Partial<
   Record<VoiceClipId, Partial<Record<AngelEscapeCueKey, number>>>
 > = {
-  intro_v1: { point_you: 4.93 },
+  intro_v1: { point_me: 1.24, point_you: 4.93 },
   intro_v2: { point_you: 3.9 },
   intro_v3: { point_you: 2.59 },
   checkmate_lose_v1: { point_you: 1.63 },
-  checkmate_lose_v2: { point_you: 2.34 },
+  checkmate_lose_v2: { point_you: 2.34, point_me: 4.59 },
   checkmate_lose_v3: { point_you: 1.95 },
   check_knight_v1: { point_you: 2.29 },
-  check_knight_v2: { point_you: 0.87 },
+  check_knight_v2: { point_me: 0.31, point_you: 0.87 },
+  check_general_v3: { point_me: 0.3 },
+  player_check_v1: { point_me: 2.72 },
   player_check_v2: { point_you: 2.13 },
-  calc_offer_v1: { point_you: 6.08 },
-  calc_offer_v3: { point_you: 3.31 },
+  player_check_v3: { point_me: 3.28 },
+  calc_offer_v1: { point_me: 0.84, point_you: 6.08 },
+  calc_offer_v2: { point_me: 0.61 },
+  calc_offer_v3: { point_me: 3.08, point_you: 3.31 },
+  calc_showing_v1: { point_me: 2.91 },
+  calc_showing_v2: { point_me: 3.54 },
+  calc_showing_v3: { point_me: 2.02 },
   wrong_hang_queen_v1: { point_you: 1.23 },
-  wrong_hang_queen_v3: { point_you: 4.72 },
-  wrong_hang_rook_v1: { point_you: 6.14 },
+  wrong_hang_queen_v3: { point_me: 0.33, point_you: 4.72 },
+  wrong_hang_rook_v1: { point_me: 5.78, point_you: 6.14 },
+  wrong_hang_rook_v2: { point_me: 0.33 },
   wrong_hang_rook_v3: { push_button: 3.19, point_you: 3.78 },
-  wrong_hang_minor_v1: { point_you: 1.57 },
+  wrong_hang_minor_v1: { point_you: 1.57, point_me: 5.64 },
   wrong_hang_minor_v2: { point_you: 0.66 },
-  wrong_hang_minor_v3: { point_you: 4.78 },
+  wrong_hang_minor_v3: { point_me: 0.32, point_you: 4.78 },
   wrong_walk_mate_v1: { point_you: 1.08 },
-  wrong_walk_mate_v3: { point_you: 5.36 },
+  wrong_walk_mate_v3: { point_me: 0.33, point_you: 5.36 },
   wrong_missed_tactic_v1: { point_you: 3.81 },
   wrong_missed_tactic_v2: { point_you: 2.8 },
   wrong_missed_tactic_v3: { point_you: 0.22 },
-  wrong_positional_v1: { point_you: 4.17 },
+  wrong_positional_v1: { point_me: 2.51, point_you: 4.17 },
+  wrong_positional_v2: { point_me: 0.32 },
   wrong_positional_v3: { point_you: 3.76 },
   wrong_better_alt_v1: { point_you: 3.99 },
   wrong_better_alt_v3: { push_button: 2.93, point_you: 3.48 },
   undo_done_v1: { point_you: 6.27 },
+  undo_done_v3: { point_me: 0.3 },
   alt_shown_v1: { point_you: 5.51 },
-  hesitate_hint_v1: { point_you: 1.97, push_button: 5.86 },
-  hesitate_hint_v2: { push_button: 3.19, point_you: 4.22 },
-  hesitate_hint_v3: { push_button: 2.0, point_you: 2.66 },
+  hesitate_hint_v1: { point_me: 1.27, point_you: 1.97, push_button: 5.86 },
+  hesitate_hint_v2: { point_me: 1.53, push_button: 3.19, point_you: 4.22 },
+  hesitate_hint_v3: { push_button: 2.0, point_you: 2.66, point_me: 3.05 },
+  hint_shown_v2: { point_me: 0.31 },
   hint_shown_v3: { point_you: 3.84 },
-  watch_rook_v3: { point_you: 2.26 },
+  warn_mate_v1: { point_me: 2.67 },
+  warn_mate_v2: { point_me: 0.31 },
+  warn_fork_2step_v2: { point_me: 0.32 },
+  warn_pawn_promo_v2: { point_me: 0.32 },
+  warn_king_file_v2: { point_me: 0.33 },
+  watch_queen_v2: { point_me: 2.48 },
+  watch_rook_v3: { point_me: 0.31, point_you: 2.26 },
+  watch_bishop_v2: { point_me: 0.32 },
+  watch_knight_v1: { point_me: 2.44 },
+  watch_knight_v3: { point_me: 0.32 },
+  capture_queen_v2: { point_me: 0.56 },
+  capture_rook_v1: { point_me: 0.16 },
   capture_minor_v2: { point_you: 2.72 },
   lost_queen_v1: { point_you: 0.44 },
+  lost_queen_v2: { point_me: 2.65 },
   lost_queen_v3: { point_you: 0.22 },
-  trial_confirm_1_v1: { point_you: 0.42, push_button: 3.14 },
-  trial_confirm_1_v2: { push_button: 1.49, point_you: 2.07 },
+  castled_v1: { point_me: 2.61 },
+  castled_v3: { point_me: 0.31 },
+  trial_confirm_1_v1: { point_you: 0.42, push_button: 3.14, point_me: 5.26 },
+  trial_confirm_1_v2: { push_button: 1.49, point_you: 2.07, point_me: 4.54 },
   trial_confirm_1_v3: { push_button: 1.92, point_you: 2.51 },
-  trial_confirm_2_v1: { point_you: 0.42, push_button: 3.57 },
-  trial_confirm_2_v2: { push_button: 1.11, point_you: 1.66 },
-  trial_confirm_2_v3: { push_button: 2.53 },
+  trial_confirm_2_v1: { point_you: 0.42, push_button: 3.57, point_me: 5.17 },
+  trial_confirm_2_v2: { push_button: 1.11, point_you: 1.66, point_me: 4.22 },
+  trial_confirm_2_v3: { push_button: 2.53, point_me: 2.96 },
   wrong_distracted_v1: { point_you: 0.41, push_button: 7.38 },
   wrong_distracted_v2: { point_you: 0.61, push_button: 6.78 },
-  wrong_distracted_v3: { point_you: 1.51, push_button: 4.62 },
-  tree_browse_v1: { point_you: 2.62, push_button: 11.02 },
-  tree_browse_v2: { push_button: 8.58 },
+  wrong_distracted_v3: { point_me: 0.31, point_you: 1.51, push_button: 4.62 },
+  tree_browse_v1: { point_me: 1.06, point_you: 2.62, push_button: 11.02 },
+  tree_browse_v2: { point_me: 1.97, push_button: 8.58 },
   tree_browse_v3: { push_button: 5.57 },
+  new_match_v1: { point_me: 4.01, point_you: 5.01 },
+  new_match_v2: { point_me: 1.61, point_you: 3.57 },
+  new_match_v3: { point_you: 2.08 },
+  resign_v1: { point_you: 0.16, push_button: 1.1, point_me: 4.08 },
+  resign_v2: { push_button: 3.68, point_you: 4.49, point_me: 5.34 },
+  resign_v3: { point_me: 1.29, point_you: 2.85 },
+  save_game_v1: { point_me: 1.2, point_you: 4.65, push_button: 6.54 },
+  save_game_v2: { point_me: 1.41, point_you: 4.05 },
+  save_game_v3: { point_you: 3.94 },
+  load_game_v1: { point_you: 2.96, point_me: 3.75, push_button: 5.2 },
+  load_game_v2: { point_you: 3.73, point_me: 4.21 },
+  level_beginner_v1: { point_me: 2.13, point_you: 4.63 },
+  level_beginner_v2: { point_me: 1.82, point_you: 2.98 },
+  level_beginner_v3: { point_me: 3.25 },
+  level_intermediate_v1: { point_me: 1.72, point_you: 6.07 },
+  level_intermediate_v2: { point_me: 4.87 },
+  level_advanced_v1: { point_me: 2.19 },
+  level_advanced_v3: { point_you: 4.17 },
+  level_master_v1: { point_me: 2.14, point_you: 6.08 },
+  level_master_v2: { point_me: 2.23 },
+  level_grandmaster_v1: { point_me: 6.98 },
+  level_grandmaster_v2: { point_me: 2.84, point_you: 6.52 },
+  level_grandmaster_v3: { point_me: 2.35 },
+  clock_timeout_v1: { push_button: 6.29, point_you: 7.1, point_me: 8.46 },
+  clock_timeout_v2: { push_button: 6.08, point_you: 6.98 },
+  clock_timeout_v3: { point_you: 4.15, point_me: 5.02 },
+  angel_modal_on_v1: { point_you: 3.9 },
+  angel_modal_on_v2: { point_me: 1.24, point_you: 4.7 },
+  angel_modal_on_v3: { point_you: 2.59 },
+  angel_modal_off_v1: { point_me: 0.3, point_you: 2.95 },
+  angel_modal_off_v2: { point_me: 0.2, point_you: 1.7 },
+  angel_modal_off_v3: { point_you: 2.12 },
 };
 
 /**
- * Built-in static group-level video overrides (Groups 1–8).
+ * Built-in static group-level video overrides (Groups 1–9).
  */
 export const ANGEL_GROUP_VIDEO_MAP: Partial<Record<AngelExpressionGroup, string>> = {};
 
@@ -351,6 +484,18 @@ export const ANGEL_GROUP_VIDEO_MAP: Partial<Record<AngelExpressionGroup, string>
  */
 export const ANGEL_CASE_VIDEO_MAP: Partial<Record<CommentaryCaseId, string>> = {
   intro: '/assets/aistudio/waving_hello_abc4f35b.mp4',
+  new_match: '/assets/aistudio/builtin_new_match.mp4',
+  resign: '/assets/aistudio/builtin_resign.mp4',
+  save_game: '/assets/aistudio/builtin_save_game.mp4',
+  load_game: '/assets/aistudio/builtin_load_game.mp4',
+  level_beginner: '/assets/aistudio/builtin_level_beginner.mp4',
+  level_intermediate: '/assets/aistudio/builtin_level_intermediate.mp4',
+  level_advanced: '/assets/aistudio/builtin_level_advanced.mp4',
+  level_master: '/assets/aistudio/builtin_level_master.mp4',
+  level_grandmaster: '/assets/aistudio/builtin_level_grandmaster.mp4',
+  clock_timeout: '/assets/aistudio/builtin_clock_timeout.mp4',
+  angel_modal_on: '/assets/aistudio/builtin_angel_modal_on.mp4',
+  angel_modal_off: '/assets/aistudio/builtin_angel_modal_off.mp4',
 };
 
 const CASE_TO_GROUP: Record<CommentaryCaseId, AngelExpressionGroup> = {
@@ -413,6 +558,20 @@ const CASE_TO_GROUP: Record<CommentaryCaseId, AngelExpressionGroup> = {
   checkmate_win: 'ending',
   stalemate: 'ending',
   draw: 'ending',
+
+  // 9. Menu Buttons, Angel Modal, Thinking Levels & Chess Clock Time-Over
+  angel_modal_on: 'controls',
+  angel_modal_off: 'controls',
+  new_match: 'controls',
+  resign: 'controls',
+  save_game: 'controls',
+  load_game: 'controls',
+  clock_timeout: 'controls',
+  level_beginner: 'controls',
+  level_intermediate: 'controls',
+  level_advanced: 'controls',
+  level_master: 'controls',
+  level_grandmaster: 'controls',
 };
 
 export interface AngelStudioCaseSpec {
@@ -526,6 +685,20 @@ export const ANGEL_VIDEO_STUDIO_GROUPS: AngelStudioGroupSpec[] = [
     'stalemate',
     'draw',
   ]),
+  makeGroupSpec('controls', 9, 'Menu Buttons, Angel Modal, Thinking Levels & Clock Time-Over', [
+    'angel_modal_on',
+    'angel_modal_off',
+    'new_match',
+    'resign',
+    'save_game',
+    'load_game',
+    'clock_timeout',
+    'level_beginner',
+    'level_intermediate',
+    'level_advanced',
+    'level_master',
+    'level_grandmaster',
+  ]),
 ];
 
 const LIP_SYNC_STORAGE_KEY = 'chess_angel_lipsync_rules_v1';
@@ -533,8 +706,58 @@ const CASE_CUE_STORAGE_KEY = 'chess_angel_case_cues_v1';
 const VIDEO_MAX_PLAYS_STORAGE_KEY = 'chess_angel_video_max_plays_v1';
 const VIDEO_PLAY_TO_END_STORAGE_KEY = 'chess_angel_video_play_to_end_v1';
 
+// In-memory Video Studio unlock flag (unlocked by 5-click gesture on game title — hidden from regular players)
+let studioSessionUnlocked = false;
+const studioAuthListeners = new Set<() => void>();
+
+function notifyStudioAuthListeners(): void {
+  studioAuthListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {
+      // ignore listener errors
+    }
+  });
+}
+
+export function isStudioDeveloperUnlocked(): boolean {
+  return studioSessionUnlocked;
+}
+
+export function subscribeStudioDeveloperAuth(listener: () => void): () => void {
+  studioAuthListeners.add(listener);
+  return () => {
+    studioAuthListeners.delete(listener);
+  };
+}
+
+export function unlockStudioDeveloperSession(): void {
+  if (!studioSessionUnlocked) {
+    studioSessionUnlocked = true;
+    notifyStudioAuthListeners();
+  }
+}
+
+export function logoutStudioDeveloperSession(): void {
+  if (studioSessionUnlocked) {
+    studioSessionUnlocked = false;
+    notifyStudioAuthListeners();
+  }
+}
+
+function buildStudioAuthHeaders(extra?: Record<string, string>): Record<string, string> {
+  return {
+    ...(extra || {}),
+    'X-Requested-With': 'ChessAngelVideoStudio',
+  };
+}
+
+function handleUnauthorizedStudioResponse(_res: Response): void {
+  // No password token expiration when unlocked via 5-tap title gesture
+}
+
 function readStoredLipSyncFallback(): AngelLipSyncConfig {
-  if (typeof window === 'undefined' || !IS_VIDEO_STUDIO_DEV_ENV) {
+  if (typeof window === 'undefined' || !isStudioDeveloperUnlocked()) {
     return { defaultEnabled: true, groups: {}, cases: {} };
   }
   try {
@@ -554,7 +777,7 @@ function readStoredLipSyncFallback(): AngelLipSyncConfig {
 }
 
 function saveStoredLipSyncFallback(cfg: AngelLipSyncConfig): void {
-  if (typeof window === 'undefined' || !IS_VIDEO_STUDIO_DEV_ENV) return;
+  if (typeof window === 'undefined' || !isStudioDeveloperUnlocked()) return;
   try {
     window.localStorage.setItem(LIP_SYNC_STORAGE_KEY, JSON.stringify(cfg));
   } catch {
@@ -563,7 +786,7 @@ function saveStoredLipSyncFallback(cfg: AngelLipSyncConfig): void {
 }
 
 function readStoredCaseCuesFallback(): AngelCaseEscapeCuesMap {
-  if (typeof window === 'undefined' || !IS_VIDEO_STUDIO_DEV_ENV) return {};
+  if (typeof window === 'undefined' || !isStudioDeveloperUnlocked()) return {};
   try {
     const raw = window.localStorage.getItem(CASE_CUE_STORAGE_KEY);
     if (raw) {
@@ -577,7 +800,7 @@ function readStoredCaseCuesFallback(): AngelCaseEscapeCuesMap {
 }
 
 function saveStoredCaseCuesFallback(cues: AngelCaseEscapeCuesMap): void {
-  if (typeof window === 'undefined' || !IS_VIDEO_STUDIO_DEV_ENV) return;
+  if (typeof window === 'undefined' || !isStudioDeveloperUnlocked()) return;
   try {
     window.localStorage.setItem(CASE_CUE_STORAGE_KEY, JSON.stringify(cues));
   } catch {
@@ -587,7 +810,7 @@ function saveStoredCaseCuesFallback(cues: AngelCaseEscapeCuesMap): void {
 
 function readStoredVideoMaxPlaysFallback(): Record<string, number> {
   const base: Record<string, number> = { ...DEFAULT_VIDEO_MAX_PLAYS };
-  if (typeof window === 'undefined' || !IS_VIDEO_STUDIO_DEV_ENV) return base;
+  if (typeof window === 'undefined' || !isStudioDeveloperUnlocked()) return base;
   try {
     const raw = window.localStorage.getItem(VIDEO_MAX_PLAYS_STORAGE_KEY);
     if (raw) {
@@ -607,7 +830,7 @@ function readStoredVideoMaxPlaysFallback(): Record<string, number> {
 }
 
 function saveStoredVideoMaxPlaysFallback(maxPlays: Record<string, number>): void {
-  if (typeof window === 'undefined' || !IS_VIDEO_STUDIO_DEV_ENV) return;
+  if (typeof window === 'undefined' || !isStudioDeveloperUnlocked()) return;
   try {
     window.localStorage.setItem(VIDEO_MAX_PLAYS_STORAGE_KEY, JSON.stringify(maxPlays));
   } catch {
@@ -617,7 +840,7 @@ function saveStoredVideoMaxPlaysFallback(maxPlays: Record<string, number>): void
 
 function readStoredVideoPlayToEndFallback(): Record<string, boolean> {
   const base: Record<string, boolean> = { ...DEFAULT_VIDEO_PLAY_TO_END };
-  if (typeof window === 'undefined' || !IS_VIDEO_STUDIO_DEV_ENV) return base;
+  if (typeof window === 'undefined' || !isStudioDeveloperUnlocked()) return base;
   try {
     const raw = window.localStorage.getItem(VIDEO_PLAY_TO_END_STORAGE_KEY);
     if (raw) {
@@ -637,7 +860,7 @@ function readStoredVideoPlayToEndFallback(): Record<string, boolean> {
 }
 
 function saveStoredVideoPlayToEndFallback(playToEndMap: Record<string, boolean>): void {
-  if (typeof window === 'undefined' || !IS_VIDEO_STUDIO_DEV_ENV) return;
+  if (typeof window === 'undefined' || !isStudioDeveloperUnlocked()) return;
   try {
     window.localStorage.setItem(VIDEO_PLAY_TO_END_STORAGE_KEY, JSON.stringify(playToEndMap));
   } catch {
@@ -677,13 +900,15 @@ let runtimeOverrides: AngelVideoMapPayload = {
   escapes: {
     point_you: '/assets/aistudio/angel_escape_point_you.mp4',
     point_you_2: '/assets/aistudio/angel_escape_point_you_2.mp4',
+    point_me: '/assets/aistudio/angel_escape_point_me.mp4',
+    point_me_2: '/assets/aistudio/angel_escape_point_me_2.mp4',
     push_button: '/assets/aistudio/angel_escape_push_button.mp4',
     push_button_2: '/assets/aistudio/angel_escape_push_button_2.mp4',
   },
-  escapeEnabled: { point_you: true, push_button: true },
+  escapeEnabled: { point_you: true, point_me: true, push_button: true },
   caseEscapeCues: {
     lost_queen: { point_you: 'off' },
-    seduction: { point_you: 'off', push_button: 'off' },
+    seduction: { point_you: 'off', point_me: 'off', push_button: 'off' },
     ...readStoredCaseCuesFallback(),
   },
   videoMaxPlays: readStoredVideoMaxPlaysFallback(),
@@ -712,6 +937,8 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/angel_default_speaking_default.mp4': 5.6,
     '/assets/aistudio/angel_escape_point_you.mp4': 5,
     '/assets/aistudio/angel_escape_point_you_2.mp4': 5,
+    '/assets/aistudio/angel_escape_point_me.mp4': 5,
+    '/assets/aistudio/angel_escape_point_me_2.mp4': 5,
     '/assets/aistudio/angel_escape_push_button.mp4': 4,
     '/assets/aistudio/angel_escape_push_button_2.mp4': 3,
     '/assets/aistudio/angel_idle_idle_2.mp4': 5,
@@ -723,6 +950,18 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/just_lip_movements_e2adb314.mp4': 5,
     '/assets/aistudio/just_shaking_head_no_words_591ed115.mp4': 5,
     '/assets/aistudio/waving_hello_abc4f35b.mp4': 5,
+    '/assets/aistudio/builtin_new_match.mp4': 6.8,
+    '/assets/aistudio/builtin_resign.mp4': 6.8,
+    '/assets/aistudio/builtin_save_game.mp4': 6.9,
+    '/assets/aistudio/builtin_load_game.mp4': 6.9,
+    '/assets/aistudio/builtin_level_beginner.mp4': 6.6,
+    '/assets/aistudio/builtin_level_intermediate.mp4': 6.8,
+    '/assets/aistudio/builtin_level_advanced.mp4': 6.8,
+    '/assets/aistudio/builtin_level_master.mp4': 6.8,
+    '/assets/aistudio/builtin_level_grandmaster.mp4': 7.4,
+    '/assets/aistudio/builtin_clock_timeout.mp4': 6.8,
+    '/assets/aistudio/builtin_angel_modal_on.mp4': 6.8,
+    '/assets/aistudio/builtin_angel_modal_off.mp4': 6.8,
   },
   escapeApexes: {
     '/assets/aistudio/angel_escape_point_you.mp4': 2.3,
@@ -743,6 +982,7 @@ const secondaryIdleLastPlayedAt = new Map<string, number>();
 
 const escapeRotationCursor: Record<AngelEscapeCueKey, number> = {
   point_you: 0,
+  point_me: 0,
   push_button: 0,
 };
 const lastPickedEscapeUrl: Partial<Record<AngelEscapeCueKey, string>> = {};
@@ -792,6 +1032,7 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
 
   const prevEscEnabled = runtimeOverrides.escapeEnabled || {
     point_you: true,
+    point_me: true,
     push_button: true,
   };
   const escapeEnabled: Partial<Record<AngelEscapeCueKey, boolean>> = {
@@ -799,6 +1040,10 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
       typeof data?.escapeEnabled?.point_you === 'boolean'
         ? data.escapeEnabled.point_you
         : prevEscEnabled.point_you !== false,
+    point_me:
+      typeof data?.escapeEnabled?.point_me === 'boolean'
+        ? data.escapeEnabled.point_me
+        : prevEscEnabled.point_me !== false,
     push_button:
       typeof data?.escapeEnabled?.push_button === 'boolean'
         ? data.escapeEnabled.push_button
@@ -816,6 +1061,9 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
       const cleaned: Partial<Record<AngelEscapeCueKey, CaseEscapeCueRule>> = {};
       if (cueObj.point_you === 'on' || cueObj.point_you === 'off') {
         cleaned.point_you = cueObj.point_you;
+      }
+      if (cueObj.point_me === 'on' || cueObj.point_me === 'off') {
+        cleaned.point_me = cueObj.point_me;
       }
       if (cueObj.push_button === 'on' || cueObj.push_button === 'off') {
         cleaned.push_button = cueObj.push_button;
@@ -855,7 +1103,7 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
 
   // Keep seduction Escape Cues & Lip-Sync Tail OFF by default unless explicitly configured
   if (!caseEscapeCues.seduction) {
-    caseEscapeCues.seduction = { point_you: 'off', push_button: 'off' };
+    caseEscapeCues.seduction = { point_you: 'off', point_me: 'off', push_button: 'off' };
   }
   if (!lipSync.cases.seduction) {
     lipSync.cases.seduction = 'off';
@@ -891,6 +1139,17 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
   VOICE_CLIP_DURATION_SEC.seduction_v3 = seductionAudioDuration;
   setSeductionAudioUrlOverride(seductionAudioUrl);
 
+  const validPresets: ReadonlySet<string> = new Set([
+    'lossless_21',
+    'balanced_24',
+    'mobile_27',
+    'mute_only',
+  ]);
+  const compressionPreset: AngelCompressionPreset =
+    typeof data?.compressionPreset === 'string' && validPresets.has(data.compressionPreset)
+      ? (data.compressionPreset as AngelCompressionPreset)
+      : runtimeOverrides.compressionPreset || 'lossless_21';
+
   return {
     idle: variants.idle_1 || data?.idle,
     idleVariants: variants,
@@ -904,6 +1163,9 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
     videoPlayToEnd,
     lipSync,
     videoDurations: data?.videoDurations || runtimeOverrides.videoDurations || {},
+    videoSizes: data?.videoSizes || runtimeOverrides.videoSizes || {},
+    videoOptimized: data?.videoOptimized || runtimeOverrides.videoOptimized || {},
+    compressionPreset,
     escapeApexes: data?.escapeApexes || runtimeOverrides.escapeApexes || {},
     seductionAudioUrl,
     seductionAudioDuration,
@@ -954,8 +1216,126 @@ export function resetGameVideoPlayCounts(): void {
 }
 
 /**
- * Returns true if `slotId` (e.g. `'case:intro'`, `'escape:point_you'`, `'idle:idle_2'`)
- * is flagged in Video Studio as un-cuttable (`Full Length · No Cut`).
+ * Resolves the video URL currently assigned to a Video Studio `slotId`
+ * (`idle:*`, `default:speaking_default`, `group:*`, `case:*`, `escape:*`).
+ */
+export function getVideoUrlForSlotId(
+  slotId: string,
+  map: AngelVideoMapPayload = runtimeOverrides,
+): string | undefined {
+  if (slotId === 'default:speaking_default') {
+    return map.defaultSpeaking || ANGEL_DEFAULT_SPEAKING_VIDEO_SRC;
+  }
+  const colonIdx = slotId.indexOf(':');
+  if (colonIdx <= 0) return undefined;
+  const kind = slotId.slice(0, colonIdx);
+  const key = slotId.slice(colonIdx + 1);
+
+  if (kind === 'idle') {
+    if (key === 'idle_1' || key === 'idle_listening') {
+      return map.idleVariants?.idle_1 || map.idle || ANGEL_IDLE_LISTENING_VIDEO_SRC;
+    }
+    return map.idleVariants?.[key];
+  }
+  if (kind === 'group') {
+    return (
+      map.groups?.[key as AngelExpressionGroup] ||
+      ANGEL_GROUP_VIDEO_MAP[key as AngelExpressionGroup]
+    );
+  }
+  if (kind === 'case') {
+    return (
+      map.cases?.[key as AnyCaseSlotKey] ||
+      ANGEL_CASE_VIDEO_MAP[key as CommentaryCaseId]
+    );
+  }
+  if (kind === 'escape') {
+    return map.escapes?.[key as AngelEscapeSlotKey];
+  }
+  return undefined;
+}
+
+/**
+ * Finds all Video Studio `slotId`s (`case:*`, `idle:*`, `group:*`, `escape:*`, `default:*`)
+ * that own `url`.
+ */
+export function findSlotIdsForVideoUrl(
+  url: string | undefined | null,
+  map: AngelVideoMapPayload = runtimeOverrides,
+): string[] {
+  if (!url) return [];
+  const clean = url.split('?')[0];
+  const found: string[] = [];
+  const add = (id: string) => {
+    if (!found.includes(id)) found.push(id);
+  };
+
+  const m = /\/angel_(idle|default|group|case|escape)_([a-z0-9_]+)\.mp4$/i.exec(clean);
+  if (m) {
+    const kind = m[1].toLowerCase();
+    const rawKey = m[2].toLowerCase();
+    const key = kind === 'idle' && rawKey === 'idle_listening' ? 'idle_1' : rawKey;
+    add(`${kind}:${key}`);
+  }
+
+  const idle1 = (
+    map.idleVariants?.idle_1 ||
+    map.idle ||
+    ANGEL_IDLE_LISTENING_VIDEO_SRC
+  ).split('?')[0];
+  if (clean === idle1) add('idle:idle_1');
+
+  for (const [k, v] of Object.entries(map.idleVariants || {})) {
+    if (v && v.split('?')[0] === clean) add(`idle:${k}`);
+  }
+
+  const defSpeak = (map.defaultSpeaking || ANGEL_DEFAULT_SPEAKING_VIDEO_SRC).split('?')[0];
+  if (clean === defSpeak) add('default:speaking_default');
+
+  for (const [k, v] of Object.entries(map.groups || {})) {
+    if (v && v.split('?')[0] === clean) add(`group:${k}`);
+  }
+  for (const [k, v] of Object.entries(ANGEL_GROUP_VIDEO_MAP)) {
+    if (v && v.split('?')[0] === clean) add(`group:${k}`);
+  }
+
+  for (const [k, v] of Object.entries(map.cases || {})) {
+    if (v && v.split('?')[0] === clean) add(`case:${k}`);
+  }
+  for (const [k, v] of Object.entries(ANGEL_CASE_VIDEO_MAP)) {
+    if (v && v.split('?')[0] === clean) add(`case:${k}`);
+  }
+
+  for (const [k, v] of Object.entries(map.escapes || {})) {
+    if (v && v.split('?')[0] === clean) add(`escape:${k}`);
+  }
+
+  return found;
+}
+
+/**
+ * Returns true when `slotId` is automatically protected from being cut short because its
+ * attached video exceeds `LONG_VIDEO_AUTO_NO_CUT_MIN_SEC` (`5.2s`) and the developer has
+ * not explicitly overridden `videoPlayToEnd[slotId]`.
+ */
+export function isVideoSlotAutoProtectedByLength(
+  slotId: string,
+  map: AngelVideoMapPayload = runtimeOverrides,
+): boolean {
+  if (typeof map.videoPlayToEnd?.[slotId] === 'boolean') return false;
+  if (slotId === 'default:speaking_default') return false;
+  if (/^case:seduction(_\d+)?$/i.test(slotId)) return false;
+  if (DEFAULT_VIDEO_PLAY_TO_END[slotId]) return false;
+  const slotUrl = getVideoUrlForSlotId(slotId, map);
+  const dur = getVideoFileDurationSec(slotUrl, map);
+  return dur !== null && dur > LONG_VIDEO_AUTO_NO_CUT_MIN_SEC;
+}
+
+/**
+ * Returns true if `slotId` (e.g. `'case:lost_queen'`, `'escape:point_you'`, `'idle:idle_8'`)
+ * is protected as un-cuttable (`No Cut - Play to End`).
+ * - Honors explicit developer consent (`videoPlayToEnd[slotId] === false` allows cuts; `true` locks).
+ * - Automatically protects all longer videos (`> 5.2s`) unless unlocked by the developer.
  */
 export function isVideoSlotPlayToEnd(
   slotId: string,
@@ -963,71 +1343,65 @@ export function isVideoSlotPlayToEnd(
 ): boolean {
   const explicit = map.videoPlayToEnd?.[slotId];
   if (typeof explicit === 'boolean') return explicit;
+  if (slotId === 'default:speaking_default') return false;
   if (/^case:seduction(_\d+)?$/i.test(slotId)) return true;
-  return Boolean(DEFAULT_VIDEO_PLAY_TO_END[slotId]);
-}
+  if (DEFAULT_VIDEO_PLAY_TO_END[slotId]) return true;
 
-/**
- * Returns true if the given video URL belongs to any Video Studio slot flagged with
- * `Full Length · No Cut` (`videoPlayToEnd`), ensuring it plays from 0.0s to its very end
- * without pre-end morph cuts, escape start-seeks, or mid-clip interruptions.
- */
-export function isVideoUrlPlayToEnd(
-  url: string | undefined | null,
-  map: AngelVideoMapPayload = runtimeOverrides,
-): boolean {
-  if (!url) return false;
-  const clean = url.split('?')[0];
-
-  // Fast filename convention check for custom uploaded `angel_<kind>_<key>.mp4`
-  const m = /\/angel_(idle|default|group|case|escape)_([a-z0-9_]+)\.mp4$/i.exec(clean);
-  if (m) {
-    const kind = m[1].toLowerCase();
-    const rawKey = m[2].toLowerCase();
-    const key = kind === 'idle' && rawKey === 'idle_listening' ? 'idle_1' : rawKey;
-    if (isVideoSlotPlayToEnd(`${kind}:${key}`, map)) return true;
+  const slotUrl = getVideoUrlForSlotId(slotId, map);
+  const dur = getVideoFileDurationSec(slotUrl, map);
+  if (dur !== null && dur > LONG_VIDEO_AUTO_NO_CUT_MIN_SEC) {
+    return true;
   }
-
-  // Built-in & mapped slot URL checks
-  const idle1 = (map.idleVariants?.idle_1 || map.idle || ANGEL_IDLE_LISTENING_VIDEO_SRC).split('?')[0];
-  if (clean === idle1 && isVideoSlotPlayToEnd('idle:idle_1', map)) return true;
-
-  for (const [k, v] of Object.entries(map.idleVariants || {})) {
-    if (v && v.split('?')[0] === clean && isVideoSlotPlayToEnd(`idle:${k}`, map)) return true;
-  }
-
-  const defSpeak = (map.defaultSpeaking || ANGEL_DEFAULT_SPEAKING_VIDEO_SRC).split('?')[0];
-  if (clean === defSpeak && isVideoSlotPlayToEnd('default:speaking_default', map)) return true;
-
-  for (const [k, v] of Object.entries(map.groups || {})) {
-    if (v && v.split('?')[0] === clean && isVideoSlotPlayToEnd(`group:${k}`, map)) return true;
-  }
-  for (const [k, v] of Object.entries(ANGEL_GROUP_VIDEO_MAP)) {
-    if (v && v.split('?')[0] === clean && isVideoSlotPlayToEnd(`group:${k}`, map)) return true;
-  }
-
-  for (const [k, v] of Object.entries(map.cases || {})) {
-    if (v && v.split('?')[0] === clean && isVideoSlotPlayToEnd(`case:${k}`, map)) return true;
-  }
-  for (const [k, v] of Object.entries(ANGEL_CASE_VIDEO_MAP)) {
-    if (v && v.split('?')[0] === clean && isVideoSlotPlayToEnd(`case:${k}`, map)) return true;
-  }
-
-  for (const [k, v] of Object.entries(map.escapes || {})) {
-    if (v && v.split('?')[0] === clean && isVideoSlotPlayToEnd(`escape:${k}`, map)) return true;
-  }
-
   return false;
 }
 
 /**
+ * Returns true if the given video URL must play to its very end without pre-end morph cuts,
+ * escape start-seeks, or mid-clip interruptions.
+ * Longer videos (`> 5.2s`) are protected automatically unless the developer explicitly set
+ * `videoPlayToEnd[slotId] = false` on that slot in Chess Angel Video Studio.
+ */
+export function isVideoUrlPlayToEnd(
+  url: string | undefined | null,
+  map: AngelVideoMapPayload = runtimeOverrides,
+  liveDurationSec?: number,
+): boolean {
+  if (!url) return false;
+  const clean = url.split('?')[0];
+  const slotIds = findSlotIdsForVideoUrl(clean, map);
+
+  if (slotIds.some((id) => map.videoPlayToEnd?.[id] === true)) {
+    return true;
+  }
+  if (slotIds.length > 0 && slotIds.every((id) => map.videoPlayToEnd?.[id] === false)) {
+    return false;
+  }
+  if (slotIds.some((id) => isVideoSlotPlayToEnd(id, map))) {
+    return true;
+  }
+
+  const defSpeak = (map.defaultSpeaking || ANGEL_DEFAULT_SPEAKING_VIDEO_SRC).split('?')[0];
+  if (clean === defSpeak) {
+    return false;
+  }
+
+  const dur =
+    getVideoFileDurationSec(clean, map) ??
+    (typeof liveDurationSec === 'number' && Number.isFinite(liveDurationSec) && liveDurationSec > 0
+      ? liveDurationSec
+      : null);
+  return dur !== null && dur > LONG_VIDEO_AUTO_NO_CUT_MIN_SEC;
+}
+
+/**
  * Returns true if a Video Studio commentary case (or its active sub-slots, parent group, or
- * default speaking fallback) has `No Cut - Play to End` enabled anywhere in Chess Angel Video Studio.
+ * default speaking fallback) has `No Cut - Play to End` enabled.
  */
 export function isEffectiveCasePlayToEnd(
   caseId: CommentaryCaseId,
   map: AngelVideoMapPayload = runtimeOverrides,
 ): boolean {
+  if (map.videoPlayToEnd?.[`case:${caseId}`] === false) return false;
   if (isVideoSlotPlayToEnd(`case:${caseId}`, map)) return true;
 
   if (caseId === 'seduction') {
@@ -1053,7 +1427,6 @@ export function isEffectiveCasePlayToEnd(
       return true;
     }
   } else if (group && isVideoSlotPlayToEnd(`group:${group}`, map)) {
-    // Group-level No-Cut also applies unless explicitly turned false on the case slot
     const explicitCase = map.videoPlayToEnd?.[`case:${caseId}`];
     if (explicitCase !== false) return true;
   }
@@ -1062,17 +1435,25 @@ export function isEffectiveCasePlayToEnd(
 }
 
 /**
- * Returns true if the currently playing utterance + video URL has `No Cut - Play to End` enabled
- * (via its specific video URL, its commentary case button, its group button, or default speaking).
+ * Returns true if the currently playing utterance + video URL must play to its very end
+ * unless the developer explicitly consented (`videoPlayToEnd[slotId] = false`) to allow cuts.
  */
 export function isUtterancePlayToEnd(
   activeUrl: string | undefined | null,
   clipId?: VoiceClipId | null,
   map: AngelVideoMapPayload = runtimeOverrides,
+  liveDurationSec?: number,
 ): boolean {
-  if (isVideoUrlPlayToEnd(activeUrl, map)) return true;
+  const slotIds = findSlotIdsForVideoUrl(activeUrl, map);
+  if (slotIds.length > 0 && slotIds.every((id) => map.videoPlayToEnd?.[id] === false)) {
+    return false;
+  }
+  if (isVideoUrlPlayToEnd(activeUrl, map, liveDurationSec)) return true;
   const caseId = extractCaseIdFromClip(clipId);
-  if (caseId && isEffectiveCasePlayToEnd(caseId, map)) return true;
+  if (caseId) {
+    if (map.videoPlayToEnd?.[`case:${caseId}`] === false) return false;
+    if (isEffectiveCasePlayToEnd(caseId, map)) return true;
+  }
   return false;
 }
 
@@ -1087,6 +1468,26 @@ export function getVideoFileDurationSec(
   const clean = url.split('?')[0];
   const d = map.videoDurations?.[clean];
   return typeof d === 'number' && Number.isFinite(d) ? d : null;
+}
+
+export function getVideoFileSizeBytes(
+  url: string | undefined,
+  map: AngelVideoMapPayload = runtimeOverrides,
+): number | null {
+  if (!url) return null;
+  const clean = url.split('?')[0];
+  const sz = map.videoSizes?.[clean];
+  return typeof sz === 'number' && Number.isFinite(sz) && sz > 0 ? sz : null;
+}
+
+export function getVideoOptimizedInfo(
+  url: string | undefined,
+  map: AngelVideoMapPayload = runtimeOverrides,
+): AngelVideoOptimizedInfo | null {
+  if (!url) return null;
+  const clean = url.split('?')[0];
+  const info = map.videoOptimized?.[clean];
+  return info && typeof info === 'object' ? info : null;
 }
 
 /**
@@ -1107,7 +1508,9 @@ export function getEscapeVideoApexSec(
     if (clean.endsWith('point_you_2.mp4')) return 1.45;
     if (clean.endsWith('push_button_2.mp4')) return 1.65;
   }
-  return cueKey === 'point_you' ? 2.3 : 1.3;
+  if (cueKey === 'point_you') return 2.3;
+  if (cueKey === 'point_me') return 1.5;
+  return 1.3;
 }
 
 export function getAngelVideoOverridesSnapshot(): AngelVideoMapPayload {
@@ -1147,6 +1550,19 @@ export function subscribeAngelVideoOverrides(listener: () => void): () => void {
 export interface UploadAngelVideoResult {
   url: string;
   extractedAudio: boolean;
+  inBytes?: number;
+  outBytes?: number;
+  compressed?: boolean;
+  crf?: number;
+}
+
+export interface CompressAngelVideosResult {
+  crf: number;
+  totalFiles: number;
+  compressedCount: number;
+  skippedCount: number;
+  beforeBytes: number;
+  afterBytes: number;
 }
 
 export async function uploadAngelPortraitVideo(
@@ -1156,11 +1572,12 @@ export async function uploadAngelPortraitVideo(
 ): Promise<UploadAngelVideoResult> {
   const res = await fetch(`/api/angel-videos/${encodeURIComponent(kind)}/${encodeURIComponent(key)}`, {
     method: 'POST',
-    headers: {
+    headers: buildStudioAuthHeaders({
       'Content-Type': file.type || 'video/mp4',
-    },
+    }),
     body: file,
   });
+  handleUnauthorizedStudioResponse(res);
   if (!res.ok) {
     throw new Error('Failed to upload video');
   }
@@ -1168,11 +1585,81 @@ export async function uploadAngelPortraitVideo(
     ok: boolean;
     url: string;
     extractedAudio?: boolean;
+    inBytes?: number;
+    outBytes?: number;
+    compressed?: boolean;
+    crf?: number;
     map: Partial<AngelVideoMapPayload>;
   };
   runtimeOverrides = normalizeMapPayload(payload.map);
   notifyListeners();
-  return { url: payload.url, extractedAudio: Boolean(payload.extractedAudio) };
+  return {
+    url: payload.url,
+    extractedAudio: Boolean(payload.extractedAudio),
+    inBytes: payload.inBytes,
+    outBytes: payload.outBytes,
+    compressed: payload.compressed,
+    crf: payload.crf,
+  };
+}
+
+export async function updateAngelCompressionPreset(
+  preset: AngelCompressionPreset,
+): Promise<void> {
+  runtimeOverrides = { ...runtimeOverrides, compressionPreset: preset };
+  notifyListeners();
+
+  try {
+    const res = await fetch('/api/angel-videos/compression-preset', {
+      method: 'PUT',
+      headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ preset }),
+    });
+    handleUnauthorizedStudioResponse(res);
+    if (res.ok) {
+      const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
+      runtimeOverrides = normalizeMapPayload(payload.map);
+      notifyListeners();
+    }
+  } catch {
+    // Keep optimistic state if offline
+  }
+}
+
+export async function compressAngelStudioVideos(options?: {
+  preset?: Exclude<AngelCompressionPreset, 'mute_only'>;
+  targetUrl?: string;
+  force?: boolean;
+}): Promise<CompressAngelVideosResult> {
+  const res = await fetch('/api/angel-videos/compress', {
+    method: 'POST',
+    headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(options || {}),
+  });
+  handleUnauthorizedStudioResponse(res);
+  if (!res.ok) {
+    throw new Error('Failed to compress portrait videos');
+  }
+  const payload = (await res.json()) as {
+    ok: boolean;
+    crf: number;
+    totalFiles: number;
+    compressedCount: number;
+    skippedCount: number;
+    beforeBytes: number;
+    afterBytes: number;
+    map: Partial<AngelVideoMapPayload>;
+  };
+  runtimeOverrides = normalizeMapPayload(payload.map);
+  notifyListeners();
+  return {
+    crf: payload.crf,
+    totalFiles: payload.totalFiles,
+    compressedCount: payload.compressedCount,
+    skippedCount: payload.skippedCount,
+    beforeBytes: payload.beforeBytes,
+    afterBytes: payload.afterBytes,
+  };
 }
 
 export async function uploadAngelSeductionAudio(
@@ -1180,11 +1667,12 @@ export async function uploadAngelSeductionAudio(
 ): Promise<{ audioUrl: string; audioDuration: number }> {
   const res = await fetch('/api/angel-videos/seduction-audio', {
     method: 'POST',
-    headers: {
+    headers: buildStudioAuthHeaders({
       'Content-Type': file.type || 'audio/mpeg',
-    },
+    }),
     body: file,
   });
+  handleUnauthorizedStudioResponse(res);
   if (!res.ok) {
     throw new Error('Failed to upload seduction.mp3');
   }
@@ -1205,7 +1693,9 @@ export async function resetAngelPortraitVideo(
 ): Promise<void> {
   const res = await fetch(`/api/angel-videos/${encodeURIComponent(kind)}/${encodeURIComponent(key)}`, {
     method: 'DELETE',
+    headers: buildStudioAuthHeaders(),
   });
+  handleUnauthorizedStudioResponse(res);
   if (!res.ok) {
     throw new Error('Failed to reset video slot');
   }
@@ -1219,7 +1709,11 @@ export async function updateAngelEscapeEnabled(
   enabled: boolean,
 ): Promise<void> {
   const nextEnabled: Partial<Record<AngelEscapeCueKey, boolean>> = {
-    ...(runtimeOverrides.escapeEnabled || { point_you: true, push_button: true }),
+    ...(runtimeOverrides.escapeEnabled || {
+      point_you: true,
+      point_me: true,
+      push_button: true,
+    }),
     [key]: enabled,
   };
   runtimeOverrides = { ...runtimeOverrides, escapeEnabled: nextEnabled };
@@ -1227,9 +1721,10 @@ export async function updateAngelEscapeEnabled(
 
   const res = await fetch('/api/angel-videos/escape-toggle', {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ key, enabled }),
   });
+  handleUnauthorizedStudioResponse(res);
   if (res.ok) {
     const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
     runtimeOverrides = normalizeMapPayload(payload.map);
@@ -1266,9 +1761,10 @@ export async function updateAngelCaseEscapeCue(
   try {
     const res = await fetch('/api/angel-videos/case-cue', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ caseId, cueKey, rule }),
     });
+    handleUnauthorizedStudioResponse(res);
     if (res.ok) {
       const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
       runtimeOverrides = normalizeMapPayload(payload.map);
@@ -1306,9 +1802,10 @@ export async function updateAngelVideoMaxPlays(
   try {
     const res = await fetch('/api/angel-videos/max-plays', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ slotId, maxPlays: wireValue }),
     });
+    handleUnauthorizedStudioResponse(res);
     if (res.ok) {
       const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
       runtimeOverrides = normalizeMapPayload(payload.map);
@@ -1326,14 +1823,8 @@ export async function updateAngelVideoPlayToEnd(
   const nextPlayToEnd: Record<string, boolean> = {
     ...DEFAULT_VIDEO_PLAY_TO_END,
     ...(runtimeOverrides.videoPlayToEnd || {}),
+    [slotId]: playToEnd,
   };
-  if (playToEnd) {
-    nextPlayToEnd[slotId] = true;
-  } else if (slotId in DEFAULT_VIDEO_PLAY_TO_END || /^case:seduction(_\d+)?$/i.test(slotId)) {
-    nextPlayToEnd[slotId] = false;
-  } else {
-    delete nextPlayToEnd[slotId];
-  }
 
   runtimeOverrides = { ...runtimeOverrides, videoPlayToEnd: nextPlayToEnd };
   saveStoredVideoPlayToEndFallback(nextPlayToEnd);
@@ -1342,9 +1833,10 @@ export async function updateAngelVideoPlayToEnd(
   try {
     const res = await fetch('/api/angel-videos/play-to-end', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ slotId, playToEnd }),
     });
+    handleUnauthorizedStudioResponse(res);
     if (res.ok) {
       const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
       runtimeOverrides = normalizeMapPayload(payload.map);
@@ -1362,9 +1854,10 @@ export async function updateAngelSeductionTriggerMode(mode: SeductionTriggerMode
   try {
     const res = await fetch('/api/angel-videos/seduction-mode', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ mode }),
     });
+    handleUnauthorizedStudioResponse(res);
     if (res.ok) {
       const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
       runtimeOverrides = normalizeMapPayload(payload.map);
@@ -1412,9 +1905,10 @@ export async function updateAngelLipSyncRule(
 
   const res = await fetch('/api/angel-videos/lip-sync', {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ scope, key, rule }),
   });
+  handleUnauthorizedStudioResponse(res);
   if (res.ok) {
     const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
     runtimeOverrides = normalizeMapPayload(payload.map);
@@ -1557,7 +2051,7 @@ function computeProsodyProgress(text: string, charIdx: number): number {
 const ESCAPE_IDEAL_PRE_ROLL_SEC = 0.72;
 
 /**
- * Scans spoken text for Chess Angel's two special word-triggered gesture cues (`"you"` & `"button"`),
+ * Scans spoken text for Chess Angel's special word-triggered gesture cues (`"you"`, `"me"`, & `"button"`),
  * anchoring `spokenWordSec` to exact acoustic waveform measurements for all bundled voice recordings
  * (and focal-word prosody alignment for any custom text).
  */
@@ -1594,7 +2088,30 @@ export function detectEscapeCuesInText(
     });
   }
 
-  // 2. "push a button" / "clicking on a button" / "touch show hint" / "touch hint" / button below
+  // 2. Words "me" & "I" (gesturing toward herself on "me" or "I")
+  const selfMatches = Array.from(text.matchAll(/\b(?:me|i)\b/gi));
+  const meMatch =
+    selfMatches.find((m) => typeof m.index === 'number' && m.index >= 6) || selfMatches[0];
+  if (meMatch && typeof meMatch.index === 'number') {
+    const ratio = computeProsodyProgress(text, meMatch.index);
+    const spokenWordSec =
+      typeof acousticEntry?.point_me === 'number'
+        ? acousticEntry.point_me
+        : Number((leadingSilenceSec + ratio * effectiveSpan).toFixed(2));
+    cues.push({
+      key: 'point_me',
+      matchedPhrase: meMatch[0],
+      focalWord: meMatch[0],
+      charIndex: meMatch.index,
+      progressRatio: ratio,
+      spokenWordSec,
+      estimatedTriggerSec: Number(
+        Math.max(0.03, spokenWordSec - ESCAPE_IDEAL_PRE_ROLL_SEC).toFixed(2),
+      ),
+    });
+  }
+
+  // 3. "push a button" / "clicking on a button" / "touch show hint" / "touch hint" / button below
   const buttonRegex =
     /\b(?:clicking[\s"“”'‘’]+on[\s"“”'‘’]+(?:a|the)[\s"“”'‘’]+button|touch[\s"“”'‘’]+show[\s"“”'‘’]+hint|touch[\s"“”'‘’]+hint|(?:push|pushing|press|pressing|click|clicking|touch|touching|tap|tapping)[\s"“”'‘’]+(?:on[\s"“”'‘’]+)?(?:a[\s"“”'‘’]+|the[\s"“”'‘’]+)?(?:[a-z]+[\s"“”'‘’]+){0,2}button|push\s+a\s+button|push\s+the\s+button|(?:touch|touching|click|clicking|press|pressing|tap|tapping|push|pushing)[\s"“”'‘’]+(?:(?:show[\s"“”'‘’]+)?hint|undo)|show\s+hint|click\s+to\s+confirm|button)\b/i;
   const btnMatch = buttonRegex.exec(text);
@@ -1636,7 +2153,7 @@ export interface CaseNaturalCueSummary {
 }
 
 /**
- * Inspects v1, v2, and v3 of `caseId` to determine whether `cueKey` (`"you"` or `"button"`)
+ * Inspects v1, v2, and v3 of `caseId` to determine whether `cueKey` (`"you"`, `"me"`, or `"button"`)
  * naturally occurs in that saying and at what exact acoustic second.
  */
 export function getCaseNaturalCueSummary(
@@ -1667,7 +2184,7 @@ export function getCaseNaturalCueSummary(
 }
 
 /**
- * Returns the effective Selected / Unselected state and display timing for `cueKey` (`"you"` or `"button"`)
+ * Returns the effective Selected / Unselected state and display timing for `cueKey` (`"you"`, `"me"`, or `"button"`)
  * on a specific video / saying (`caseId`) in the Video Studio modal.
  */
 export function getCaseEscapeCueStatus(
@@ -1688,20 +2205,23 @@ export function getCaseEscapeCueStatus(
 
   const v1ClipId = `${caseId}_v1` as VoiceClipId;
   const v1Dur = VOICE_CLIP_DURATION_SEC[v1ClipId] ?? 5.5;
+  const fallbackRatio =
+    cueKey === 'point_you' ? 0.42 : cueKey === 'point_me' ? 0.52 : 0.66;
   const fallbackForcedSec = Number(
-    Math.max(
-      0.55,
-      Math.min(v1Dur - 0.65, v1Dur * (cueKey === 'point_you' ? 0.42 : 0.66)),
-    ).toFixed(2),
+    Math.max(0.55, Math.min(v1Dur - 0.65, v1Dur * fallbackRatio)).toFixed(2),
   );
 
   const spokenWordSec = natural.cue ? natural.cue.spokenWordSec : fallbackForcedSec;
   const wordLabel =
     cueKey === 'point_you'
       ? '"you"'
-      : natural.cue
-        ? `"${natural.cue.focalWord}"`
-        : '"button"';
+      : cueKey === 'point_me'
+        ? natural.cue
+          ? `"${natural.cue.focalWord}"`
+          : '"me" / "I"'
+        : natural.cue
+          ? `"${natural.cue.focalWord}"`
+          : '"button"';
 
   return {
     selected,
@@ -1720,25 +2240,42 @@ export function isEscapeCueEnabled(
 }
 
 /**
- * Returns the active pool (1 or 2 videos) configured for `cueKey` (`point_you` or `push_button`).
+ * Returns all attached video slots (`#1, #2, #3, #4...`) configured for `cueKey` in ascending slot order.
+ */
+export function getEscapeCueEntries(
+  cueKey: AngelEscapeCueKey,
+  map: AngelVideoMapPayload = runtimeOverrides,
+): Array<{ slotKey: AngelEscapeSlotKey; num: number; url: string }> {
+  const found: Array<{ slotKey: AngelEscapeSlotKey; num: number; url: string }> = [];
+  for (const [k, u] of Object.entries(map.escapes || {})) {
+    if (!u) continue;
+    const num = parseEscapeSlotNumber(cueKey, k);
+    if (num >= 1) {
+      found.push({ slotKey: k as AngelEscapeSlotKey, num, url: u });
+    }
+  }
+  found.sort((a, b) => a.num - b.num);
+  return found;
+}
+
+/**
+ * Returns the active pool (`#1..#N`) configured for `cueKey` (`point_you`, `point_me`, or `push_button`).
  */
 export function getEscapeVideoPool(
   cueKey: AngelEscapeCueKey,
   map: AngelVideoMapPayload = runtimeOverrides,
 ): string[] {
-  const slots = ESCAPE_CUE_SLOT_KEYS[cueKey];
   const pool: string[] = [];
-  for (const slotKey of slots) {
-    const u = map.escapes?.[slotKey];
-    if (u && !pool.includes(u)) {
-      pool.push(u);
+  for (const item of getEscapeCueEntries(cueKey, map)) {
+    if (!pool.includes(item.url)) {
+      pool.push(item.url);
     }
   }
   return pool;
 }
 
 /**
- * Primes a specific Escape Overlay video URL (`#1` or `#2`) so clicking `Test` or uploading
+ * Primes a specific Escape Overlay video URL (`#1..#N`) so clicking `Test` or uploading
  * a specific alternative slot in Video Studio previews that exact slot immediately.
  */
 export function primeNextEscapeSlotPreview(
@@ -1758,12 +2295,10 @@ function pickEscapeVideoForCue(
   advanceCursor: boolean,
   isStudioPreview = false,
 ): string | null {
-  const slots = ESCAPE_CUE_SLOT_KEYS[cueKey];
   const entries: Array<{ slotId: string; url: string }> = [];
-  for (const slotKey of slots) {
-    const u = map.escapes?.[slotKey];
-    if (u && !entries.some((e) => e.url === u)) {
-      entries.push({ slotId: `escape:${slotKey}`, url: u });
+  for (const item of getEscapeCueEntries(cueKey, map)) {
+    if (!entries.some((e) => e.url === item.url)) {
+      entries.push({ slotId: `escape:${item.slotKey}`, url: item.url });
     }
   }
   if (entries.length === 0) return null;
@@ -1800,7 +2335,11 @@ function pickEscapeVideoForCue(
     return allowed[escapeRotationCursor[cueKey] % allowed.length].url;
   }
 
-  const idx = escapeRotationCursor[cueKey] % allowed.length;
+  // Avoid playing the exact same escape clip twice in a row when rotating across #1..#N
+  let idx = escapeRotationCursor[cueKey] % allowed.length;
+  if (allowed.length >= 2 && allowed[idx].url === lastPickedEscapeUrl[cueKey]) {
+    idx = (idx + 1) % allowed.length;
+  }
   const chosen = allowed[idx];
   escapeRotationCursor[cueKey] = (idx + 1) % allowed.length;
   lastPickedEscapeUrl[cueKey] = chosen.url;
@@ -1823,9 +2362,8 @@ export function resolveActiveEscapeCues(
   const detected = detectEscapeCuesInText(effectiveText, totalTalkSec, clipId);
 
   const candidates: DetectedTextEscapeCue[] = [];
-  const allKeys: AngelEscapeCueKey[] = ['point_you', 'push_button'];
 
-  for (const cueKey of allKeys) {
+  for (const cueKey of ALL_ESCAPE_CUE_KEYS) {
     if (!isEscapeCueEnabled(cueKey, map)) continue;
     const caseRule = caseId ? map.caseEscapeCues?.[caseId]?.[cueKey] : undefined;
     if (caseRule === 'off') {
@@ -1838,14 +2376,16 @@ export function resolveActiveEscapeCues(
       candidates.push(naturalCue);
     } else if (caseRule === 'on') {
       // User explicitly selected this cue on this video in Video Studio!
-      const ratio = cueKey === 'point_you' ? 0.42 : 0.66;
+      const ratio = cueKey === 'point_you' ? 0.42 : cueKey === 'point_me' ? 0.52 : 0.66;
+      const fallbackWord =
+        cueKey === 'point_you' ? 'you' : cueKey === 'point_me' ? 'me' : 'button';
       const forcedWordSec = Number(
         Math.max(0.55, Math.min(totalTalkSec - 0.65, totalTalkSec * ratio)).toFixed(2),
       );
       candidates.push({
         key: cueKey,
-        matchedPhrase: cueKey === 'point_you' ? 'you' : 'button',
-        focalWord: cueKey === 'point_you' ? 'you' : 'button',
+        matchedPhrase: fallbackWord,
+        focalWord: fallbackWord,
         charIndex: 0,
         progressRatio: ratio,
         spokenWordSec: forcedWordSec,
@@ -1872,7 +2412,7 @@ export function resolveActiveEscapeCues(
     const idealLeadSec = fullLengthNoCut
       ? videoApexSec
       : Math.min(videoApexSec, ESCAPE_IDEAL_PRE_ROLL_SEC);
-    const minTriggerSec = i === 0 ? 0.03 : prevSpokenWordSec + 0.36;
+    const minTriggerSec = result.length === 0 ? 0.03 : prevSpokenWordSec + 0.36;
     const rawTrigger = Math.max(minTriggerSec, cue.spokenWordSec - idealLeadSec);
     const clampedTrigger =
       cue.spokenWordSec > minTriggerSec + 0.14
@@ -2160,9 +2700,6 @@ export function resolveAngelSpeakingVideo(
     const caseLipRule = lip.cases[caseId];
 
     if (staticCase) {
-      // Built-in clip plays unless user explicitly cleared custom clip and forced Idle Only / Lip-Sync ON
-      if (caseLipRule === 'off') return null;
-      if (caseLipRule === 'on') return defaultSpeakSrc;
       return staticCase;
     }
 
@@ -2196,5 +2733,32 @@ export function resolveAngelSpeakingVideo(
   }
 
   return lip.defaultEnabled !== false ? defaultSpeakSrc : null;
+}
+
+/**
+ * Pre-resolves the exact speaking video & audio timing for a human-move commentary message
+ * (`lost_queen`, `player_check`, `seduction` #1..#N, `undo-offer`) before `opponentSpeech.playClip`
+ * runs, ensuring multi-slot seduction audio is armed and the AI engine holds its reply turn
+ * until the full reaction video/audio completes (unless developer explicitly unlocked No-Cut).
+ */
+export function prepareHumanCommentaryPlayback(
+  clipId: VoiceClipId,
+  triggerKey: string,
+): {
+  videoUrl: string | null;
+  videoSec: number;
+  audioSec: number;
+  playToEnd: boolean;
+} {
+  const videoUrl = resolveAngelSpeakingVideo(clipId, triggerKey);
+  const videoSec = videoUrl ? getVideoFileDurationSec(videoUrl, runtimeOverrides) ?? 0 : 0;
+  const audioSec = VOICE_CLIP_DURATION_SEC[clipId] ?? 0;
+  const playToEnd = isUtterancePlayToEnd(
+    videoUrl,
+    clipId,
+    runtimeOverrides,
+    videoSec || undefined,
+  );
+  return { videoUrl, videoSec, audioSec, playToEnd };
 }
 

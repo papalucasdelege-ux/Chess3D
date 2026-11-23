@@ -9,7 +9,7 @@ export function buildPgnFromMoves(
 ): string {
   const datePart = meta.dateIso.slice(0, 10).replace(/-/g, '.');
   const headers = [
-    `[Event "ChessAngel3D Match"]`,
+    `[Event "ChessAngel 3D Match"]`,
     `[Date "${datePart}"]`,
     `[White "${meta.whiteName}"]`,
     `[Black "${meta.blackName}"]`,
@@ -140,5 +140,192 @@ export function persistSavedGames(games: SavedGame[]): void {
     localStorage.setItem(ARCHIVE_STORAGE_KEY, JSON.stringify(games.slice(0, 40)));
   } catch {
     // ignore storage quota errors
+  }
+}
+
+export function exportSavedGameJson(game: SavedGame): void {
+  const safeSlug = game.title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 36);
+  const datePart = (game.dateIso || new Date().toISOString()).slice(0, 10);
+  const filename = `chessangel-${safeSlug || 'game'}-${datePart}.json`;
+  const payload = JSON.stringify(game, null, 2);
+  const blob = new Blob([payload], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+export function parseImportedSavedGame(rawText: string, fileName?: string): SavedGame | null {
+  const trimmed = rawText.trim();
+  if (!trimmed) return null;
+
+  // 1. Try JSON save format (single SavedGame object or SavedGame[])
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const candidate = Array.isArray(parsed) ? parsed[0] : parsed;
+      if (candidate && typeof candidate === 'object') {
+        if (Array.isArray(candidate.moves)) {
+          const chessCheck = new Chess();
+          if (candidate.finalFen) {
+            try {
+              chessCheck.load(String(candidate.finalFen));
+            } catch {
+              // fallback to reconstructing from moves
+            }
+          }
+          const validMoves = candidate.moves.filter(
+            (m: unknown): m is MoveRecord =>
+              Boolean(
+                m &&
+                  typeof m === 'object' &&
+                  typeof (m as MoveRecord).san === 'string' &&
+                  typeof (m as MoveRecord).from === 'string' &&
+                  typeof (m as MoveRecord).to === 'string' &&
+                  typeof (m as MoveRecord).fen === 'string',
+              ),
+          );
+          const whiteName =
+            typeof candidate.whiteName === 'string' && candidate.whiteName.trim()
+              ? candidate.whiteName.trim()
+              : 'White';
+          const blackName =
+            typeof candidate.blackName === 'string' && candidate.blackName.trim()
+              ? candidate.blackName.trim()
+              : 'Chess Angel';
+          const dateIso =
+            typeof candidate.dateIso === 'string' && candidate.dateIso
+              ? candidate.dateIso
+              : new Date().toISOString();
+          const resultLabel =
+            typeof candidate.resultLabel === 'string' && candidate.resultLabel
+              ? candidate.resultLabel
+              : '*';
+          const finalFen =
+            validMoves.length > 0
+              ? validMoves[validMoves.length - 1].fen
+              : typeof candidate.finalFen === 'string' && candidate.finalFen
+                ? candidate.finalFen
+                : chessCheck.fen();
+
+          return {
+            id: `game_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            title:
+              typeof candidate.title === 'string' && candidate.title.trim()
+                ? candidate.title.trim()
+                : `${whiteName} vs ${blackName}`,
+            whiteName,
+            blackName,
+            resultLabel,
+            reason: typeof candidate.reason === 'string' ? candidate.reason : 'in-progress',
+            mode:
+              candidate.mode === 'local' ||
+              candidate.mode === 'engine' ||
+              candidate.mode === 'multiplayer' ||
+              candidate.mode === 'classic'
+                ? candidate.mode
+                : 'engine',
+            skinId: 'walnut-maple',
+            timeControl:
+              candidate.timeControl === '3+0' ||
+              candidate.timeControl === '5+3' ||
+              candidate.timeControl === '10+0' ||
+              candidate.timeControl === 'unlimited'
+                ? candidate.timeControl
+                : '10+0',
+            dateIso,
+            moves: validMoves,
+            finalFen,
+            pgn:
+              typeof candidate.pgn === 'string' && candidate.pgn.trim()
+                ? candidate.pgn
+                : buildPgnFromMoves(validMoves, { whiteName, blackName, resultLabel, dateIso }),
+            engineLevel: candidate.engineLevel,
+            humanColor: candidate.humanColor === 'b' ? 'b' : 'w',
+            humanColorPref:
+              candidate.humanColorPref === 'w' ||
+              candidate.humanColorPref === 'b' ||
+              candidate.humanColorPref === 'random'
+                ? candidate.humanColorPref
+                : undefined,
+            clocks:
+              candidate.clocks &&
+              typeof candidate.clocks.w === 'number' &&
+              typeof candidate.clocks.b === 'number'
+                ? { w: Math.max(0, candidate.clocks.w), b: Math.max(0, candidate.clocks.b) }
+                : undefined,
+            result: candidate.result ?? null,
+            moveEvalMeta:
+              candidate.moveEvalMeta && typeof candidate.moveEvalMeta === 'object'
+                ? candidate.moveEvalMeta
+                : undefined,
+          };
+        }
+      }
+    } catch {
+      // fall through to PGN parser
+    }
+  }
+
+  // 2. Try standard PGN format
+  try {
+    const parser = new Chess();
+    parser.loadPgn(trimmed);
+    const headers = parser.getHeaders();
+    const sanList = parser.history();
+    const whiteName = headers.White && headers.White !== '?' ? headers.White : 'White';
+    const blackName = headers.Black && headers.Black !== '?' ? headers.Black : 'Chess Angel';
+    const resultLabel =
+      headers.Result === '1-0' || headers.Result === '0-1' || headers.Result === '1/2-1/2'
+        ? headers.Result
+        : '*';
+    const baseLabel = fileName
+      ? fileName.replace(/\.(pgn|json|txt)$/i, '').replace(/[_-]+/g, ' ')
+      : '';
+    const title =
+      headers.Event && headers.Event !== '?' && headers.Event !== 'ChessAngel 3D Match'
+        ? `${headers.Event} · ${whiteName} vs ${blackName}`
+        : baseLabel || `${whiteName} vs ${blackName}`;
+    const reason = parser.isCheckmate()
+      ? 'checkmate'
+      : parser.isStalemate()
+        ? 'stalemate'
+        : parser.isDraw()
+          ? 'agreement'
+          : resultLabel === '*'
+            ? 'in-progress'
+            : 'resignation';
+
+    const built = buildSavedGameFromSanList({
+      id: `game_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      title,
+      whiteName,
+      blackName,
+      resultLabel,
+      reason,
+      mode: 'engine',
+      skinId: 'walnut-maple',
+      timeControl: '10+0',
+      dateIso: new Date().toISOString(),
+      sanList,
+    });
+    if (resultLabel === '1-0') {
+      built.result = { winner: 'w', reason: parser.isCheckmate() ? 'checkmate' : 'resignation' };
+    } else if (resultLabel === '0-1') {
+      built.result = { winner: 'b', reason: parser.isCheckmate() ? 'checkmate' : 'resignation' };
+    } else if (resultLabel === '1/2-1/2') {
+      built.result = { winner: 'draw', reason: parser.isStalemate() ? 'stalemate' : 'agreement' };
+    }
+    return built;
+  } catch {
+    return null;
   }
 }
