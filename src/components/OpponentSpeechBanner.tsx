@@ -2446,7 +2446,11 @@ export function OpponentSpeechBanner({
                 className={primaryActionBtnClass}
               >
                 <Check className={iconSmClass} />
-                <span>Next #{nextBranchNum}</span>
+                <span>
+                  {calcPreview.branchIndex >= calcPreview.totalBranches
+                    ? 'Done'
+                    : `Next #${nextBranchNum}`}
+                </span>
               </button>
               <span className={`${tagTextClass} text-[#9aa3b2] break-words whitespace-normal`}>
                 or click on the board

@@ -1501,10 +1501,84 @@ export class ChessScene3D {
   ): void {
     if (this.webglUnavailable) return;
     this.stopCalculationPreview(false);
+    this.stopSearchTreeThinLines();
 
-    const branches = report.triedLines
-      .filter((l) => l.pvUci.length > 0)
+    let effectiveRootFen = report.rootFen || finalFen;
+    let branches = report.triedLines
+      .map((l) => {
+        const pvUci =
+          l.pvUci && l.pvUci.length > 0
+            ? l.pvUci
+            : l.bestMoveUci && l.bestMoveUci.length >= 4
+              ? [l.bestMoveUci]
+              : [];
+        return { ...l, pvUci };
+      })
+      .filter((l) => {
+        if (l.pvUci.length === 0) return false;
+        const uci = l.pvUci[0];
+        if (!uci || uci.length < 4) return false;
+        try {
+          const probe = new Chess(effectiveRootFen);
+          const mv = probe.move({
+            from: uci.slice(0, 2),
+            to: uci.slice(2, 4),
+            promotion: (uci.slice(4, 5) || undefined) as PieceType | undefined,
+          });
+          return Boolean(mv);
+        } catch {
+          return false;
+        }
+      })
       .slice(0, 3);
+
+    // Fallback: if rootFen had no matching legal branches, synthesize up to 3 legal lines from finalFen
+    if (branches.length === 0) {
+      try {
+        const fallbackChess = new Chess(finalFen);
+        const legalMoves = fallbackChess.moves({ verbose: true });
+        if (legalMoves.length > 0) {
+          effectiveRootFen = finalFen;
+          const ordered = [...legalMoves].sort(
+            (a, b) => Number(Boolean(b.captured)) - Number(Boolean(a.captured)),
+          );
+          branches = ordered.slice(0, 3).map((mv, idx) => {
+            const sim = new Chess(finalFen);
+            const uciList: string[] = [];
+            const sanList: string[] = [];
+            const first = sim.move({ from: mv.from, to: mv.to, promotion: mv.promotion });
+            if (first) {
+              uciList.push(`${first.from}${first.to}${first.promotion || ''}`);
+              sanList.push(first.san);
+              const replies = sim.moves({ verbose: true });
+              if (replies.length > 0) {
+                const replyPick = replies.find((r) => r.captured) || replies[0];
+                const second = sim.move({
+                  from: replyPick.from,
+                  to: replyPick.to,
+                  promotion: replyPick.promotion,
+                });
+                if (second) {
+                  uciList.push(`${second.from}${second.to}${second.promotion || ''}`);
+                  sanList.push(second.san);
+                }
+              }
+            }
+            return {
+              multipv: idx + 1,
+              scoreCp: 0,
+              mateIn: null,
+              pvSan: sanList,
+              pvUci: uciList,
+              bestMoveUci: uciList[0] || `${mv.from}${mv.to}${mv.promotion || ''}`,
+            };
+          });
+        }
+      } catch {
+        // Ignore invalid fallback FEN
+      }
+    }
+
     if (branches.length === 0) {
       callbacks?.onComplete?.();
       return;
@@ -1538,9 +1612,9 @@ export class ChessScene3D {
       if (this.disposed || !this.calcPreviewActive) return;
       const allTrialArrowsSnapshot = [...completedTrialArrows];
 
-      this.syncPieces(report.rootFen, null);
+      this.syncPieces(effectiveRootFen, null);
       const chosenHint =
-        report.bestMoveUci && report.bestMoveUci.length >= 4
+        effectiveRootFen !== finalFen && report.bestMoveUci && report.bestMoveUci.length >= 4
           ? { from: report.bestMoveUci.slice(0, 2), to: report.bestMoveUci.slice(2, 4) }
           : null;
 
@@ -1558,7 +1632,7 @@ export class ChessScene3D {
         this.calcPreviewTimers = [];
         this.arrowFadeActive = true;
         this.arrowFadeElapsed = 0;
-        this.arrowFadeDuration = 0.9;
+        this.arrowFadeDuration = 1.05;
         this.arrowFadeCompleteCb = () => {
           this.calcPreviewActive = false;
           this.calcWaitingForClick = false;
@@ -1573,7 +1647,7 @@ export class ChessScene3D {
           callbacks?.onComplete?.();
         };
         this.requestRender();
-      }, 1250);
+      }, 2200);
       this.calcPreviewTimers.push(fadeStartTimer);
     };
 
@@ -1594,19 +1668,38 @@ export class ChessScene3D {
 
       const trialKind = trialKinds[branchIdx] || 'trial-1';
       const plies = line.pvUci.slice(0, 4);
-      const pvSanSlice = line.pvSan.slice(0, 4);
       const snapshotBeforeBranch = [...completedTrialArrows];
 
-      // Reset pieces to rootFen at the start of this branch while keeping prior branch arrows visible
-      this.syncPieces(report.rootFen, null);
+      // Derive SAN labels if pvSan is missing or shorter than pvUci
+      const sanCheck = new Chess(effectiveRootFen);
+      const computedSan: string[] = [];
+      for (const u of plies) {
+        if (u.length < 4) break;
+        try {
+          const mv = sanCheck.move({
+            from: u.slice(0, 2),
+            to: u.slice(2, 4),
+            promotion: (u.slice(4, 5) || undefined) as PieceType | undefined,
+          });
+          if (!mv) break;
+          computedSan.push(mv.san);
+        } catch {
+          break;
+        }
+      }
+      const pvSanSlice =
+        line.pvSan && line.pvSan.length > 0 ? line.pvSan.slice(0, 4) : computedSan;
+
+      // Reset pieces to effectiveRootFen at the start of this branch while keeping prior branch arrows visible
+      this.syncPieces(effectiveRootFen, null);
       this.lastFromPlate.visible = false;
       this.lastToPlate.visible = false;
       this.syncArrows(snapshotBeforeBranch);
       callbacks?.onBranchChange?.(branchIdx + 1, branches.length, pvSanSlice, false);
       this.requestRender();
 
-      let delayMs = 700;
-      const sim = new Chess(report.rootFen);
+      let delayMs = 520;
+      const sim = new Chess(effectiveRootFen);
 
       for (let p = 0; p < plies.length; p++) {
         const uci = plies[p];
@@ -1641,7 +1734,7 @@ export class ChessScene3D {
                   from,
                   to,
                   kind: trialKind,
-                  opacityScale: 0.65,
+                  opacityScale: 0.72,
                 },
               ];
 
@@ -1665,8 +1758,9 @@ export class ChessScene3D {
       }
 
       // Pause after the branch's final move lands:
-      // - For Branch 1 and Branch 2 (when another branch follows), pause & wait for player's click confirmation!
-      // - For the final branch, pause 1.2s so the final board position is clear, then settle & fade.
+      // - For Branch 1 and Branch 2 (when another branch follows), or when there is only 1 branch total,
+      //   pause & wait for player's click confirmation so the branch never disappears unseen!
+      // - For the final branch of a multi-branch set, pause 1.6s so the final board position is clear, then settle & fade.
       const endOfBranchTimer = window.setTimeout(() => {
         if (this.disposed || !this.calcPreviewActive) return;
         if (branchIdx < branches.length - 1) {
@@ -1675,10 +1769,15 @@ export class ChessScene3D {
           callbacks?.onBranchChange?.(branchIdx + 1, branches.length, pvSanSlice, true);
           callbacks?.onWaitForBranchConfirm?.(branchIdx + 1, branches.length, pvSanSlice);
           this.requestRender();
+        } else if (branches.length === 1) {
+          this.calcWaitingForClick = true;
+          this.calcNextBranchFn = () => finishAllBranches();
+          callbacks?.onBranchChange?.(1, 1, pvSanSlice, true);
+          this.requestRender();
         } else {
           const finalSettleTimer = window.setTimeout(() => {
             finishAllBranches();
-          }, 1200);
+          }, 1600);
           this.calcPreviewTimers.push(finalSettleTimer);
         }
       }, delayMs + 250);
@@ -2306,6 +2405,29 @@ export class ChessScene3D {
     }
     if (arrows.length === 0) return;
 
+    const buildArrowGeometry = (
+      halfShaft: number,
+      halfHead: number,
+      tailOffset: number,
+      neckDist: number,
+      tipDist: number,
+      pad = 0,
+    ): THREE.ShapeGeometry => {
+      const s = new THREE.Shape();
+      s.moveTo(-(halfShaft + pad), -(tailOffset - pad * 0.85));
+      s.lineTo(-(halfShaft + pad), -(neckDist - pad * 0.55));
+      s.lineTo(-(halfHead + pad), -(neckDist - pad * 0.55));
+      s.lineTo(0, -(tipDist + pad * 1.3));
+      s.lineTo(halfHead + pad, -(neckDist - pad * 0.55));
+      s.lineTo(halfShaft + pad, -(neckDist - pad * 0.55));
+      s.lineTo(halfShaft + pad, -(tailOffset - pad * 0.85));
+      s.closePath();
+      const geo = new THREE.ShapeGeometry(s);
+      // Rotate flat onto the XZ board plane so -Y in 2D shape points along +Z toward target square
+      geo.rotateX(-Math.PI / 2);
+      return geo;
+    };
+
     arrows.forEach((arrow, idx) => {
       const start = squareToWorld(arrow.from);
       const end = squareToWorld(arrow.to);
@@ -2318,59 +2440,104 @@ export class ChessScene3D {
       const dirZ = dz / dist;
       const angle = Math.atan2(dirX, dirZ);
 
-      // Flat 2D arrow flush on the chessboard surface (no 3D extrusion)
-      const arrowY = BOARD_TOP_Y + 0.025 + idx * 0.002;
-      const tailOffset = 0.14;
-      const tipDist = Math.max(0.32, dist - 0.06);
-      const headLen = Math.min(0.38, Math.max(0.24, (tipDist - tailOffset) * 0.42));
+      // Flat 2D arrow cleanly elevated above square plates & rings (no 3D extrusion, zero Z-fighting)
+      const arrowY = BOARD_TOP_Y + 0.032 + idx * 0.004;
+      const tailOffset = 0.13;
+      const tipDist = Math.max(0.34, dist - 0.05);
+      const headLen = Math.min(0.4, Math.max(0.25, (tipDist - tailOffset) * 0.42));
       const neckDist = Math.max(tailOffset + 0.06, tipDist - headLen);
-      const halfShaft = 0.082;
-      const halfHead = 0.22;
+      const halfShaft = 0.084;
+      const halfHead = 0.228;
 
+      // Strictly Gold, Cyan, and Rose translucent glowing palette
       const palette =
-        arrow.kind === 'trial-1'
-          ? { color: 0xf4c45a, opacity: 0.9 }
-          : arrow.kind === 'trial-2'
-            ? { color: 0x38bdf8, opacity: 0.9 }
-            : arrow.kind === 'trial-3'
-              ? { color: 0xfb7185, opacity: 0.9 }
-              : arrow.kind === 'primary'
-                ? { color: 0xeac067, opacity: 0.88 }
-                : arrow.kind === 'branch'
-                  ? { color: 0xf5d487, opacity: 0.84 }
-                  : { color: 0x38bdf8, opacity: 0.86 };
+        arrow.kind === 'trial-2' || arrow.kind === 'secondary'
+          ? { coreColor: 0x38bdf8, glowColor: 0x7dd3fc }
+          : arrow.kind === 'trial-3'
+            ? { coreColor: 0xfb7185, glowColor: 0xfda4af }
+            : { coreColor: 0xffcf54, glowColor: 0xffe082 };
 
-      const baseOpacity = palette.opacity * (arrow.opacityScale ?? 1);
+      const coreHex = arrow.customColorHex ?? palette.coreColor;
+      const glowHex = arrow.customColorHex ?? palette.glowColor;
+      const scaleAlpha = arrow.opacityScale ?? 1;
 
-      const shape = new THREE.Shape();
-      shape.moveTo(-halfShaft, -tailOffset);
-      shape.lineTo(-halfShaft, -neckDist);
-      shape.lineTo(-halfHead, -neckDist);
-      shape.lineTo(0, -tipDist);
-      shape.lineTo(halfHead, -neckDist);
-      shape.lineTo(halfShaft, -neckDist);
-      shape.lineTo(halfShaft, -tailOffset);
-      shape.closePath();
+      const outerGlowOpacity = 0.16 * scaleAlpha;
+      const innerGlowOpacity = 0.24 * scaleAlpha;
+      const coreTranslucentOpacity = 0.44 * scaleAlpha;
 
-      const arrowGeo = new THREE.ShapeGeometry(shape);
-      // Rotate flat onto the XZ board plane so -Y in 2D shape points along +Z toward target square
-      arrowGeo.rotateX(-Math.PI / 2);
-
-      const arrowMat = new THREE.MeshBasicMaterial({
-        color: arrow.customColorHex ?? palette.color,
+      // 1) Wide soft outer additive halo (airy glow across wood grain & square lines)
+      const outerHaloGeo = buildArrowGeometry(
+        halfShaft,
+        halfHead,
+        tailOffset,
+        neckDist,
+        tipDist,
+        0.048,
+      );
+      const outerHaloMat = new THREE.MeshBasicMaterial({
+        color: glowHex,
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: baseOpacity,
+        opacity: outerGlowOpacity,
+        blending: THREE.AdditiveBlending,
         depthWrite: false,
         toneMapped: false,
         polygonOffset: true,
-        polygonOffsetFactor: -3 - idx,
-        polygonOffsetUnits: -3 - idx,
+        polygonOffsetFactor: -4 - idx * 3,
+        polygonOffsetUnits: -4 - idx * 3,
       });
+      const outerHaloMesh = new THREE.Mesh(outerHaloGeo, outerHaloMat);
+      outerHaloMesh.userData.baseOpacity = outerGlowOpacity;
+      outerHaloMesh.renderOrder = 12 + idx * 3;
+      outerHaloMesh.position.set(start.x, arrowY - 0.001, start.z);
+      outerHaloMesh.rotation.y = angle;
+      this.arrowGroup.add(outerHaloMesh);
 
+      // 2) Tight inner additive bloom (soft luminous edge & body radiance)
+      const innerGlowGeo = buildArrowGeometry(
+        halfShaft,
+        halfHead,
+        tailOffset,
+        neckDist,
+        tipDist,
+        0.018,
+      );
+      const innerGlowMat = new THREE.MeshBasicMaterial({
+        color: glowHex,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: innerGlowOpacity,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -5 - idx * 3,
+        polygonOffsetUnits: -5 - idx * 3,
+      });
+      const innerGlowMesh = new THREE.Mesh(innerGlowGeo, innerGlowMat);
+      innerGlowMesh.userData.baseOpacity = innerGlowOpacity;
+      innerGlowMesh.renderOrder = 13 + idx * 3;
+      innerGlowMesh.position.set(start.x, arrowY - 0.0005, start.z);
+      innerGlowMesh.rotation.y = angle;
+      this.arrowGroup.add(innerGlowMesh);
+
+      // 3) Semi-transparent arrow body so wood grain & thin lines stay visible underneath
+      const arrowGeo = buildArrowGeometry(halfShaft, halfHead, tailOffset, neckDist, tipDist, 0);
+      const arrowMat = new THREE.MeshBasicMaterial({
+        color: coreHex,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: coreTranslucentOpacity,
+        blending: THREE.NormalBlending,
+        depthWrite: false,
+        toneMapped: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -6 - idx * 3,
+        polygonOffsetUnits: -6 - idx * 3,
+      });
       const arrowMesh = new THREE.Mesh(arrowGeo, arrowMat);
-      arrowMesh.userData.baseOpacity = baseOpacity;
-      arrowMesh.renderOrder = 6 + idx;
+      arrowMesh.userData.baseOpacity = coreTranslucentOpacity;
+      arrowMesh.renderOrder = 14 + idx * 3;
       arrowMesh.position.set(start.x, arrowY, start.z);
       arrowMesh.rotation.y = angle;
       this.arrowGroup.add(arrowMesh);

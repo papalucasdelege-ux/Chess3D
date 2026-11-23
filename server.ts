@@ -766,7 +766,27 @@ async function startServer(): Promise<void> {
   app.set('trust proxy', 1);
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    const scriptPolicy = IS_PROD
+      ? "script-src 'self' 'unsafe-inline'"
+      : "script-src 'self' 'unsafe-inline' 'unsafe-eval'";
+    res.setHeader(
+      'Content-Security-Policy',
+      [
+        "default-src 'self'",
+        scriptPolicy,
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: blob:",
+        "media-src 'self' data: blob:",
+        "font-src 'self' data:",
+        "connect-src 'self' ws: wss:",
+        "worker-src 'self' blob:",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        'frame-ancestors *',
+      ].join('; '),
+    );
     const pathname = req.path || '';
     const lowerPath = pathname.toLowerCase();
     // Block source maps and raw project/server configuration files from being copied

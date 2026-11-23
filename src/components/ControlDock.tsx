@@ -24,6 +24,11 @@ import {
   Download,
   GitBranch,
   Sun,
+  Sparkles,
+  ThumbsUp,
+  HelpCircle,
+  AlertTriangle,
+  AlertCircle,
 } from 'lucide-react';
 import {
   ENGINE_LEVELS,
@@ -32,6 +37,7 @@ import {
   type CameraPreset,
   type EngineLevel,
   type GameMode,
+  type MoveQuality,
   type MoveRecord,
   type PieceColor,
   type SavedGame,
@@ -122,7 +128,7 @@ interface ControlDockProps {
   onSecretStudioTrigger?: () => void;
 }
 
-const QUALITY_COLORS: Record<string, string> = {
+const QUALITY_COLORS: Record<MoveQuality, string> = {
   best: 'text-[#6ee7b7]',
   excellent: 'text-[#93c5fd]',
   good: 'text-[#cbd5e1]',
@@ -130,6 +136,76 @@ const QUALITY_COLORS: Record<string, string> = {
   mistake: 'text-[#fb923c]',
   blunder: 'text-[#f87171]',
 };
+
+const QUALITY_LABELS: Record<MoveQuality, string> = {
+  best: 'Best move',
+  excellent: 'Excellent move',
+  good: 'Good move',
+  inaccuracy: 'Inaccuracy',
+  mistake: 'Mistake',
+  blunder: 'Blunder',
+};
+
+function MoveQualityIcon({
+  quality,
+  active = false,
+}: {
+  quality?: MoveQuality;
+  active?: boolean;
+}) {
+  if (!quality) return null;
+
+  switch (quality) {
+    case 'best':
+      return (
+        <Check
+          aria-label="Best move"
+          strokeWidth={2.8}
+          className={`w-3 h-3 shrink-0 ${active ? 'text-[#064e3b]' : 'text-[#34d399]'}`}
+        />
+      );
+    case 'excellent':
+      return (
+        <Sparkles
+          aria-label="Excellent move"
+          strokeWidth={2.4}
+          className={`w-3 h-3 shrink-0 ${active ? 'text-[#1e3a8a]' : 'text-[#93c5fd]'}`}
+        />
+      );
+    case 'good':
+      return (
+        <ThumbsUp
+          aria-label="Good move"
+          strokeWidth={2.3}
+          className={`w-2.5 h-2.5 shrink-0 ${active ? 'text-[#1e293b]' : 'text-[#94a3b8]'}`}
+        />
+      );
+    case 'inaccuracy':
+      return (
+        <HelpCircle
+          aria-label="Inaccuracy"
+          strokeWidth={2.4}
+          className={`w-3 h-3 shrink-0 ${active ? 'text-[#78350f]' : 'text-[#fbbf24]'}`}
+        />
+      );
+    case 'mistake':
+      return (
+        <AlertTriangle
+          aria-label="Mistake"
+          strokeWidth={2.4}
+          className={`w-3 h-3 shrink-0 ${active ? 'text-[#7c2d12]' : 'text-[#fb923c]'}`}
+        />
+      );
+    case 'blunder':
+      return (
+        <AlertCircle
+          aria-label="Blunder"
+          strokeWidth={2.6}
+          className={`w-3 h-3 shrink-0 ${active ? 'text-[#991b1b]' : 'text-[#f87171]'}`}
+        />
+      );
+  }
+}
 
 const LEVEL_ORDER: EngineLevel[] = [
   'beginner',
@@ -247,8 +323,11 @@ export function ControlDock(props: ControlDockProps) {
                   ♞
                 </span>
               )}
-              <span className="font-display text-base font-medium tracking-tight text-[#f5f0e6] whitespace-nowrap">
-                ChessAngel 3D v1.4
+              <span className="font-display text-base sm:text-lg font-semibold tracking-tight text-[#f5f0e6] whitespace-nowrap">
+                ChessAngel 3D
+              </span>
+              <span className="font-mono-tabular text-sm sm:text-base font-bold tracking-tight px-2 py-0.5 rounded-md bg-[#261d0e] border border-[#d6ae63]/70 text-[#fde68a] shadow-sm whitespace-nowrap">
+                v3.0
               </span>
             </div>
 
@@ -937,23 +1016,32 @@ export function ControlDock(props: ControlDockProps) {
                     props.moveHistory.map((m) => {
                       const active = props.viewPly === m.ply;
                       const meta = props.moveEvalMeta[m.ply];
-                      const qualityClass = meta?.quality
-                        ? QUALITY_COLORS[meta.quality]
-                        : 'text-[#d7dce5]';
+                      const quality = meta?.quality;
+                      const qualityClass = quality ? QUALITY_COLORS[quality] : 'text-[#d7dce5]';
+                      const tooltip = quality
+                        ? `${m.san} · ${QUALITY_LABELS[quality]}${
+                            typeof meta?.cpLoss === 'number' && meta.cpLoss > 0
+                              ? ` (−${Math.round(meta.cpLoss)} cp)`
+                              : ''
+                          }`
+                        : m.san;
                       return (
                         <button
                           key={m.ply}
                           type="button"
                           onClick={() => props.onJumpToPly(m.ply)}
-                          title={meta?.quality ? `${m.san} · ${meta.quality}` : m.san}
-                          className={`px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
+                          title={tooltip}
+                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
                             active
                               ? 'bg-[#d6ae63] text-[#111419] font-semibold'
                               : `hover:bg-white/10 ${qualityClass}`
                           }`}
                         >
-                          {m.ply % 2 === 1 ? `${Math.ceil(m.ply / 2)}. ` : ''}
-                          {m.san}
+                          <span>
+                            {m.ply % 2 === 1 ? `${Math.ceil(m.ply / 2)}. ` : ''}
+                            {m.san}
+                          </span>
+                          <MoveQualityIcon quality={quality} active={active} />
                         </button>
                       );
                     })
@@ -1055,9 +1143,14 @@ export function ControlDock(props: ControlDockProps) {
                     aria-label="Scrub move timeline"
                     className="flex-1 accent-[#d6ae63] cursor-pointer"
                   />
-                  <span className="font-mono-tabular text-[11px] text-[#cfd5e0] whitespace-nowrap w-24 text-right">
-                    {props.viewPly}/{totalPlies}
-                    {currentMoveRec ? ` · ${currentMoveRec.san}` : ''}
+                  <span className="inline-flex items-center justify-end gap-1 font-mono-tabular text-[11px] text-[#cfd5e0] whitespace-nowrap min-w-[6.5rem] text-right">
+                    <span>
+                      {props.viewPly}/{totalPlies}
+                      {currentMoveRec ? ` · ${currentMoveRec.san}` : ''}
+                    </span>
+                    {currentMoveRec && (
+                      <MoveQualityIcon quality={props.moveEvalMeta[currentMoveRec.ply]?.quality} />
+                    )}
                   </span>
                 </div>
 

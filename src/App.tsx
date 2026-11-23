@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { Maximize2, Minimize2, X } from 'lucide-react';
 import { Chess, type Move, type Square } from 'chess.js';
 import { ChessScene3D, type SuggestionArrow } from './three/ChessScene3D';
 import { soundEngine } from './three/sound';
@@ -36,7 +36,6 @@ import {
 import {
   buildTopThreeEdges,
   drawSearchTreeTopViewOnCanvas,
-  getSimulationColorSpec,
 } from './chess/treeJpgExporter';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import {
@@ -153,6 +152,266 @@ function resultToScoreLabel(res: RoomResult | null): string {
   return '1/2-1/2';
 }
 
+function resolveCandidateMovesForFen(
+  fen: string,
+  analysisSnap: AnalysisSnapshot | null,
+  maxCount = 3,
+): Array<{ uci: string; san: string }> {
+  let rootChess: Chess;
+  try {
+    rootChess = new Chess(fen);
+  } catch {
+    return [];
+  }
+  const legalMoves = rootChess.moves({ verbose: true });
+  if (legalMoves.length === 0) return [];
+
+  const results: Array<{ uci: string; san: string }> = [];
+  const seenUci = new Set<string>();
+
+  const tryAddUci = (rawUci?: string) => {
+    if (!rawUci || rawUci.length < 4 || results.length >= maxCount) return;
+    const from = rawUci.slice(0, 2);
+    const to = rawUci.slice(2, 4);
+    const promotion = (rawUci.slice(4, 5) || undefined) as PieceType | undefined;
+    try {
+      const probe = new Chess(fen);
+      const mv = probe.move({ from, to, promotion });
+      if (!mv) return;
+      const canonicalUci = `${mv.from}${mv.to}${mv.promotion || ''}`;
+      if (seenUci.has(canonicalUci)) return;
+      seenUci.add(canonicalUci);
+      results.push({ uci: canonicalUci, san: mv.san });
+    } catch {
+      // Ignore invalid candidate UCI
+    }
+  };
+
+  if (analysisSnap && analysisSnap.fen === fen) {
+    for (const l of analysisSnap.lines) {
+      tryAddUci(l.bestMoveUci || l.pvUci?.[0]);
+    }
+    if (results.length < maxCount && analysisSnap.allSimulations) {
+      for (const l of analysisSnap.allSimulations) {
+        tryAddUci(l.bestMoveUci || l.pvUci?.[0]);
+      }
+    }
+  }
+
+  if (results.length < maxCount) {
+    try {
+      const quick = buildQuickSearchTreeForPosition(fen);
+      for (const l of quick.allSimulations) {
+        tryAddUci(l.bestMoveUci || l.pvUci?.[0]);
+      }
+    } catch {
+      // Ignore quick-tree error and fall back to legal moves
+    }
+  }
+
+  if (results.length < maxCount) {
+    const orderedLegal = [...legalMoves].sort(
+      (a, b) => Number(Boolean(b.captured)) - Number(Boolean(a.captured)),
+    );
+    for (const mv of orderedLegal) {
+      tryAddUci(`${mv.from}${mv.to}${mv.promotion || ''}`);
+      if (results.length >= maxCount) break;
+    }
+  }
+
+  return results;
+}
+
+function normalizeLegalEngineLinesForFen(
+  rootFen: string,
+  rawLines: EngineLine[] | undefined | null,
+  maxLines = 3,
+): EngineLine[] {
+  if (!rawLines || rawLines.length === 0) return [];
+  const validLines: EngineLine[] = [];
+  const seenRootUci = new Set<string>();
+
+  for (const line of rawLines) {
+    if (validLines.length >= maxLines) break;
+    const rawPv =
+      line.pvUci && line.pvUci.length > 0
+        ? line.pvUci
+        : line.bestMoveUci && line.bestMoveUci.length >= 4
+          ? [line.bestMoveUci]
+          : [];
+    if (rawPv.length === 0) continue;
+
+    try {
+      const sim = new Chess(rootFen);
+      const checkedUci: string[] = [];
+      const checkedSan: string[] = [];
+      for (const u of rawPv.slice(0, 4)) {
+        if (!u || u.length < 4) break;
+        const mv = sim.move({
+          from: u.slice(0, 2),
+          to: u.slice(2, 4),
+          promotion: (u.slice(4, 5) || undefined) as PieceType | undefined,
+        });
+        if (!mv) break;
+        checkedUci.push(`${mv.from}${mv.to}${mv.promotion || ''}`);
+        checkedSan.push(mv.san);
+      }
+      if (checkedUci.length === 0) continue;
+      if (seenRootUci.has(checkedUci[0])) continue;
+      seenRootUci.add(checkedUci[0]);
+
+      // Extend 1-ply lines with a natural reply if legal moves exist so branch walkthrough feels rich
+      if (checkedUci.length === 1) {
+        const replies = sim.moves({ verbose: true });
+        if (replies.length > 0) {
+          const replyPick = replies.find((r) => r.captured) || replies[0];
+          const replyMv = sim.move({
+            from: replyPick.from,
+            to: replyPick.to,
+            promotion: replyPick.promotion,
+          });
+          if (replyMv) {
+            checkedUci.push(`${replyMv.from}${replyMv.to}${replyMv.promotion || ''}`);
+            checkedSan.push(replyMv.san);
+          }
+        }
+      }
+
+      validLines.push({
+        ...line,
+        multipv: validLines.length + 1,
+        bestMoveUci: checkedUci[0],
+        pvUci: checkedUci,
+        pvSan: checkedSan,
+      });
+    } catch {
+      // Ignore malformed line
+    }
+  }
+
+  return validLines;
+}
+
+function ensureValidCalcReport(
+  report: BotSearchReport | null | undefined,
+  fallbackFen: string,
+  analysisSnap: AnalysisSnapshot | null,
+): BotSearchReport | null {
+  if (report && report.rootFen) {
+    const validFromReport = normalizeLegalEngineLinesForFen(
+      report.rootFen,
+      report.triedLines && report.triedLines.length > 0
+        ? report.triedLines
+        : report.allSimulations,
+      3,
+    );
+    if (validFromReport.length > 0) {
+      return {
+        ...report,
+        bestMoveUci:
+          report.bestMoveUci && report.bestMoveUci.length >= 4
+            ? report.bestMoveUci
+            : validFromReport[0].bestMoveUci,
+        triedLines: validFromReport,
+      };
+    }
+  }
+
+  let chess: Chess;
+  try {
+    chess = new Chess(fallbackFen);
+  } catch {
+    return null;
+  }
+  const legalMoves = chess.moves({ verbose: true });
+  if (legalMoves.length === 0) return null;
+
+  const fromAnalysis =
+    analysisSnap?.fen === fallbackFen
+      ? normalizeLegalEngineLinesForFen(
+          fallbackFen,
+          analysisSnap.allSimulations && analysisSnap.allSimulations.length > 0
+            ? analysisSnap.allSimulations
+            : analysisSnap.lines,
+          3,
+        )
+      : [];
+
+  const quickCache: { val: ReturnType<typeof buildQuickSearchTreeForPosition> | null } = {
+    val: null,
+  };
+  const getQuick = () => {
+    if (!quickCache.val) quickCache.val = buildQuickSearchTreeForPosition(fallbackFen);
+    return quickCache.val;
+  };
+
+  let triedLines =
+    fromAnalysis.length > 0
+      ? fromAnalysis
+      : normalizeLegalEngineLinesForFen(fallbackFen, getQuick().allSimulations, 3);
+
+  if (triedLines.length === 0) {
+    const ordered = [...legalMoves].sort(
+      (a, b) => Number(Boolean(b.captured)) - Number(Boolean(a.captured)),
+    );
+    const rawFallback: EngineLine[] = ordered.slice(0, 3).map((mv, idx) => ({
+      multipv: idx + 1,
+      scoreCp: 0,
+      mateIn: null,
+      bestMoveUci: `${mv.from}${mv.to}${mv.promotion || ''}`,
+      pvUci: [`${mv.from}${mv.to}${mv.promotion || ''}`],
+      pvSan: [mv.san],
+    }));
+    triedLines = normalizeLegalEngineLinesForFen(fallbackFen, rawFallback, 3);
+  }
+
+  if (triedLines.length === 0) return null;
+
+  const edges =
+    (analysisSnap?.fen === fallbackFen &&
+    analysisSnap.treeEdges &&
+    analysisSnap.treeEdges.length > 0
+      ? analysisSnap.treeEdges
+      : null) || getQuick().edges;
+
+  return {
+    rootFen: fallbackFen,
+    bestMoveUci: triedLines[0].bestMoveUci,
+    depth: analysisSnap?.fen === fallbackFen ? analysisSnap.depth : 3,
+    nodes:
+      analysisSnap?.fen === fallbackFen
+        ? Math.max(32, analysisSnap.nodes)
+        : Math.max(64, triedLines.length * 48),
+    timeMs: 220,
+    triedLines,
+    allSimulations:
+      (analysisSnap?.fen === fallbackFen && analysisSnap.allSimulations) ||
+      quickCache.val?.allSimulations ||
+      triedLines,
+    treeEdges: edges,
+  };
+}
+
+function buildRootPreviewArrowsFromReport(report: BotSearchReport): SuggestionArrow[] {
+  const trialKinds: Array<'trial-1' | 'trial-2' | 'trial-3'> = [
+    'trial-1',
+    'trial-2',
+    'trial-3',
+  ];
+  return report.triedLines.slice(0, 3).flatMap((line, idx) => {
+    const uci = line.pvUci?.[0] || line.bestMoveUci;
+    if (!uci || uci.length < 4) return [];
+    return [
+      {
+        from: uci.slice(0, 2),
+        to: uci.slice(2, 4),
+        kind: trialKinds[idx] || 'trial-1',
+        opacityScale: 0.92,
+      },
+    ];
+  });
+}
+
 export default function App() {
   // === Retractable Bottom HUD Dock (closed during play, opened ONLY via rollout arrow) ===
   const [dockCollapsed, setDockCollapsed] = useState(true);
@@ -188,6 +447,8 @@ export default function App() {
   const prevVoiceStateForHighlightRef = useRef<VoicePlaybackState>('idle');
   const [coachArrows, setCoachArrows] = useState<SuggestionArrow[]>([]);
   const [calcPreview, setCalcPreview] = useState<CalcPreviewProgress | null>(null);
+  const [calcShowingPending, setCalcShowingPending] = useState(false);
+  const calcShowingTimerRef = useRef<number | null>(null);
   const [treeBrowser, setTreeBrowser] = useState<TreeBrowserState | null>(null);
   const [botHoldEpoch, setBotHoldEpoch] = useState(0);
   const [studioUnlocked, setStudioUnlocked] = useState<boolean>(() =>
@@ -197,7 +458,55 @@ export default function App() {
   const [idlePreviewNonce, setIdlePreviewNonce] = useState(0);
   const [previewIdleUrl, setPreviewIdleUrl] = useState<string | null>(null);
   const [webglLost, setWebglLost] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(() => {
+    if (typeof document === 'undefined') return false;
+    const doc = document as Document & { webkitFullscreenElement?: Element | null };
+    return Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
+  });
   const isOnline = useOnlineStatus();
+
+  useEffect(() => {
+    const syncFullscreen = () => {
+      const doc = document as Document & { webkitFullscreenElement?: Element | null };
+      setIsFullscreen(Boolean(doc.fullscreenElement || doc.webkitFullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', syncFullscreen);
+    document.addEventListener('webkitfullscreenchange', syncFullscreen);
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFullscreen);
+      document.removeEventListener('webkitfullscreenchange', syncFullscreen);
+    };
+  }, []);
+
+  const handleToggleFullscreen = useCallback(() => {
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitExitFullscreen?: () => Promise<void> | void;
+    };
+    const rootEl = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    };
+
+    if (doc.fullscreenElement || doc.webkitFullscreenElement) {
+      if (doc.exitFullscreen) {
+        doc.exitFullscreen().catch(() => {});
+      } else if (doc.webkitExitFullscreen) {
+        try {
+          doc.webkitExitFullscreen();
+        } catch {
+          // Ignore vendor exit error
+        }
+      }
+    } else if (rootEl.requestFullscreen) {
+      rootEl.requestFullscreen().catch(() => {});
+    } else if (rootEl.webkitRequestFullscreen) {
+      try {
+        rootEl.webkitRequestFullscreen();
+      } catch {
+        // Ignore vendor request error
+      }
+    }
+  }, []);
 
   // === Game Mode & Local/Engine State ===
   const [gameMode, setGameMode] = useState<GameMode>('engine');
@@ -395,7 +704,7 @@ export default function App() {
     analysis,
     activeRoom,
   };
-  calcPreviewActiveRef.current = calcPreview !== null;
+  calcPreviewActiveRef.current = calcPreview !== null || calcShowingPending;
   showSearchTreeRef.current = showSearchTree;
 
   // Player display names
@@ -631,6 +940,11 @@ export default function App() {
         const res = chess.move({ from, to, promotion });
         if (!res) return false;
 
+        if (calcShowingTimerRef.current !== null) {
+          window.clearTimeout(calcShowingTimerRef.current);
+          calcShowingTimerRef.current = null;
+        }
+        setCalcShowingPending(false);
         sceneRef.current?.stopCalculationPreview(false);
         sceneRef.current?.stopSearchTreeThinLines();
         treeActiveOnScreenRef.current = false;
@@ -672,14 +986,50 @@ export default function App() {
           setLocalClocks({ ...localClockMsRef.current });
         }
 
-        if (preEval !== undefined) {
+        const over = evaluateLocalGameOver(chess);
+        const sharedAudit = !botReport && !over ? quickEvaluateHumanMove(preFen, record.uci, nextFen) : null;
+
+        if (over?.reason === 'checkmate') {
+          const mateCp = record.color === 'w' ? 9900 : -9900;
+          setMoveEvalMeta((prev) => ({
+            ...prev,
+            [record.ply]: { ply: record.ply, evalCp: mateCp, quality: 'best', cpLoss: 0 },
+          }));
+        } else if (sharedAudit) {
+          setMoveEvalMeta((prev) => ({
+            ...prev,
+            [record.ply]: {
+              ply: record.ply,
+              evalCp: sharedAudit.afterPlayedCp,
+              quality: classifyMoveQuality(sharedAudit.cpLoss),
+              cpLoss: sharedAudit.cpLoss,
+            },
+          }));
+        } else if (botReport?.triedLines && botReport.triedLines.length > 0) {
+          const moverSign = record.color === 'w' ? 1 : -1;
+          const bestForMover = Math.max(
+            ...botReport.triedLines.map((l) => l.scoreCp * moverSign),
+          );
+          const chosenLine =
+            botReport.triedLines.find((l) => l.bestMoveUci === record.uci) ||
+            botReport.triedLines[0];
+          const botCpLoss = Math.max(0, Math.round(bestForMover - chosenLine.scoreCp * moverSign));
+          setMoveEvalMeta((prev) => ({
+            ...prev,
+            [record.ply]: {
+              ply: record.ply,
+              evalCp: chosenLine.scoreCp,
+              quality: classifyMoveQuality(botCpLoss),
+              cpLoss: botCpLoss,
+            },
+          }));
+        } else if (preEval !== undefined) {
           setMoveEvalMeta((prev) => ({
             ...prev,
             [record.ply]: { ply: record.ply, evalCp: preEval },
           }));
         }
 
-        const over = evaluateLocalGameOver(chess);
         if (over) {
           setLocalResult(over);
           soundEngine.playGameOver();
@@ -703,7 +1053,7 @@ export default function App() {
         if (gameMode === 'engine' && angelVoice === 'on') {
           const aiColor: PieceColor = humanColorActual === 'w' ? 'b' : 'w';
           if (record.color === humanColorActual) {
-            const audit = !over ? quickEvaluateHumanMove(preFen, record.uci, nextFen) : null;
+            const audit = sharedAudit;
             const humanSign = humanColorActual === 'w' ? 1 : -1;
             const humanEvalAdvantageCp = audit ? Math.round(audit.afterPlayedCp * humanSign) : 0;
 
@@ -896,16 +1246,21 @@ export default function App() {
     };
   }, []);
 
-  // Track speech-duration highlight window for concerned 3D chess figures on warnings & watches
+  // Track speech-duration highlight window for concerned 3D chess figures on warnings, hints & Studio previews
   useEffect(() => {
     const figures = opponentMessage?.concernedFigures;
-    if (!opponentMessage || !figures || figures.length === 0 || angelVoice === 'off') {
+    if (
+      !opponentMessage ||
+      !figures ||
+      figures.length === 0 ||
+      (angelVoice === 'off' && !opponentMessage.isStudioPreview)
+    ) {
       setSpeechHighlightWindowOpen(false);
       return;
     }
     setSpeechHighlightWindowOpen(true);
     const fallbackSec = VOICE_CLIP_DURATION_SEC[opponentMessage.clipId] ?? 4.8;
-    const windowMs = soundEnabled ? 950 : Math.round(fallbackSec * 1000);
+    const windowMs = soundEnabled ? 1400 : Math.round(fallbackSec * 1000);
     const timerId = window.setTimeout(() => {
       setSpeechHighlightWindowOpen(false);
     }, windowMs);
@@ -921,10 +1276,10 @@ export default function App() {
   }, [voiceState]);
 
   const activeSpeechHighlights = useMemo(() => {
+    const isPreview = Boolean(opponentMessage?.isStudioPreview);
     if (
-      angelVoice === 'off' ||
-      !isViewingLatest ||
-      isReplayMode ||
+      (angelVoice === 'off' && !isPreview) ||
+      ((!isViewingLatest || isReplayMode) && !isPreview) ||
       !opponentMessage?.concernedFigures ||
       opponentMessage.concernedFigures.length === 0
     ) {
@@ -978,6 +1333,10 @@ export default function App() {
       if (angelModalOffTimerRef.current !== null) {
         window.clearTimeout(angelModalOffTimerRef.current);
         angelModalOffTimerRef.current = null;
+      }
+      if (calcShowingTimerRef.current !== null) {
+        window.clearTimeout(calcShowingTimerRef.current);
+        calcShowingTimerRef.current = null;
       }
     };
   }, []);
@@ -1690,7 +2049,6 @@ export default function App() {
     if (!treeBrowser || !scene) return;
 
     const allSims = treeBrowser.simulations;
-    const bestOverall = allSims[0];
     const visibleSims = treeBrowser.onlyTopThree ? allSims.slice(0, 3) : allSims;
     const topEdges = treeBrowser.onlyTopThree ? buildTopThreeEdges(allSims) : [];
     const baseEdges =
@@ -1702,22 +2060,18 @@ export default function App() {
       treeBrowser.selectedIndex !== null &&
       visibleSims[treeBrowser.selectedIndex]
     ) {
-      const sim = visibleSims[treeBrowser.selectedIndex];
-      const spec = getSimulationColorSpec(
-        treeBrowser.selectedIndex,
-        sim,
-        bestOverall,
-        treeBrowser.moverColor,
-      );
+      const selIdx = treeBrowser.selectedIndex;
+      const sim = visibleSims[selIdx];
+      const arrowKind: SuggestionArrow['kind'] =
+        selIdx === 0 ? 'trial-1' : selIdx === 1 ? 'trial-2' : 'trial-3';
       const overlayArrows: SuggestionArrow[] = sim.pvUci
         .slice(0, 4)
         .filter((u) => u.length >= 4)
         .map((u, plyIdx) => ({
           from: u.slice(0, 2),
           to: u.slice(2, 4),
-          kind: 'primary',
-          customColorHex: spec.hex,
-          opacityScale: plyIdx === 0 ? 0.98 : Math.max(0.45, 0.82 - plyIdx * 0.14),
+          kind: arrowKind,
+          opacityScale: plyIdx === 0 ? 1 : Math.max(0.55, 0.88 - plyIdx * 0.12),
         }));
 
       scene.setSearchTreeBrowserDisplay({
@@ -1728,21 +2082,12 @@ export default function App() {
     } else if (treeBrowser.onlyTopThree) {
       const topThreeArrows: SuggestionArrow[] = visibleSims
         .filter((s) => s.bestMoveUci.length >= 4)
-        .map((sim, idx) => {
-          const spec = getSimulationColorSpec(
-            idx,
-            sim,
-            bestOverall,
-            treeBrowser.moverColor,
-          );
-          return {
-            from: sim.bestMoveUci.slice(0, 2),
-            to: sim.bestMoveUci.slice(2, 4),
-            kind: idx === 0 ? 'trial-1' : idx === 1 ? 'trial-2' : 'trial-3',
-            customColorHex: spec.hex,
-            opacityScale: 0.94,
-          };
-        });
+        .map((sim, idx) => ({
+          from: sim.bestMoveUci.slice(0, 2),
+          to: sim.bestMoveUci.slice(2, 4),
+          kind: idx === 0 ? 'trial-1' : idx === 1 ? 'trial-2' : 'trial-3',
+          opacityScale: 1,
+        }));
 
       scene.setSearchTreeBrowserDisplay({
         edges: baseEdges,
@@ -1764,7 +2109,10 @@ export default function App() {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
 
-      if (e.key === 'm' || e.key === 'M') {
+      if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        handleToggleFullscreen();
+      } else if ((e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey && !e.altKey) {
         setSoundEnabled((prev) => {
           const next = !prev;
           soundEngine.enabled = next;
@@ -1806,6 +2154,7 @@ export default function App() {
     activeTab,
     activeMoves.length,
     replayPlaying,
+    handleToggleFullscreen,
     treeBrowser,
     handleStepTreeSimulation,
     handleContinueFromTree,
@@ -1825,6 +2174,11 @@ export default function App() {
       lastSeductionPlyRef.current = -99;
       turnStartedAtRef.current = performance.now();
       hesitationStageRef.current = 0;
+      if (calcShowingTimerRef.current !== null) {
+        window.clearTimeout(calcShowingTimerRef.current);
+        calcShowingTimerRef.current = null;
+      }
+      setCalcShowingPending(false);
       sceneRef.current?.stopCalculationPreview(false);
       setCalcPreview(null);
       setCoachArrows([]);
@@ -1938,6 +2292,11 @@ export default function App() {
     awaitingDistractionModalRef.current = false;
     holdBotUntilRef.current = 0;
     setIsThinkingAi(false);
+    if (calcShowingTimerRef.current !== null) {
+      window.clearTimeout(calcShowingTimerRef.current);
+      calcShowingTimerRef.current = null;
+    }
+    setCalcShowingPending(false);
     sceneRef.current?.stopCalculationPreview(false);
     setCalcPreview(null);
     setCoachArrows([]);
@@ -1958,23 +2317,16 @@ export default function App() {
     setSelectedSquare(null);
   }, [gameMode, isReplayMode, localMoves, localFen, humanColorActual, flushPendingBotMove]);
 
-  // Interactive Chess Angel callbacks:
-  // 1) Animate the search-tree branches Chess Angel calculated on the 3D board (slow + click-confirmed between branches)
-  const handleWatchCalculatedLines = useCallback(
-    (report: BotSearchReport, restoreFenOverride?: string) => {
+  const startCalcPreviewOnScene = useCallback(
+    (validReport: BotSearchReport, restoreFen: string) => {
       const scene = sceneRef.current;
       if (!scene) return;
-      setFrontalTreeViewOpen(false);
-      opponentSpeech.unlock();
-      const showingMsg = createCalcShowingMessage(report);
-      if (showingMsg) {
-        setOpponentMessage(showingMsg);
-        opponentSpeech.playClip(showingMsg.clipId, angelVoice, soundEnabled);
-      } else {
-        setOpponentMessage(null);
-      }
-
-      scene.playCalculationPreview(report, restoreFenOverride || displayedFen, {
+      setCalcShowingPending(false);
+      setCoachArrows([]);
+      setOpponentMessage((prev) =>
+        prev?.isStudioPreview ? { ...prev, isStudioPreview: false } : prev,
+      );
+      scene.playCalculationPreview(validReport, restoreFen, {
         onBranchChange: (branchIndex, totalBranches, pvSan, waitingForConfirm) => {
           setCalcPreview({ branchIndex, totalBranches, pvSan, waitingForConfirm });
         },
@@ -1983,7 +2335,11 @@ export default function App() {
             const confirmMsg = createTrialConfirmMessage(completedBranchIndex, pvSan);
             if (confirmMsg) {
               setOpponentMessage(confirmMsg);
-              opponentSpeech.playClip(confirmMsg.clipId, angelVoice, soundEnabled);
+              opponentSpeech.playClip(
+                confirmMsg.clipId,
+                angelVoiceRef.current,
+                soundEnabledRef.current,
+              );
             } else {
               setOpponentMessage(null);
             }
@@ -1995,7 +2351,67 @@ export default function App() {
         },
       });
     },
-    [angelVoice, soundEnabled, displayedFen],
+    [],
+  );
+
+  // Interactive Chess Angel callbacks:
+  // 1) Animate the search-tree branches Chess Angel calculated on the 3D board (slow + click-confirmed between branches)
+  const handleWatchCalculatedLines = useCallback(
+    (report: BotSearchReport, restoreFenOverride?: string) => {
+      const scene = sceneRef.current;
+      if (!scene) return;
+
+      if (calcShowingTimerRef.current !== null) {
+        window.clearTimeout(calcShowingTimerRef.current);
+        calcShowingTimerRef.current = null;
+      }
+      scene.stopCalculationPreview(false);
+      scene.stopSearchTreeThinLines();
+      treeActiveOnScreenRef.current = false;
+      setTreeStatusMode('idle');
+      setTreeBrowser(null);
+      setCalcPreview(null);
+      setFrontalTreeViewOpen(false);
+
+      const targetRestoreFen = restoreFenOverride || displayedFen;
+      const validReport = ensureValidCalcReport(report, targetRestoreFen, analysis);
+      if (!validReport) return;
+
+      // Immediately illuminate the 3 colored root candidate arrows when rootFen matches current board
+      if (validReport.rootFen === targetRestoreFen) {
+        setCoachArrows(buildRootPreviewArrowsFromReport(validReport));
+      } else {
+        setCoachArrows([]);
+      }
+
+      opponentSpeech.unlock();
+      const showingMsg = angelVoice !== 'off' ? createCalcShowingMessage(validReport) : null;
+      if (showingMsg) {
+        const prep = prepareHumanCommentaryPlayback(showingMsg.clipId, `msg:${showingMsg.id}`);
+        setOpponentMessage(showingMsg);
+        opponentSpeech.playClip(showingMsg.clipId, angelVoice, soundEnabled);
+
+        const introSec = Math.max(
+          soundEnabled ? prep.audioSec || 4.8 : angelVisibleRef.current ? 1.8 : 0,
+          angelVisibleRef.current && prep.playToEnd ? prep.videoSec : 0,
+        );
+        const delayMs = introSec > 0.25 ? Math.round(introSec * 1000) + 160 : 0;
+
+        if (delayMs > 0) {
+          setCalcShowingPending(true);
+          calcShowingTimerRef.current = window.setTimeout(() => {
+            calcShowingTimerRef.current = null;
+            startCalcPreviewOnScene(validReport, targetRestoreFen);
+          }, delayMs);
+          return;
+        }
+      } else {
+        setOpponentMessage(null);
+      }
+
+      startCalcPreviewOnScene(validReport, targetRestoreFen);
+    },
+    [angelVoice, soundEnabled, displayedFen, analysis, startCalcPreviewOnScene],
   );
 
   const handleConfirmNextBranch = useCallback(() => {
@@ -2004,6 +2420,11 @@ export default function App() {
   }, []);
 
   const handleStopCalculationPreview = useCallback(() => {
+    if (calcShowingTimerRef.current !== null) {
+      window.clearTimeout(calcShowingTimerRef.current);
+      calcShowingTimerRef.current = null;
+    }
+    setCalcShowingPending(false);
     opponentSpeech.stop();
     sceneRef.current?.stopCalculationPreview(true);
     if (!pendingBotMoveRef.current) {
@@ -2012,6 +2433,7 @@ export default function App() {
       setTreeStatusMode('idle');
     }
     setCalcPreview(null);
+    setCoachArrows([]);
     turnStartedAtRef.current = performance.now();
   }, []);
 
@@ -2200,7 +2622,8 @@ export default function App() {
 
   const handleAnimateTopThreeFromTree = useCallback(() => {
     if (!treeBrowser || treeBrowser.simulations.length === 0) return;
-    const pendingReport = pendingBotMoveRef.current?.report;
+    const pending = pendingBotMoveRef.current;
+    const pendingReport = pending?.report;
     const synthReport: BotSearchReport = pendingReport || {
       rootFen: activeTreeRootFenRef.current,
       bestMoveUci: treeBrowser.simulations[0].bestMoveUci,
@@ -2211,24 +2634,36 @@ export default function App() {
       allSimulations: treeBrowser.simulations,
       treeEdges: activeTreeFullEdgesRef.current,
     };
-    if (pendingBotMoveRef.current) {
+    if (pending) {
+      let postCommitFen = displayedFen;
+      try {
+        const probe = new Chess(localFen);
+        const mv = probe.move({
+          from: pending.from,
+          to: pending.to,
+          promotion: pending.promo,
+        });
+        if (mv) postCommitFen = probe.fen();
+      } catch {
+        // Ignore probe error
+      }
       flushPendingBotMove(true);
       window.setTimeout(() => {
-        handleWatchCalculatedLines(synthReport);
+        handleWatchCalculatedLines(synthReport, postCommitFen);
       }, 120);
     } else {
       setTreeBrowser(null);
       sceneRef.current?.stopSearchTreeThinLines();
       treeActiveOnScreenRef.current = false;
       setTreeStatusMode('idle');
-      handleWatchCalculatedLines(synthReport);
+      handleWatchCalculatedLines(synthReport, displayedFen);
     }
-  }, [treeBrowser, flushPendingBotMove, handleWatchCalculatedLines]);
+  }, [treeBrowser, localFen, displayedFen, flushPendingBotMove, handleWatchCalculatedLines]);
 
   const handlePlayThreeMoves = useCallback(() => {
     setFrontalTreeViewOpen(false);
 
-    if (calcPreview) {
+    if (calcPreview || calcShowingPending) {
       handleStopCalculationPreview();
       return;
     }
@@ -2242,7 +2677,7 @@ export default function App() {
       opponentMessage?.action?.kind === 'calc-preview' &&
       opponentMessage.action.report.triedLines.length > 0
     ) {
-      handleWatchCalculatedLines(opponentMessage.action.report);
+      handleWatchCalculatedLines(opponentMessage.action.report, displayedFen);
       return;
     }
 
@@ -2255,39 +2690,12 @@ export default function App() {
       return;
     }
 
-    const fromAnalysisSims =
-      analysis?.fen === displayedFen &&
-      analysis.allSimulations &&
-      analysis.allSimulations.length > 0
-        ? analysis.allSimulations
-        : analysis?.fen === displayedFen && analysis.lines.length > 0
-          ? analysis.lines
-          : null;
-
-    const quickBuilt = !fromAnalysisSims ? buildQuickSearchTreeForPosition(displayedFen) : null;
-    const sims = fromAnalysisSims || quickBuilt?.allSimulations || [];
-    if (sims.length === 0) return;
-
-    const edges =
-      (analysis?.fen === displayedFen && analysis.treeEdges && analysis.treeEdges.length > 0
-        ? analysis.treeEdges
-        : null) ||
-      quickBuilt?.edges ||
-      [];
-
-    const synthReport: BotSearchReport = {
-      rootFen: displayedFen,
-      bestMoveUci: sims[0].bestMoveUci,
-      depth: analysis?.fen === displayedFen ? analysis.depth : 3,
-      nodes: analysis?.fen === displayedFen ? analysis.nodes : sims.length * 32,
-      timeMs: 220,
-      triedLines: sims.slice(0, 3),
-      allSimulations: sims,
-      treeEdges: edges,
-    };
+    const synthReport = ensureValidCalcReport(null, displayedFen, analysis);
+    if (!synthReport) return;
     handleWatchCalculatedLines(synthReport, displayedFen);
   }, [
     calcPreview,
+    calcShowingPending,
     treeBrowser,
     opponentMessage,
     displayedFen,
@@ -2328,8 +2736,17 @@ export default function App() {
       flushPendingBotMove(false);
       awaitingDistractionModalRef.current = false;
       holdBotUntilRef.current = 0;
+      if (calcShowingTimerRef.current !== null) {
+        window.clearTimeout(calcShowingTimerRef.current);
+        calcShowingTimerRef.current = null;
+      }
+      setCalcShowingPending(false);
       setIsThinkingAi(false);
       sceneRef.current?.stopCalculationPreview(false);
+      sceneRef.current?.stopSearchTreeThinLines();
+      treeActiveOnScreenRef.current = false;
+      setTreeStatusMode('idle');
+      setTreeBrowser(null);
       setCalcPreview(null);
       turnStartedAtRef.current = performance.now();
       hesitationStageRef.current = 0;
@@ -2359,18 +2776,26 @@ export default function App() {
       setViewPly(nextMoves.length);
       setSelectedSquare(null);
 
-      const arrows: SuggestionArrow[] = alternatives
-        .filter((a) => a.uci.length >= 4)
-        .map((a, idx) => ({
-          from: a.uci.slice(0, 2),
-          to: a.uci.slice(2, 4),
-          kind: idx === 0 ? 'primary' : 'secondary',
-        }));
+      const resolvedAlts =
+        alternatives.filter((a) => a.uci.length >= 4).length > 0
+          ? alternatives.filter((a) => a.uci.length >= 4)
+          : resolveCandidateMovesForFen(nextFen, null, 2);
+
+      const arrows: SuggestionArrow[] = resolvedAlts.map((a, idx) => ({
+        from: a.uci.slice(0, 2),
+        to: a.uci.slice(2, 4),
+        kind: idx === 0 ? 'primary' : 'secondary',
+      }));
       setCoachArrows(arrows);
 
-      const doneMsg = createUndoConfirmedMessage(alternatives[0]?.san);
+      const doneMsg = createUndoConfirmedMessage(resolvedAlts[0]?.san);
       if (doneMsg) {
-        setOpponentMessage(doneMsg);
+        setOpponentMessage({
+          ...doneMsg,
+          concernedFigures: resolvedAlts[0]
+            ? [{ square: resolvedAlts[0].uci.slice(0, 2) as Square, role: 'attacker' }]
+            : undefined,
+        });
         opponentSpeech.unlock();
         opponentSpeech.playClip(doneMsg.clipId, angelVoice, soundEnabled);
       }
@@ -2389,24 +2814,71 @@ export default function App() {
   // 4) Accept hesitation hint and illuminate the recommended move on the 3D board
   const handleAcceptHint = useCallback(
     (uci: string, san: string) => {
-      if (uci.length >= 4) {
-        setCoachArrows([
-          {
+      if (calcShowingTimerRef.current !== null) {
+        window.clearTimeout(calcShowingTimerRef.current);
+        calcShowingTimerRef.current = null;
+      }
+      setCalcShowingPending(false);
+      sceneRef.current?.stopCalculationPreview(false);
+      sceneRef.current?.stopSearchTreeThinLines();
+      treeActiveOnScreenRef.current = false;
+      setTreeStatusMode('idle');
+      setTreeBrowser(null);
+      setCalcPreview(null);
+      setFrontalTreeViewOpen(false);
+
+      let chosenUci = '';
+      let chosenSan = san;
+      if (uci && uci.length >= 4) {
+        try {
+          const probe = new Chess(displayedFen);
+          const mv = probe.move({
             from: uci.slice(0, 2),
             to: uci.slice(2, 4),
+            promotion: (uci.slice(4, 5) || undefined) as PieceType | undefined,
+          });
+          if (mv) {
+            chosenUci = `${mv.from}${mv.to}${mv.promotion || ''}`;
+            chosenSan = mv.san;
+          }
+        } catch {
+          // Fall back to resolved candidate below
+        }
+      }
+
+      if (!chosenUci) {
+        const fallbackBest = resolveCandidateMovesForFen(displayedFen, analysis, 1)[0];
+        if (fallbackBest) {
+          chosenUci = fallbackBest.uci;
+          chosenSan = fallbackBest.san;
+        }
+      }
+
+      if (chosenUci.length >= 4) {
+        setCoachArrows([
+          {
+            from: chosenUci.slice(0, 2),
+            to: chosenUci.slice(2, 4),
             kind: 'primary',
           },
         ]);
       }
+
       turnStartedAtRef.current = performance.now();
-      const shownMsg = createHintShownMessage(san);
+      const shownMsg = createHintShownMessage(chosenSan);
       if (shownMsg) {
-        setOpponentMessage(shownMsg);
+        setOpponentMessage({
+          ...shownMsg,
+          concernedFigures:
+            chosenUci.length >= 4
+              ? [{ square: chosenUci.slice(0, 2) as Square, role: 'attacker' }]
+              : undefined,
+        });
         opponentSpeech.unlock();
         opponentSpeech.playClip(shownMsg.clipId, angelVoice, soundEnabled);
       }
     },
-    [angelVoice, soundEnabled],
+    [displayedFen, analysis, angelVoice, soundEnabled],
   );
 
   const handleLoadSavedGame = useCallback(
@@ -2427,6 +2899,11 @@ export default function App() {
       holdBotUntilRef.current = 0;
       turnStartedAtRef.current = performance.now();
       hesitationStageRef.current = 0;
+      if (calcShowingTimerRef.current !== null) {
+        window.clearTimeout(calcShowingTimerRef.current);
+        calcShowingTimerRef.current = null;
+      }
+      setCalcShowingPending(false);
       sceneRef.current?.stopCalculationPreview(false);
       sceneRef.current?.stopSearchTreeThinLines();
       treeActiveOnScreenRef.current = false;
@@ -2750,6 +3227,46 @@ export default function App() {
         alreadySaved={Boolean(currentFingerprint && savedGameFingerprints.has(currentFingerprint))}
       />
 
+      {/* Transparent Bottom-Left Full Screen / Reduce Button + Prominent Version Mark */}
+      <div
+        className={`fixed bottom-3 left-3 z-[32] flex items-center gap-2 pointer-events-none ${
+          !dockCollapsed ? 'hidden xl:flex' : ''
+        }`}
+      >
+        <button
+          type="button"
+          onClick={handleToggleFullscreen}
+          aria-pressed={isFullscreen}
+          aria-label={isFullscreen ? 'Reduce from full screen' : 'Enter full screen'}
+          title={isFullscreen ? 'Reduce screen (F or Esc)' : 'Full screen (F)'}
+          className="pointer-events-auto inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-transparent hover:bg-white/10 border border-white/18 hover:border-[#d6ae63]/60 text-[11px] font-medium text-[#e6e1d7]/80 hover:text-[#f7f1e5] transition-colors cursor-pointer whitespace-nowrap focus-visible:outline-2 focus-visible:outline-[#e3be78]"
+        >
+          {isFullscreen ? (
+            <>
+              <Minimize2 className="w-3.5 h-3.5 text-[#d6ae63]" />
+              <span>Reduce</span>
+            </>
+          ) : (
+            <>
+              <Maximize2 className="w-3.5 h-3.5 text-[#d6ae63]" />
+              <span>Full Screen</span>
+            </>
+          )}
+        </button>
+
+        <span
+          aria-label="ChessAngel 3D Version 3.0"
+          className="inline-flex items-baseline gap-1.5 px-2 py-0.5 rounded-md bg-transparent text-[#e6e1d7]/75 [text-shadow:0_1px_6px_rgba(0,0,0,0.95)] whitespace-nowrap"
+        >
+          <span className="hidden sm:inline font-display text-xs tracking-tight text-[#d7cfbf]/80">
+            ChessAngel 3D
+          </span>
+          <span className="font-mono-tabular text-base sm:text-lg font-bold tracking-tight text-[#f3cf83]">
+            v3.0
+          </span>
+        </span>
+      </div>
+
       {/* Retractable Bottom Menu Dock (opens ONLY when touching the bottom rollout arrow) */}
       <ControlDock
         activeTab={activeTab}
@@ -3017,6 +3534,11 @@ export default function App() {
         onUndoAndShowBetter={handleUndoAndShowBetter}
         onAcceptHint={handleAcceptHint}
         onDismiss={() => {
+          if (calcShowingTimerRef.current !== null) {
+            window.clearTimeout(calcShowingTimerRef.current);
+            calcShowingTimerRef.current = null;
+          }
+          setCalcShowingPending(false);
           if (angelModalOffTimerRef.current !== null) {
             window.clearTimeout(angelModalOffTimerRef.current);
             angelModalOffTimerRef.current = null;
@@ -3054,28 +3576,188 @@ export default function App() {
                 window.clearTimeout(angelModalOffTimerRef.current);
                 angelModalOffTimerRef.current = null;
               }
+              if (calcShowingTimerRef.current !== null) {
+                window.clearTimeout(calcShowingTimerRef.current);
+                calcShowingTimerRef.current = null;
+              }
+              setCalcShowingPending(false);
+              sceneRef.current?.stopCalculationPreview(true);
+              sceneRef.current?.stopSearchTreeThinLines();
+              treeActiveOnScreenRef.current = false;
+              setTreeStatusMode('idle');
+              setTreeBrowser(null);
+              setCalcPreview(null);
+              setFrontalTreeViewOpen(false);
+              setCoachArrows([]);
+
               setAngelModalEnabled(true);
               setAngelVisible(true);
               setPreviewIdleUrl(null);
+
+              // Ensure a playable board position if the current ply is checkmate/stalemate
+              let previewFen = displayedFen;
+              try {
+                if (new Chess(previewFen).moves().length === 0 && clampedViewPly > 0) {
+                  const prevPly = clampedViewPly - 1;
+                  previewFen = prevPly === 0 ? INITIAL_FEN : activeMoves[prevPly - 1]?.fen ?? INITIAL_FEN;
+                  setViewPly(prevPly);
+                }
+              } catch {
+                previewFen = INITIAL_FEN;
+              }
+
               const caseId = extractCaseIdFromClip(clipId);
-              const previewFigures = caseId
-                ? resolvePreviewConcernedFigures(caseId, displayedFen, humanColorActual)
+              const previewMsgId = Date.now();
+              let previewFigures = caseId
+                ? resolvePreviewConcernedFigures(caseId, previewFen, humanColorActual)
                 : undefined;
-              const previewAction: OpponentMessage['action'] = caseId?.startsWith('wrong_')
-                ? {
-                    kind: 'undo-offer',
-                    preFen: displayedFen,
-                    reasonNote: 'Preview Undo proposal',
-                    alternatives: [],
+              let previewAction: OpponentMessage['action'] = undefined;
+              let previewMathSummary: string | undefined = undefined;
+
+              if (caseId === 'hint_shown') {
+                const best = resolveCandidateMovesForFen(previewFen, analysis, 1)[0];
+                if (best) {
+                  setCoachArrows([
+                    {
+                      from: best.uci.slice(0, 2),
+                      to: best.uci.slice(2, 4),
+                      kind: 'primary',
+                    },
+                  ]);
+                  previewFigures = [{ square: best.uci.slice(0, 2) as Square, role: 'attacker' }];
+                  previewMathSummary = `Top candidate: ${best.san}`;
+                }
+              } else if (caseId === 'undo_done' || caseId === 'alt_shown') {
+                const cands = resolveCandidateMovesForFen(previewFen, analysis, 2);
+                if (cands.length > 0) {
+                  setCoachArrows(
+                    cands.map((c, idx) => ({
+                      from: c.uci.slice(0, 2),
+                      to: c.uci.slice(2, 4),
+                      kind: idx === 0 ? 'primary' : 'secondary',
+                    })),
+                  );
+                  previewFigures = [
+                    { square: cands[0].uci.slice(0, 2) as Square, role: 'attacker' },
+                  ];
+                  previewMathSummary = `Recommended continuation: ${cands[0].san}`;
+                }
+              } else if (caseId === 'trial_confirm_1' || caseId === 'trial_confirm_2') {
+                const cands = resolveCandidateMovesForFen(
+                  previewFen,
+                  analysis,
+                  caseId === 'trial_confirm_2' ? 2 : 1,
+                );
+                if (cands.length > 0) {
+                  setCoachArrows(
+                    cands.map((c, idx) => ({
+                      from: c.uci.slice(0, 2),
+                      to: c.uci.slice(2, 4),
+                      kind: idx === 0 ? 'trial-1' : 'trial-2',
+                    })),
+                  );
+                  const focused = cands[cands.length - 1];
+                  previewFigures = [
+                    { square: focused.uci.slice(0, 2) as Square, role: 'attacker' },
+                  ];
+                  previewMathSummary = `Branch ${caseId === 'trial_confirm_2' ? 2 : 1}: ${focused.san}`;
+                }
+              } else if (caseId === 'hesitate_hint') {
+                const best = resolveCandidateMovesForFen(previewFen, analysis, 1)[0];
+                if (best) {
+                  previewAction = {
+                    kind: 'hint-offer',
+                    bestMoveUci: best.uci,
+                    bestMoveSan: best.san,
+                  };
+                  previewMathSummary = 'Top candidate ready';
+                }
+              } else if (caseId === 'calc_offer' || caseId === 'calc_pure') {
+                const validReport = ensureValidCalcReport(
+                  lastBotReportForFenRef.current?.afterFen === previewFen
+                    ? lastBotReportForFenRef.current.report
+                    : null,
+                  previewFen,
+                  analysis,
+                );
+                if (validReport) {
+                  previewAction = { kind: 'calc-preview', report: validReport };
+                  previewMathSummary = `${validReport.nodes.toLocaleString()} nodes · Depth ${validReport.depth} · ${Math.min(3, validReport.triedLines.length)} branches`;
+                }
+              } else if (caseId === 'calc_showing') {
+                const validReport = ensureValidCalcReport(
+                  lastBotReportForFenRef.current?.afterFen === previewFen
+                    ? lastBotReportForFenRef.current.report
+                    : null,
+                  previewFen,
+                  analysis,
+                );
+                if (validReport) {
+                  if (validReport.rootFen === previewFen) {
+                    setCoachArrows(buildRootPreviewArrowsFromReport(validReport));
                   }
-                : undefined;
+                  previewMathSummary = `${validReport.nodes.toLocaleString()} nodes · Depth ${validReport.depth} · Animating ${Math.min(3, validReport.triedLines.length)} branches`;
+                  const prep = prepareHumanCommentaryPlayback(clipId, `preview:${previewMsgId}`);
+                  const introSec = Math.max(
+                    soundEnabled ? prep.audioSec || 4.8 : 1.8,
+                    prep.playToEnd ? prep.videoSec : 0,
+                  );
+                  const delayMs = Math.max(400, Math.round(introSec * 1000) + 160);
+                  setCalcShowingPending(true);
+                  calcShowingTimerRef.current = window.setTimeout(() => {
+                    calcShowingTimerRef.current = null;
+                    startCalcPreviewOnScene(validReport, previewFen);
+                  }, delayMs);
+                }
+              } else if (caseId === 'tree_browse') {
+                const validReport = ensureValidCalcReport(null, previewFen, analysis);
+                const edges =
+                  validReport?.treeEdges || buildQuickSearchTreeForPosition(previewFen).edges;
+                if (edges.length > 0 && sceneRef.current) {
+                  treeActiveOnScreenRef.current = true;
+                  setTreeStatusMode('developing');
+                  sceneRef.current.playSearchTreeThinLines(
+                    edges,
+                    () => {
+                      treeActiveOnScreenRef.current = false;
+                      setTreeStatusMode('idle');
+                    },
+                    () => {
+                      setTreeStatusMode('holding');
+                    },
+                  );
+                }
+              } else if (caseId?.startsWith('wrong_')) {
+                const alts = resolveCandidateMovesForFen(previewFen, analysis, 2);
+                previewAction = {
+                  kind: 'undo-offer',
+                  preFen: previewFen,
+                  reasonNote: 'Preview Undo proposal',
+                  alternatives: alts,
+                };
+              }
+
               setOpponentMessage({
-                id: Date.now(),
+                id: previewMsgId,
                 clipId,
                 text,
                 tag,
-                tone: 'opening',
+                tone:
+                  caseId === 'hint_shown' ||
+                  caseId === 'hesitate_hint' ||
+                  caseId === 'undo_done' ||
+                  caseId === 'alt_shown'
+                    ? 'hint'
+                    : caseId === 'calc_showing' ||
+                        caseId === 'calc_offer' ||
+                        caseId === 'calc_pure' ||
+                        caseId === 'trial_confirm_1' ||
+                        caseId === 'trial_confirm_2' ||
+                        caseId === 'tree_browse'
+                      ? 'math'
+                      : 'opening',
                 speaker: getSpeakerName(),
+                mathSummary: previewMathSummary,
                 isStudioPreview: true,
                 concernedFigures: previewFigures,
                 action: previewAction,
@@ -3088,6 +3770,18 @@ export default function App() {
                 window.clearTimeout(angelModalOffTimerRef.current);
                 angelModalOffTimerRef.current = null;
               }
+              if (calcShowingTimerRef.current !== null) {
+                window.clearTimeout(calcShowingTimerRef.current);
+                calcShowingTimerRef.current = null;
+              }
+              setCalcShowingPending(false);
+              sceneRef.current?.stopCalculationPreview(true);
+              sceneRef.current?.stopSearchTreeThinLines();
+              treeActiveOnScreenRef.current = false;
+              setTreeStatusMode('idle');
+              setTreeBrowser(null);
+              setCalcPreview(null);
+              setCoachArrows([]);
               setAngelModalEnabled(true);
               setAngelVisible(true);
               opponentSpeech.stop();
