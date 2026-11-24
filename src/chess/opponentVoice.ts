@@ -79,7 +79,8 @@ export type CommentaryCaseId =
   | 'level_grandmaster'
   | 'clock_timeout'
   | 'angel_modal_on'
-  | 'angel_modal_off';
+  | 'angel_modal_off'
+  | 'thank_jan';
 
 export type ExtendedSequentialClipId =
   | `hesitate_hint_${'v4' | 'v5' | 'v6'}`
@@ -590,6 +591,14 @@ export const CLIP_TEXT: Record<VoiceClipId, string> = {
     'Stepping out of sight for now... I enjoyed every move with you, ready whenever you want me back.',
   angel_modal_off_v3:
     'Hiding my portrait and modal... we can pick right back up anytime you like.',
+
+  // 57. Special Thank You to Jan (Title / Version Click)
+  thank_jan_v1:
+    'Thank you, Jan, for all the trouble you gave yourself to create me and this game. Now enjoy playing chess with me, too...',
+  thank_jan_v2:
+    'Thank you, Jan, for all the trouble you gave yourself to create me and this game. Now enjoy playing chess with me, too...',
+  thank_jan_v3:
+    'Thank you, Jan, for all the trouble you gave yourself to create me and this game. Now enjoy playing chess with me, too...',
 };
 
 const PIECE_VALUES: Record<PieceSymbol, number> = {
@@ -908,6 +917,17 @@ export function createAngelModalOffMessage(): OpponentMessage | null {
     text: entry.text,
     tag: 'ANGEL & MODAL · OFF',
     tone: 'neutral',
+    speaker: SPEAKER_NAME,
+  };
+}
+
+export function createThankJanMessage(): OpponentMessage {
+  return {
+    id: messageSeq++,
+    clipId: 'thank_jan_v1',
+    text: CLIP_TEXT.thank_jan_v1,
+    tag: 'FOR JAN · CHESS ANGEL',
+    tone: 'opening',
     speaker: SPEAKER_NAME,
   };
 }
@@ -1975,6 +1995,7 @@ type StateListener = (state: VoicePlaybackState) => void;
 const VOICE_ASSET_VERSION = 'angel10';
 let seductionCustomAudioUrl: string | null = null;
 let nextSeductionSlotAudioUrl: string | null = null;
+let thankJanCustomAudioUrl: string | null = null;
 
 export function setNextSeductionPlaybackAudio(url?: string | null): void {
   nextSeductionSlotAudioUrl = url && url.trim().length > 0 ? url : null;
@@ -1987,6 +2008,9 @@ function buildVoiceUrl(clipId: VoiceClipId): string {
       seductionCustomAudioUrl ||
       `/voices/female/seduction.mp3?v=${VOICE_ASSET_VERSION}`
     );
+  }
+  if (clipId.startsWith('thank_jan_')) {
+    return thankJanCustomAudioUrl || `/voices/female/thank_jan.mp3?v=${VOICE_ASSET_VERSION}`;
   }
   return `/voices/female/${clipId}.mp3?v=${VOICE_ASSET_VERSION}`;
 }
@@ -2434,6 +2458,19 @@ class OpponentSpeechController {
     }
   }
 
+  public invalidateThankJanCache(): void {
+    for (const k of Array.from(this.rawBytesCache.keys())) {
+      if (k.includes('thank_jan')) {
+        this.rawBytesCache.delete(k);
+      }
+    }
+    for (const k of Array.from(this.bufferCache.keys())) {
+      if (k.includes('thank_jan')) {
+        this.bufferCache.delete(k);
+      }
+    }
+  }
+
   public stop(): void {
     this.speakSeq++;
     this.pendingGestureClip = null;
@@ -2449,5 +2486,13 @@ export function setSeductionAudioUrlOverride(url?: string | null): void {
   if (next !== seductionCustomAudioUrl) {
     seductionCustomAudioUrl = next;
     opponentSpeech.invalidateSeductionCache();
+  }
+}
+
+export function setThankJanAudioUrlOverride(url?: string | null): void {
+  const next = url && url.length > 0 ? url : null;
+  if (next !== thankJanCustomAudioUrl) {
+    thankJanCustomAudioUrl = next;
+    opponentSpeech.invalidateThankJanCache();
   }
 }

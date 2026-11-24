@@ -1,10 +1,8 @@
 import { createRoot } from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
 import './index.css';
 
-// Web-only enforcement: suppress browser PWA install prompts, remove any manifest link,
-// unregister any previously installed Service Workers, and purge offline caches so the
-// browser URL address bar never shows an Install / Download App button.
 if (typeof window !== 'undefined') {
   const canonicalHref = window.location.origin + window.location.pathname;
   let canonicalLink = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
@@ -23,35 +21,59 @@ if (typeof window !== 'undefined') {
   }
   ogUrlMeta.content = canonicalHref;
 
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
+  // Register the copy-secured PWA Service Worker with silent auto-updates
+  registerSW({
+    immediate: true,
+    onRegisterError() {
+      // Gracefully continue in standard browser mode if SW registration is unavailable
+    },
   });
 
-  document.querySelectorAll('link[rel="manifest"]').forEach((el) => el.remove());
+  // Client-side copy deterrence: protect media, canvas, and game chrome from casual saving/copying
+  // while keeping text inputs, PGN/FEN import fields, and intentional copy buttons fully usable.
+  const isEditableTarget = (target: EventTarget | null): boolean => {
+    if (!(target instanceof HTMLElement)) return false;
+    const tag = target.tagName;
+    return (
+      tag === 'INPUT' ||
+      tag === 'TEXTAREA' ||
+      tag === 'SELECT' ||
+      target.isContentEditable
+    );
+  };
 
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker
-      .getRegistrations()
-      .then((regs) => {
-        for (const reg of regs) {
-          void reg.unregister();
-        }
-      })
-      .catch(() => {});
-  }
+  window.addEventListener('contextmenu', (e) => {
+    if (!isEditableTarget(e.target)) {
+      e.preventDefault();
+    }
+  });
 
-  if ('caches' in window) {
-    window.caches
-      .keys()
-      .then((keys) => {
-        for (const key of keys) {
-          if (key.startsWith('workbox-') || key.startsWith('chessangel-') || key.includes('precache')) {
-            void window.caches.delete(key);
-          }
-        }
-      })
-      .catch(() => {});
-  }
+  window.addEventListener('dragstart', (e) => {
+    if (!isEditableTarget(e.target)) {
+      e.preventDefault();
+    }
+  });
+
+  window.addEventListener('copy', (e) => {
+    if (!isEditableTarget(e.target)) {
+      e.preventDefault();
+    }
+  });
+
+  window.addEventListener('cut', (e) => {
+    if (!isEditableTarget(e.target)) {
+      e.preventDefault();
+    }
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const key = e.key.toLowerCase();
+    // Block Save Page (Ctrl/Cmd+S) and View Source (Ctrl/Cmd+U)
+    if (key === 's' || key === 'u') {
+      e.preventDefault();
+    }
+  });
 }
 
 createRoot(document.getElementById('root')!).render(<App />);

@@ -3,6 +3,7 @@ import {
   registerCaseMaxPlaysProvider,
   setNextSeductionPlaybackAudio,
   setSeductionAudioUrlOverride,
+  setThankJanAudioUrlOverride,
   type CommentaryCaseId,
   type SeductionTriggerMode,
   type VoiceClipId,
@@ -128,6 +129,7 @@ export const DEFAULT_VIDEO_PLAY_TO_END: Readonly<Record<string, boolean>> = {
   'case:seduction': true,
   'case:angel_modal_on': true,
   'case:angel_modal_off': true,
+  'case:thank_jan': true,
   'case:tree_browse': false,
 };
 
@@ -187,6 +189,8 @@ export interface AngelVideoMapPayload {
   seductionAudioVariants?: Record<string, string>;
   seductionAudioDurations?: Record<string, number>;
   seductionTriggerMode?: SeductionTriggerMode;
+  thankJanAudioUrl?: string;
+  thankJanAudioDuration?: number;
 }
 
 /**
@@ -367,6 +371,9 @@ export const VOICE_CLIP_DURATION_SEC: Record<VoiceClipId, number> = {
   angel_modal_off_v1: 4.6,
   angel_modal_off_v2: 4.6,
   angel_modal_off_v3: 3.1,
+  thank_jan_v1: 8.9,
+  thank_jan_v2: 8.9,
+  thank_jan_v3: 8.9,
 };
 
 /**
@@ -510,9 +517,11 @@ export const ANGEL_CASE_VIDEO_MAP: Partial<Record<CommentaryCaseId, string>> = {
   level_master: '/assets/aistudio/builtin_level_master.mp4',
   level_grandmaster: '/assets/aistudio/builtin_level_grandmaster.mp4',
   clock_timeout: '/assets/aistudio/builtin_clock_timeout.mp4',
+  promotion: '/assets/aistudio/builtin_promotion.mp4',
   angel_modal_on: '/assets/aistudio/builtin_angel_modal_on.mp4',
   angel_modal_off: '/assets/aistudio/builtin_angel_modal_off.mp4',
   hesitate_hint: '/assets/aistudio/builtin_hesitate_hint.mp4',
+  thank_jan: '/assets/aistudio/builtin_thank_jan.mp4',
 };
 
 const CASE_TO_GROUP: Record<CommentaryCaseId, AngelExpressionGroup> = {
@@ -577,6 +586,7 @@ const CASE_TO_GROUP: Record<CommentaryCaseId, AngelExpressionGroup> = {
   draw: 'ending',
 
   // 9. Menu Buttons, Angel Modal, Thinking Levels & Chess Clock Time-Over
+  thank_jan: 'controls',
   angel_modal_on: 'controls',
   angel_modal_off: 'controls',
   new_match: 'controls',
@@ -703,6 +713,7 @@ export const ANGEL_VIDEO_STUDIO_GROUPS: AngelStudioGroupSpec[] = [
     'draw',
   ]),
   makeGroupSpec('controls', 9, 'Menu Buttons, Angel Modal, Thinking Levels & Clock Time-Over', [
+    'thank_jan',
     'angel_modal_on',
     'angel_modal_off',
     'new_match',
@@ -914,6 +925,7 @@ let runtimeOverrides: AngelVideoMapPayload = {
     seduction_2: '/assets/aistudio/angel_case_seduction_2.mp4',
     seduction_3: '/assets/aistudio/angel_case_seduction_3.mp4',
     seduction_4: '/assets/aistudio/angel_case_seduction_4.mp4',
+    seduction_5: '/assets/aistudio/angel_case_seduction_5.mp4',
     stalemate: '/assets/aistudio/angel_case_stalemate.mp4',
     trial_confirm_1: '/assets/aistudio/angel_case_trial_confirm_1.mp4',
     trial_confirm_2: '/assets/aistudio/angel_case_trial_confirm_2.mp4',
@@ -927,6 +939,10 @@ let runtimeOverrides: AngelVideoMapPayload = {
     angel_modal_on: '/assets/aistudio/angel_case_angel_modal_on.mp4',
     angel_modal_off: '/assets/aistudio/angel_case_angel_modal_off.mp4',
     hesitate_hint: '/assets/aistudio/angel_case_hesitate_hint.mp4',
+    resign: '/assets/aistudio/angel_case_resign.mp4',
+    thank_jan: '/assets/aistudio/angel_case_thank_jan.mp4',
+    clock_timeout: '/assets/aistudio/angel_case_clock_timeout.mp4',
+    promotion: '/assets/aistudio/angel_case_promotion.mp4',
   },
   escapes: {
     point_you: '/assets/aistudio/angel_escape_point_you.mp4',
@@ -951,6 +967,7 @@ let runtimeOverrides: AngelVideoMapPayload = {
     warn_mate: { point_me: 'off' },
     checkmate_lose: { point_you: 'off', point_me: 'off' },
     seduction: { point_you: 'off', point_me: 'off', push_button: 'off' },
+    thank_jan: { point_you: 'off', point_me: 'off', push_button: 'off' },
     ...readStoredCaseCuesFallback(),
   },
   videoMaxPlays: readStoredVideoMaxPlaysFallback(),
@@ -974,12 +991,14 @@ let runtimeOverrides: AngelVideoMapPayload = {
     'case:wrong_distracted': true,
     'case:wrong_missed_tactic': true,
     'case:hesitate_hint': true,
+    'case:resign': true,
+    'case:thank_jan': true,
     ...readStoredVideoPlayToEndFallback(),
   },
   lipSync: {
     defaultEnabled: true,
     groups: {},
-    cases: { calc_showing: 'off', lost_queen: 'off', seduction: 'off' },
+    cases: { calc_showing: 'off', lost_queen: 'off', seduction: 'off', thank_jan: 'off' },
   },
   videoDurations: {
     '/assets/aistudio/angel_case_angel_modal_off.mp4': 12.1,
@@ -989,17 +1008,22 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/angel_case_calc_showing.mp4': 5.1,
     '/assets/aistudio/angel_case_castled.mp4': 5.1,
     '/assets/aistudio/angel_case_checkmate_win.mp4': 7.1,
+    '/assets/aistudio/angel_case_clock_timeout.mp4': 6.1,
     '/assets/aistudio/angel_case_draw.mp4': 7.1,
     '/assets/aistudio/angel_case_hesitate_hint.mp4': 9.1,
     '/assets/aistudio/angel_case_intro.mp4': 5.1,
     '/assets/aistudio/angel_case_lost_queen.mp4': 8.1,
     '/assets/aistudio/angel_case_new_match.mp4': 10.1,
     '/assets/aistudio/angel_case_opening.mp4': 10.1,
+    '/assets/aistudio/angel_case_promotion.mp4': 6.1,
+    '/assets/aistudio/angel_case_resign.mp4': 8.1,
     '/assets/aistudio/angel_case_seduction.mp4': 5.1,
     '/assets/aistudio/angel_case_seduction_2.mp4': 20.1,
     '/assets/aistudio/angel_case_seduction_3.mp4': 15.1,
     '/assets/aistudio/angel_case_seduction_4.mp4': 8.1,
+    '/assets/aistudio/angel_case_seduction_5.mp4': 12.1,
     '/assets/aistudio/angel_case_stalemate.mp4': 5.1,
+    '/assets/aistudio/angel_case_thank_jan.mp4': 9.3,
     '/assets/aistudio/angel_case_tree_browse.mp4': 5.2,
     '/assets/aistudio/angel_case_trial_confirm_1.mp4': 5.1,
     '/assets/aistudio/angel_case_trial_confirm_2.mp4': 5.1,
@@ -1034,13 +1058,15 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/builtin_default_speaking.mp4': 5.3,
     '/assets/aistudio/builtin_idle_8.mp4': 8.1,
     '/assets/aistudio/builtin_seduction_4.mp4': 8.1,
+    '/assets/aistudio/builtin_seduction_5.mp4': 12.1,
     '/assets/aistudio/builtin_hesitate_hint.mp4': 9.1,
     '/assets/aistudio/builtin_escape_point_you_3.mp4': 3.1,
     '/assets/aistudio/builtin_escape_point_me_3.mp4': 3.1,
     '/assets/aistudio/builtin_new_match.mp4': 10.1,
     '/assets/aistudio/builtin_calc_offer.mp4': 9.1,
     '/assets/aistudio/builtin_opening.mp4': 10.1,
-    '/assets/aistudio/builtin_resign.mp4': 6.8,
+    '/assets/aistudio/builtin_resign.mp4': 8.1,
+    '/assets/aistudio/builtin_thank_jan.mp4': 9.3,
     '/assets/aistudio/builtin_save_game.mp4': 6.9,
     '/assets/aistudio/builtin_load_game.mp4': 6.9,
     '/assets/aistudio/builtin_level_beginner.mp4': 6.6,
@@ -1048,7 +1074,8 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/builtin_level_advanced.mp4': 6.8,
     '/assets/aistudio/builtin_level_master.mp4': 6.8,
     '/assets/aistudio/builtin_level_grandmaster.mp4': 7.4,
-    '/assets/aistudio/builtin_clock_timeout.mp4': 6.8,
+    '/assets/aistudio/builtin_clock_timeout.mp4': 6.1,
+    '/assets/aistudio/builtin_promotion.mp4': 6.1,
     '/assets/aistudio/builtin_angel_modal_on.mp4': 9.1,
     '/assets/aistudio/builtin_angel_modal_off.mp4': 12.1,
     '/assets/aistudio/builtin_mouse_idle_sleep.mp4': 8.7,
@@ -1072,10 +1099,14 @@ let runtimeOverrides: AngelVideoMapPayload = {
   seductionAudioDuration: 4.5,
   seductionAudioVariants: {
     seduction_4: '/voices/female/seduction_4.mp3',
+    seduction_5: '/voices/female/seduction_5.mp3',
   },
   seductionAudioDurations: {
     seduction_4: 8.1,
+    seduction_5: 12.1,
   },
+  thankJanAudioUrl: '/voices/female/thank_jan.mp3',
+  thankJanAudioDuration: 8.9,
 };
 
 const listeners = new Set<() => void>();
@@ -1213,6 +1244,12 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
   if (!lipSync.cases.seduction) {
     lipSync.cases.seduction = 'off';
   }
+  if (!caseEscapeCues.thank_jan) {
+    caseEscapeCues.thank_jan = { point_you: 'off', point_me: 'off', push_button: 'off' };
+  }
+  if (!lipSync.cases.thank_jan) {
+    lipSync.cases.thank_jan = 'off';
+  }
 
   const seductionAudioUrl =
     typeof data?.seductionAudioUrl === 'string' && data.seductionAudioUrl.length > 0
@@ -1224,6 +1261,17 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
     data.seductionAudioDuration > 0
       ? data.seductionAudioDuration
       : runtimeOverrides.seductionAudioDuration ?? 4.5;
+
+  const thankJanAudioUrl =
+    typeof data?.thankJanAudioUrl === 'string' && data.thankJanAudioUrl.length > 0
+      ? data.thankJanAudioUrl
+      : runtimeOverrides.thankJanAudioUrl;
+  const thankJanAudioDuration =
+    typeof data?.thankJanAudioDuration === 'number' &&
+    Number.isFinite(data.thankJanAudioDuration) &&
+    data.thankJanAudioDuration > 0
+      ? data.thankJanAudioDuration
+      : runtimeOverrides.thankJanAudioDuration ?? 7.5;
 
   const seductionAudioVariants: Record<string, string> = {
     ...(runtimeOverrides.seductionAudioVariants || {}),
@@ -1243,6 +1291,11 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
   VOICE_CLIP_DURATION_SEC.seduction_v2 = seductionAudioDuration;
   VOICE_CLIP_DURATION_SEC.seduction_v3 = seductionAudioDuration;
   setSeductionAudioUrlOverride(seductionAudioUrl);
+
+  VOICE_CLIP_DURATION_SEC.thank_jan_v1 = thankJanAudioDuration;
+  VOICE_CLIP_DURATION_SEC.thank_jan_v2 = thankJanAudioDuration;
+  VOICE_CLIP_DURATION_SEC.thank_jan_v3 = thankJanAudioDuration;
+  setThankJanAudioUrlOverride(thankJanAudioUrl);
 
   const validPresets: ReadonlySet<string> = new Set([
     'lossless_21',
@@ -1267,6 +1320,10 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
       new_match: '/assets/aistudio/angel_case_new_match.mp4',
       angel_modal_on: '/assets/aistudio/angel_case_angel_modal_on.mp4',
       angel_modal_off: '/assets/aistudio/angel_case_angel_modal_off.mp4',
+      resign: '/assets/aistudio/angel_case_resign.mp4',
+      thank_jan: '/assets/aistudio/angel_case_thank_jan.mp4',
+      clock_timeout: '/assets/aistudio/angel_case_clock_timeout.mp4',
+      promotion: '/assets/aistudio/angel_case_promotion.mp4',
       ...(data?.cases || {}),
     },
     escapes: {
@@ -1289,6 +1346,8 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
     seductionAudioVariants,
     seductionAudioDurations,
     seductionTriggerMode,
+    thankJanAudioUrl,
+    thankJanAudioDuration,
   };
 }
 

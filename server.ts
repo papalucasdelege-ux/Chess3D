@@ -804,34 +804,9 @@ async function startServer(): Promise<void> {
       res.status(403).json({ error: 'Access denied.' });
       return;
     }
-    // Web-only game: disable PWA manifests and unregister any stale browser service workers
-    // so Chrome/Edge/Brave never display an Install / Download button in the browser URL bar.
-    if (lowerPath === '/sw.js') {
-      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-      res.send(
-        [
-          "self.addEventListener('install', () => { self.skipWaiting(); });",
-          "self.addEventListener('activate', (event) => {",
-          '  event.waitUntil(',
-          '    caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k))))',
-          '      .then(() => self.registration.unregister())',
-          '  );',
-          '});',
-        ].join('\n'),
-      );
-      return;
-    }
-    if (
-      lowerPath === '/manifest.webmanifest' ||
-      lowerPath === '/manifest.json' ||
-      lowerPath === '/site.webmanifest' ||
-      lowerPath === '/registersw.js' ||
-      /^\/workbox-[a-z0-9_-]+\.js$/.test(lowerPath)
-    ) {
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-      res.status(404).end();
-      return;
+    // Keep PWA service worker and manifest always revalidated for clean updates
+    if (lowerPath === '/sw.js' || lowerPath === '/manifest.webmanifest') {
+      res.setHeader('Cache-Control', 'no-cache, must-revalidate');
     }
     next();
   });
@@ -859,9 +834,15 @@ async function startServer(): Promise<void> {
     express.static(resolvedVoicesDir, {
       maxAge: '7d',
       acceptRanges: true,
-      fallthrough: false,
+      fallthrough: true,
+      setHeaders: (res) => {
+        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+      },
     }),
   );
+  app.use('/voices', (_req, res) => {
+    res.status(404).end();
+  });
 
   // Automatically strip embedded audio streams (-an) from any lady/portrait video in public/assets
   const verifiedSilentVideos = new Map<string, number>();
@@ -976,6 +957,9 @@ async function startServer(): Promise<void> {
       maxAge: '7d',
       acceptRanges: true,
       fallthrough: true,
+      setHeaders: (res) => {
+        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+      },
     }),
   );
 
@@ -1025,6 +1009,8 @@ async function startServer(): Promise<void> {
     seductionAudioVariants?: Record<string, string>;
     seductionAudioDurations?: Record<string, number>;
     seductionTriggerMode?: 'balanced' | 'frequent' | 'dominant' | 'tactical';
+    thankJanAudioUrl?: string;
+    thankJanAudioDuration?: number;
   }
   const seductionAssetMp3Path = path.join(aistudioAssetsDir, 'seduction.mp3');
   const execFileAsync = promisify(execFile);
@@ -1785,6 +1771,16 @@ async function startServer(): Promise<void> {
         ) {
           result.seductionTriggerMode = parsed.seductionTriggerMode;
         }
+        if (isSafeLocalMediaUrl(parsed.thankJanAudioUrl)) {
+          result.thankJanAudioUrl = parsed.thankJanAudioUrl;
+        }
+        if (
+          typeof parsed.thankJanAudioDuration === 'number' &&
+          Number.isFinite(parsed.thankJanAudioDuration) &&
+          parsed.thankJanAudioDuration > 0
+        ) {
+          result.thankJanAudioDuration = parsed.thankJanAudioDuration;
+        }
         if (
           parsed.compressionPreset === 'lossless_21' ||
           parsed.compressionPreset === 'balanced_24' ||
@@ -1851,6 +1847,19 @@ async function startServer(): Promise<void> {
             if (vDur !== null) {
               result.seductionAudioDurations[variantKey] = vDur;
             }
+          }
+        }
+        const thankJanMp3 = path.join(voicesFemaleDir, 'thank_jan.mp3');
+        if (fs.existsSync(thankJanMp3)) {
+          const tStat = fs.statSync(thankJanMp3);
+          if (!IS_PROD || !result.thankJanAudioDuration) {
+            const tDur = getVideoDurationSec(thankJanMp3, tStat.mtimeMs);
+            if (tDur !== null) {
+              result.thankJanAudioDuration = tDur;
+            }
+          }
+          if (!result.thankJanAudioUrl) {
+            result.thankJanAudioUrl = `/voices/female/thank_jan.mp3?v=${Math.floor(tStat.mtimeMs)}`;
           }
         }
       }
@@ -2078,6 +2087,8 @@ async function startServer(): Promise<void> {
       seductionAudioVariants: data.seductionAudioVariants || {},
       seductionAudioDurations: data.seductionAudioDurations || {},
       seductionTriggerMode: data.seductionTriggerMode || 'balanced',
+      thankJanAudioUrl: data.thankJanAudioUrl,
+      thankJanAudioDuration: data.thankJanAudioDuration,
     };
     fs.mkdirSync(aistudioAssetsDir, { recursive: true });
     fs.writeFileSync(angelVideoMapPath, JSON.stringify(toDisk, null, 2), 'utf8');
@@ -2640,9 +2651,10 @@ async function startServer(): Promise<void> {
           // Never auto-trim uploaded .mp4 files on disk without developer consent;
           // dark mid-clip choreography (e.g. ducking out of frame in lost_queen) and full tails are preserved 100%.
 
-          // Special exception for "seduction": before stripping video sound (-an), automatically separate
-          // any embedded audio track into "<key>.mp3" so her original video voice/sound plays in sync!
-          let extractedSeductionAudio = false;
+          // Special exception for "seduction": before stripping video sound (-an),
+          // automatically separate any embedded audio track into "<key>.mp3" so her original video voice/sound plays in sync!
+          // For "thank_jan", always strip the video's original sound so Chess Angel's dedicated voice clip plays cleanly.
+          let extractedSlotAudio = false;
           let extractedAudioUrl: string | undefined;
           let extractedAudioDuration: number | undefined;
 
@@ -2652,7 +2664,7 @@ async function startServer(): Promise<void> {
           if (isSeductionSlot) {
             const tmpSeductionMp3 = path.join(
               os.tmpdir(),
-              `seduction_extract_${process.pid}_${Date.now()}.mp3`,
+              `${key}_extract_${process.pid}_${Date.now()}.mp3`,
             );
             try {
               const hasAudioOut = execFileSync(
@@ -2703,7 +2715,7 @@ async function startServer(): Promise<void> {
                 extractedAudioDuration =
                   getVideoDurationSec(slotVoiceMp3Path, sStat.mtimeMs) ?? undefined;
                 extractedAudioUrl = `/voices/female/${mp3Name}?v=${Date.now()}`;
-                extractedSeductionAudio = true;
+                extractedSlotAudio = true;
               }
             } catch {
               // Keep existing seduction audio if uploaded video had no decodable audio stream
@@ -2769,7 +2781,7 @@ async function startServer(): Promise<void> {
           } else {
             map.cases[key] = publicUrl;
           }
-          if (extractedSeductionAudio && extractedAudioUrl) {
+          if (extractedSlotAudio && extractedAudioUrl) {
             if (!map.seductionAudioVariants) map.seductionAudioVariants = {};
             if (!map.seductionAudioDurations) map.seductionAudioDurations = {};
             map.seductionAudioVariants[key] = extractedAudioUrl;
@@ -2788,7 +2800,7 @@ async function startServer(): Promise<void> {
           res.json({
             ok: true,
             url: publicUrl,
-            extractedAudio: extractedSeductionAudio,
+            extractedAudio: extractedSlotAudio,
             inBytes: comp.inBytes,
             outBytes: stat.size,
             compressed: stat.size < comp.inBytes,

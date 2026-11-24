@@ -686,7 +686,7 @@ export function AngelVideoStudioModal({
                 ChessAngel 3D Video Studio
               </h2>
               <span className="font-mono-tabular text-xs font-bold px-1.5 py-0.5 rounded border border-[#d6ae63]/65 bg-[#261d0e] text-[#fde68a] whitespace-nowrap">
-                v3.2
+                v3.3
               </span>
               <span
                 title="Opened via 5 clicks on the game title; hidden from regular players. All attached .mp4 files, Play-per-Game quotas, and No-Cut flags are bundled into the deployed app."
@@ -1187,6 +1187,95 @@ export function AngelVideoStudioModal({
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Special Title / Version Click Video — Thank You, Jan (Pinned Near Top) */}
+        {(() => {
+          const customUrl = overrides.cases.thank_jan;
+          const activeUrl = customUrl || ANGEL_CASE_VIDEO_MAP.thank_jan;
+          const clipSec = getVideoFileDurationSec(activeUrl, overrides);
+          const audioSec = overrides.thankJanAudioDuration;
+          const hasExtractedAudio = Boolean(overrides.thankJanAudioUrl);
+          const sampleText = CLIP_TEXT.thank_jan_v1;
+          const previewSlot = () =>
+            onPreviewCase('thank_jan_v1', sampleText, 'FOR JAN · CHESS ANGEL');
+
+          return (
+            <div className="rounded-xl border border-[#d6ae63]/60 bg-[#120e07] overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#1b1409] border-b border-[#d6ae63]/30">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-[#f3d38b] shrink-0" />
+                    <span className="text-xs font-semibold text-[#fbf3df]">
+                      Special Tribute Video — Thank You, Jan (thank_jan)
+                    </span>
+                    <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-[#d6ae63]/55 bg-[#2a1f0d] text-[#f6d88f] font-medium">
+                      {customUrl ? '✓ Video Uploaded (.mp4)' : 'Awaiting .mp4 Upload'}
+                    </span>
+                    {hasExtractedAudio && (
+                      <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/45 bg-emerald-950/40 text-emerald-300 font-medium">
+                        ✓ Voice Track{audioSec ? ` (${formatSec(audioSec)})` : ''}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-[#cbbd9f] mt-0.5">
+                    Plays on Chess Angel whenever anyone clicks the{' '}
+                    <span className="text-[#f3d38b] font-medium">ChessAngel 3D</span> title or{' '}
+                    <span className="text-[#f3d38b] font-medium">v3.3</span> version number. Video
+                    sound is stripped automatically so Chess Angel&rsquo;s own voice speaks her
+                    thank-you message cleanly.
+                  </p>
+                </div>
+              </div>
+
+              <div
+                {...makeDropHandlers('case', 'thank_jan', previewSlot)}
+                className={`px-3 py-2.5 transition-colors ${
+                  dragOverSlot === 'case:thank_jan' ? 'bg-[#261c0c]' : 'bg-black'
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-xs font-semibold text-[#f7f1e5]">
+                        Title / Version Click — Chess Angel to Jan
+                      </span>
+                      <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-[#d6ae63]/50 bg-[#241b0c] text-[#f3d38b]">
+                        thank_jan
+                      </span>
+                      {clipSec !== null && (
+                        <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200">
+                          Video: {formatSec(clipSec)}
+                        </span>
+                      )}
+                      {renderVideoSizeBadge(activeUrl, 'Special Tribute — Thank You, Jan')}
+                    </div>
+                    {activeUrl && (
+                      <div className="font-mono-tabular text-[10px] text-emerald-300/90 truncate mt-0.5">
+                        {activeUrl.split('?')[0]}
+                      </div>
+                    )}
+                    <div className="text-[11px] text-[#e8dcc2] italic mt-1">
+                      &ldquo;{sampleText}&rdquo;
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                    {renderPlayToEndFlagButton('case:thank_jan', 'Thank You, Jan')}
+                    <button
+                      type="button"
+                      onClick={previewSlot}
+                      className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#1c160b] border border-[#d6ae63]/40 text-[11px] text-[#f3d38b] cursor-pointer"
+                    >
+                      <Play className="w-3 h-3 text-[#f3d38b]" />
+                      Test
+                    </button>
+                    {renderUploadButton('case', 'thank_jan', Boolean(customUrl), previewSlot)}
+                  </div>
+                </div>
               </div>
             </div>
           );

@@ -23,6 +23,7 @@ import { EvalBar } from './components/EvalBar';
 import { TopBar, type DockTab } from './components/TopBar';
 import { ControlDock } from './components/ControlDock';
 import { PromotionModal } from './components/PromotionModal';
+import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton';
 const LazyAngelVideoStudioModal = lazy(() =>
   import('./components/AngelVideoStudioModal').then((m) => ({
     default: m.AngelVideoStudioModal,
@@ -60,6 +61,7 @@ import {
   createAngelModalOnMessage,
   createCalcShowingMessage,
   createClockTimeoutMessage,
+  createThankJanMessage,
   createEngineLevelMessage,
   createHintShownMessage,
   createIntroMessage,
@@ -392,6 +394,49 @@ function ensureValidCalcReport(
   };
 }
 
+function ensureTreeSimulations(
+  rootFen: string,
+  simulations: EngineLine[] | null | undefined,
+  analysisSnap?: AnalysisSnapshot | null,
+): EngineLine[] {
+  if (simulations && simulations.length > 0) {
+    return simulations;
+  }
+
+  if (analysisSnap?.fen === rootFen) {
+    if (analysisSnap.allSimulations && analysisSnap.allSimulations.length > 0) {
+      return analysisSnap.allSimulations;
+    }
+    if (analysisSnap.lines && analysisSnap.lines.length > 0) {
+      return analysisSnap.lines;
+    }
+  }
+
+  const quick = buildQuickSearchTreeForPosition(rootFen);
+  if (quick.allSimulations.length > 0) {
+    return quick.allSimulations;
+  }
+
+  try {
+    const chess = new Chess(rootFen);
+    const legalMoves = chess.moves({ verbose: true });
+    if (legalMoves.length === 0) return [];
+    const ordered = [...legalMoves].sort(
+      (a, b) => Number(Boolean(b.captured)) - Number(Boolean(a.captured)),
+    );
+    return ordered.slice(0, 16).map((mv, idx) => ({
+      multipv: idx + 1,
+      scoreCp: 0,
+      mateIn: null,
+      bestMoveUci: `${mv.from}${mv.to}${mv.promotion || ''}`,
+      pvUci: [`${mv.from}${mv.to}${mv.promotion || ''}`],
+      pvSan: [mv.san],
+    }));
+  } catch {
+    return [];
+  }
+}
+
 function buildRootPreviewArrowsFromReport(report: BotSearchReport): SuggestionArrow[] {
   const trialKinds: Array<'trial-1' | 'trial-2' | 'trial-3'> = [
     'trial-1',
@@ -428,6 +473,7 @@ export default function App() {
   const [angelModalEnabled, setAngelModalEnabled] = useState<boolean>(true);
   const [angelVisible, setAngelVisible] = useState<boolean>(true);
   const angelModalOffTimerRef = useRef<number | null>(null);
+  const thankJanPlayingUntilRef = useRef<number>(0);
   const [powerSaveMode, setPowerSaveMode] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     try {
@@ -1614,14 +1660,18 @@ export default function App() {
     ) => {
       activeTreeRootFenRef.current = rootFen;
       activeTreeFullEdgesRef.current = edges;
+      const resolvedSims = ensureTreeSimulations(rootFen, simulations);
       let moverColor: PieceColor = 'b';
       try {
         moverColor = new Chess(rootFen).turn() as PieceColor;
       } catch {
         // default 'b'
       }
+      suppressTreeAndThreeMovesRef.current = false;
+      setSuppressTreeAndThreeMoves(false);
+      setCalcPreview(null);
       setTreeBrowser({
-        simulations,
+        simulations: resolvedSims,
         moverColor,
         selectedIndex: null,
         onlyTopThree: false,
@@ -1631,7 +1681,7 @@ export default function App() {
       });
 
       const browseMsg = createTreeBrowseMessage(
-        simulations.length > 0 ? simulations.length : edges.length,
+        resolvedSims.length > 0 ? resolvedSims.length : edges.length,
         depth,
         nodes,
       );
@@ -2609,6 +2659,125 @@ export default function App() {
     });
   }, []);
 
+  const handleTriggerCreatorTribute = useCallback(() => {
+    // Ignore duplicate / rapid clicks while Thank You, Jan is already playing so it only plays once
+    if (
+      angelVisibleRef.current &&
+      performance.now() < thankJanPlayingUntilRef.current
+    ) {
+      return;
+    }
+
+    if (angelModalOffTimerRef.current !== null) {
+      window.clearTimeout(angelModalOffTimerRef.current);
+      angelModalOffTimerRef.current = null;
+    }
+
+    const msg = createThankJanMessage();
+    setPreviewIdleUrl(null);
+    setAngelVisible(true);
+    const prep = prepareHumanCommentaryPlayback(msg.clipId, `msg:${msg.id}`);
+    const playSec = Math.max(
+      soundEnabledRef.current ? prep.audioSec : 0,
+      prep.videoUrl ? prep.videoSec : 0,
+      7.5,
+    );
+    thankJanPlayingUntilRef.current = performance.now() + Math.round(playSec * 1000) + 250;
+    setOpponentMessage(msg);
+
+    if (soundEnabledRef.current) {
+      opponentSpeech.unlock();
+      opponentSpeech.playClip(msg.clipId, 'on', true);
+    }
+
+    // If the player currently has Angel & Modal switched OFF, gently hide her again once the thank-you video finishes
+    if (!angelModalEnabled) {
+      angelModalOffTimerRef.current = window.setTimeout(() => {
+        angelModalOffTimerRef.current = null;
+        thankJanPlayingUntilRef.current = 0;
+        opponentSpeech.stop();
+        setOpponentMessage(null);
+        setAngelVisible(false);
+      }, Math.round(playSec * 1000) + 450);
+    }
+  }, [angelModalEnabled]);
+
+  const handleSetAngelModalVisible = useCallback(
+    (vis: boolean) => {
+      if (vis) {
+        if (angelModalOffTimerRef.current !== null) {
+          window.clearTimeout(angelModalOffTimerRef.current);
+          angelModalOffTimerRef.current = null;
+        }
+        setAngelModalEnabled(true);
+        setAngelVisible(true);
+        setPreviewIdleUrl(null);
+        const onMsg = createAngelModalOnMessage();
+        if (onMsg) {
+          setOpponentMessage(onMsg);
+          if (angelVoice === 'on') {
+            opponentSpeech.unlock();
+            opponentSpeech.playClip(onMsg.clipId, 'on', soundEnabled);
+          }
+        }
+        return;
+      }
+
+      thankJanPlayingUntilRef.current = 0;
+      setAngelModalEnabled(false);
+      setCalcPreview(null);
+      setTreeBrowser(null);
+      if (awaitingDistractionModalRef.current || holdBotUntilRef.current > 0) {
+        awaitingDistractionModalRef.current = false;
+        holdBotUntilRef.current = 0;
+        setBotHoldEpoch((n) => n + 1);
+      }
+
+      // If already hidden or farewell is already running and user clicks Off / Angel again, hide immediately
+      if (!angelVisible || angelModalOffTimerRef.current !== null) {
+        if (angelModalOffTimerRef.current !== null) {
+          window.clearTimeout(angelModalOffTimerRef.current);
+          angelModalOffTimerRef.current = null;
+        }
+        opponentSpeech.stop();
+        setOpponentMessage(null);
+        setAngelVisible(false);
+        return;
+      }
+
+      const offMsg = createAngelModalOffMessage();
+      if (!offMsg) {
+        opponentSpeech.stop();
+        setOpponentMessage(null);
+        setAngelVisible(false);
+        return;
+      }
+
+      setPreviewIdleUrl(null);
+      const prep = prepareHumanCommentaryPlayback(offMsg.clipId, `msg:${offMsg.id}`);
+      setOpponentMessage(offMsg);
+      if (angelVoice === 'on') {
+        opponentSpeech.unlock();
+        opponentSpeech.playClip(offMsg.clipId, 'on', soundEnabled);
+      }
+      const farewellSec = Math.max(
+        angelVoice === 'on' && soundEnabled ? prep.audioSec : 0,
+        prep.videoUrl ? prep.videoSec : 0,
+      );
+      if (farewellSec > 0.25) {
+        angelModalOffTimerRef.current = window.setTimeout(() => {
+          angelModalOffTimerRef.current = null;
+          opponentSpeech.stop();
+          setOpponentMessage(null);
+          setAngelVisible(false);
+        }, Math.round(farewellSec * 1000) + 220);
+      } else {
+        setAngelVisible(false);
+      }
+    },
+    [angelVisible, angelVoice, soundEnabled],
+  );
+
   const handleSecretStudioTrigger = useCallback(() => {
     unlockStudioDeveloperSession();
     setStudioUnlocked(true);
@@ -2707,6 +2876,79 @@ export default function App() {
       }
     },
     [analysis, displayedFen, openTreeBrowserSession],
+  );
+
+  const handleReopenTreeBrowser = useCallback(
+    (onlyTopThree = false) => {
+      suppressTreeAndThreeMovesRef.current = false;
+      setSuppressTreeAndThreeMoves(false);
+      setCalcPreview(null);
+
+      const rootFen = displayedFen;
+      const validReport = ensureValidCalcReport(
+        lastBotReportForFenRef.current?.afterFen === rootFen
+          ? lastBotReportForFenRef.current.report
+          : null,
+        rootFen,
+        analysis,
+      );
+      const quick =
+        validReport?.treeEdges && validReport.treeEdges.length > 0
+          ? null
+          : buildQuickSearchTreeForPosition(rootFen);
+      const edges =
+        (validReport?.treeEdges && validReport.treeEdges.length > 0
+          ? validReport.treeEdges
+          : null) ||
+        quick?.edges ||
+        [];
+      const sims = ensureTreeSimulations(
+        rootFen,
+        validReport?.allSimulations && validReport.allSimulations.length > 0
+          ? validReport.allSimulations
+          : validReport?.triedLines,
+        analysis,
+      );
+
+      activeTreeRootFenRef.current = rootFen;
+      activeTreeFullEdgesRef.current = edges;
+      if (edges.length > 0) latestTreeEdgesRef.current = edges;
+      if (sims.length > 0) latestAllSimulationsRef.current = sims;
+
+      let moverColor: PieceColor = 'b';
+      try {
+        moverColor = new Chess(rootFen).turn() as PieceColor;
+      } catch {
+        // default 'b'
+      }
+
+      if (edges.length > 0 && sceneRef.current) {
+        treeActiveOnScreenRef.current = true;
+        setTreeStatusMode('holding');
+        sceneRef.current.playSearchTreeThinLines(
+          edges,
+          () => {
+            treeActiveOnScreenRef.current = false;
+            setTreeStatusMode('idle');
+            setTreeBrowser(null);
+          },
+          () => {
+            setTreeStatusMode('holding');
+          },
+        );
+      }
+
+      setTreeBrowser({
+        simulations: sims,
+        moverColor,
+        selectedIndex: null,
+        onlyTopThree,
+        hasPendingBotMove: Boolean(pendingBotMoveRef.current),
+        depth: validReport?.depth ?? analysis?.depth ?? 3,
+        nodes: validReport?.nodes ?? analysis?.nodes ?? Math.max(64, sims.length * 32),
+      });
+    },
+    [analysis, displayedFen],
   );
 
   const handleAnimateTopThreeFromTree = useCallback(() => {
@@ -3333,7 +3575,9 @@ export default function App() {
         <div
           role="region"
           aria-label="Frontal top-view thinking tree lines on pure black"
-          className="fixed inset-0 z-[25] bg-black flex items-center justify-center lg:pr-[400px] p-4 pt-14 sm:p-8 sm:pt-14"
+          className={`fixed inset-0 z-[25] bg-black flex items-center justify-center ${
+            angelVisible ? 'lg:pr-[400px]' : ''
+          } p-4 pt-14 sm:p-8 sm:pt-14`}
         >
           <button
             type="button"
@@ -3389,6 +3633,8 @@ export default function App() {
           !dockCollapsed ? 'hidden xl:flex' : ''
         }`}
       >
+        <PWAInstallButton variant="topbar" />
+
         <button
           type="button"
           onClick={handleToggleFullscreen}
@@ -3410,14 +3656,19 @@ export default function App() {
           )}
         </button>
 
-        <span
-          aria-label="ChessAngel 3D v3.2"
-          className="inline-flex items-baseline px-1.5 py-0.5 bg-transparent font-display text-sm sm:text-base font-medium tracking-tight text-[#f5f0e6]/85 [text-shadow:0_1px_6px_rgba(0,0,0,0.95)] whitespace-nowrap"
+        <button
+          type="button"
+          onClick={handleTriggerCreatorTribute}
+          aria-label="ChessAngel 3D v3.3"
+          title="ChessAngel 3D v3.3"
+          className="pointer-events-auto inline-flex items-baseline px-1.5 py-0.5 rounded-md bg-transparent font-display text-sm sm:text-base font-medium tracking-tight text-[#f5f0e6]/85 hover:text-[#f3d38b] [text-shadow:0_1px_6px_rgba(0,0,0,0.95)] transition-colors cursor-pointer whitespace-nowrap focus-visible:outline-2 focus-visible:outline-[#e3be78]"
         >
           <span className="hidden sm:inline">ChessAngel 3D&nbsp;</span>
-          <span>v3.2</span>
-        </span>
+          <span>v3.3</span>
+        </button>
       </div>
+
+      <OfflineIndicator />
 
       {/* Retractable Bottom Menu Dock (opens ONLY when touching the bottom rollout arrow) */}
       <ControlDock
@@ -3483,75 +3734,7 @@ export default function App() {
           }
         }}
         angelVisible={angelModalEnabled}
-        onChangeAngelVisible={(vis) => {
-          if (vis) {
-            if (angelModalOffTimerRef.current !== null) {
-              window.clearTimeout(angelModalOffTimerRef.current);
-              angelModalOffTimerRef.current = null;
-            }
-            setAngelModalEnabled(true);
-            setAngelVisible(true);
-            setPreviewIdleUrl(null);
-            const onMsg = createAngelModalOnMessage();
-            if (onMsg) {
-              setOpponentMessage(onMsg);
-              if (angelVoice === 'on') {
-                opponentSpeech.unlock();
-                opponentSpeech.playClip(onMsg.clipId, 'on', soundEnabled);
-              }
-            }
-            return;
-          }
-
-          setAngelModalEnabled(false);
-          if (awaitingDistractionModalRef.current || holdBotUntilRef.current > 0) {
-            awaitingDistractionModalRef.current = false;
-            holdBotUntilRef.current = 0;
-            setBotHoldEpoch((n) => n + 1);
-          }
-
-          // If already hidden or farewell is already running and user clicks Off again, hide immediately
-          if (!angelVisible || angelModalOffTimerRef.current !== null) {
-            if (angelModalOffTimerRef.current !== null) {
-              window.clearTimeout(angelModalOffTimerRef.current);
-              angelModalOffTimerRef.current = null;
-            }
-            opponentSpeech.stop();
-            setOpponentMessage(null);
-            setAngelVisible(false);
-            return;
-          }
-
-          const offMsg = createAngelModalOffMessage();
-          if (!offMsg) {
-            opponentSpeech.stop();
-            setOpponentMessage(null);
-            setAngelVisible(false);
-            return;
-          }
-
-          setPreviewIdleUrl(null);
-          const prep = prepareHumanCommentaryPlayback(offMsg.clipId, `msg:${offMsg.id}`);
-          setOpponentMessage(offMsg);
-          if (angelVoice === 'on') {
-            opponentSpeech.unlock();
-            opponentSpeech.playClip(offMsg.clipId, 'on', soundEnabled);
-          }
-          const farewellSec = Math.max(
-            angelVoice === 'on' && soundEnabled ? prep.audioSec : 0,
-            prep.videoUrl ? prep.videoSec : 0,
-          );
-          if (farewellSec > 0.25) {
-            angelModalOffTimerRef.current = window.setTimeout(() => {
-              angelModalOffTimerRef.current = null;
-              opponentSpeech.stop();
-              setOpponentMessage(null);
-              setAngelVisible(false);
-            }, Math.round(farewellSec * 1000) + 220);
-          } else {
-            setAngelVisible(false);
-          }
-        }}
+        onChangeAngelVisible={handleSetAngelModalVisible}
         shadowsEnabled={shadowsEnabled}
         onToggleShadows={() => {
           prePowerSaveShadowsRef.current = null;
@@ -3641,6 +3824,7 @@ export default function App() {
         justSaved={justSaved}
         onOpenLoadDrawer={() => announceControlEvent(createLoadGameMessage())}
         onSecretStudioTrigger={handleSecretStudioTrigger}
+        onTitleTribute={handleTriggerCreatorTribute}
       />
 
       {/* Pawn Promotion Chooser Modal */}
@@ -3673,6 +3857,7 @@ export default function App() {
         onStepTreeSimulation={handleStepTreeSimulation}
         onToggleTreeOnlyTopThree={handleToggleTreeOnlyTopThree}
         onContinueFromTree={handleContinueFromTree}
+        onOpenTreeBrowser={handleReopenTreeBrowser}
         onExportTreeJpg={handleToggleFrontalTreeView}
         frontalTreeViewOpen={frontalTreeViewOpen}
         thinkingLinesProjected={thinkingLinesProjected}
@@ -3693,6 +3878,7 @@ export default function App() {
         onStopCalculationPreview={handleStopCalculationPreview}
         onUndoAndShowBetter={handleUndoAndShowBetter}
         onAcceptHint={handleAcceptHint}
+        onTurnOffAngel={() => handleSetAngelModalVisible(false)}
         onDismiss={() => {
           if (calcShowingTimerRef.current !== null) {
             window.clearTimeout(calcShowingTimerRef.current);
@@ -3871,22 +4057,63 @@ export default function App() {
                 }
               } else if (caseId === 'tree_browse') {
                 const validReport = ensureValidCalcReport(null, previewFen, analysis);
+                const quick =
+                  validReport?.treeEdges && validReport.treeEdges.length > 0
+                    ? null
+                    : buildQuickSearchTreeForPosition(previewFen);
                 const edges =
-                  validReport?.treeEdges || buildQuickSearchTreeForPosition(previewFen).edges;
+                  (validReport?.treeEdges && validReport.treeEdges.length > 0
+                    ? validReport.treeEdges
+                    : null) ||
+                  quick?.edges ||
+                  [];
+                const sims = ensureTreeSimulations(
+                  previewFen,
+                  validReport?.allSimulations && validReport.allSimulations.length > 0
+                    ? validReport.allSimulations
+                    : validReport?.triedLines,
+                  analysis,
+                );
+                let previewMoverColor: PieceColor = 'b';
+                try {
+                  previewMoverColor = new Chess(previewFen).turn() as PieceColor;
+                } catch {
+                  // default 'b'
+                }
+
+                activeTreeRootFenRef.current = previewFen;
+                activeTreeFullEdgesRef.current = edges;
+                if (edges.length > 0) latestTreeEdgesRef.current = edges;
+                if (sims.length > 0) latestAllSimulationsRef.current = sims;
+                suppressTreeAndThreeMovesRef.current = false;
+                setSuppressTreeAndThreeMoves(false);
+
                 if (edges.length > 0 && sceneRef.current) {
                   treeActiveOnScreenRef.current = true;
-                  setTreeStatusMode('developing');
+                  setTreeStatusMode('holding');
                   sceneRef.current.playSearchTreeThinLines(
                     edges,
                     () => {
                       treeActiveOnScreenRef.current = false;
                       setTreeStatusMode('idle');
+                      setTreeBrowser(null);
                     },
                     () => {
                       setTreeStatusMode('holding');
                     },
                   );
                 }
+
+                setTreeBrowser({
+                  simulations: sims,
+                  moverColor: previewMoverColor,
+                  selectedIndex: null,
+                  onlyTopThree: false,
+                  hasPendingBotMove: false,
+                  depth: validReport?.depth ?? analysis?.depth ?? 3,
+                  nodes:
+                    validReport?.nodes ?? analysis?.nodes ?? Math.max(64, sims.length * 32),
+                });
               } else if (caseId?.startsWith('wrong_')) {
                 const alts = resolveCandidateMovesForFen(previewFen, analysis, 2);
                 previewAction = {

@@ -28,7 +28,7 @@ export interface PieceGeometryCache {
   knightManeRidge: THREE.ExtrudeGeometry;
   knightEar: THREE.ExtrudeGeometry;
 
-  bishopBody: THREE.LatheGeometry;
+  bishopBody: THREE.BufferGeometry;
 
   queenBody: THREE.LatheGeometry;
 
@@ -274,13 +274,81 @@ function createCarvedKingCross(): THREE.ExtrudeGeometry {
   return geo;
 }
 
+interface CutVertex {
+  x: number;
+  y: number;
+  z: number;
+  nx: number;
+  ny: number;
+  nz: number;
+  u: number;
+  v: number;
+}
+
+function lerpCutVertex(a: CutVertex, b: CutVertex, t: number): CutVertex {
+  const nx = a.nx + (b.nx - a.nx) * t;
+  const ny = a.ny + (b.ny - a.ny) * t;
+  const nz = a.nz + (b.nz - a.nz) * t;
+  const nLen = Math.hypot(nx, ny, nz) || 1;
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    z: a.z + (b.z - a.z) * t,
+    nx: nx / nLen,
+    ny: ny / nLen,
+    nz: nz / nLen,
+    u: a.u + (b.u - a.u) * t,
+    v: a.v + (b.v - a.v) * t,
+  };
+}
+
 /**
- * Turns a high-resolution Staunton Bishop and carves the authentic diagonal
- * liturgical mitre cleft directly into the solid wood geometry so raking light
- * casts real self-shadows inside the notch.
+ * Clips a convex polygon against the half-space evalDist(v) >= 0 using
+ * exact linear interpolation for positions, normals, and UVs.
  */
-function createCarvedBishopBody(): THREE.LatheGeometry {
-  const geo = makeTurnedWoodLathe(
+function clipPolygonHalfSpace(
+  poly: CutVertex[],
+  evalDist: (v: CutVertex) => number,
+): CutVertex[] {
+  if (poly.length < 3) return [];
+  const out: CutVertex[] = [];
+  const EPS = 1e-7;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const da = evalDist(a);
+    const db = evalDist(b);
+    const inA = da >= -EPS;
+    const inB = db >= -EPS;
+
+    if (inA && inB) {
+      out.push(b);
+    } else if (inA && !inB) {
+      const denom = da - db;
+      const t = Math.abs(denom) > 1e-12 ? Math.max(0, Math.min(1, da / denom)) : 0;
+      out.push(lerpCutVertex(a, b, t));
+    } else if (!inA && inB) {
+      const denom = da - db;
+      const t = Math.abs(denom) > 1e-12 ? Math.max(0, Math.min(1, da / denom)) : 0;
+      out.push(lerpCutVertex(a, b, t));
+      out.push(b);
+    }
+  }
+  return out.length >= 3 ? out : [];
+}
+
+// Exact 45° Staunton Bishop mitre saw-kerf parameters (shared with crevice AO)
+const BISHOP_KERF_Y0 = 0.995;
+const BISHOP_KERF_HALF_WIDTH = 0.027;
+const BISHOP_KERF_V_MIN = -0.048;
+
+/**
+ * Turns a high-resolution Staunton Bishop and slices an exact, watertight 45°
+ * diagonal saw-kerf cleft directly through the convex ovoid mitre head with
+ * crisp flat-planed interior cut faces and zero mesh artifacts.
+ */
+function createCarvedBishopBody(): THREE.BufferGeometry {
+  const baseLathe = makeTurnedWoodLathe(
     [
       [0.001, 0.0],
       [0.342, 0.0],
@@ -300,53 +368,236 @@ function createCarvedBishopBody(): THREE.LatheGeometry {
       [0.135, 0.774], // twin neck bead
       [0.155, 0.795],
       [0.126, 0.818],
-      // Dense mitre rings so the diagonal carved cleft has crisp wood edges
-      [0.162, 0.86],
-      [0.186, 0.9],
-      [0.201, 0.94],
-      [0.206, 0.98],
-      [0.203, 1.02],
-      [0.192, 1.06],
-      [0.173, 1.1],
-      [0.146, 1.14],
-      [0.112, 1.18],
-      [0.072, 1.215],
-      [0.044, 1.238], // finial neck
-      [0.068, 1.288], // carved teardrop finial
-      [0.052, 1.334],
+      // Strictly convex ovoid Staunton mitre head (y = 0.818..1.240)
+      [0.168, 0.862],
+      [0.198, 0.912],
+      [0.212, 0.965],
+      [0.211, 1.018],
+      [0.197, 1.072],
+      [0.172, 1.124],
+      [0.136, 1.172],
+      [0.088, 1.214],
+      [0.044, 1.24], // finial neck
+      [0.068, 1.29], // carved teardrop finial
+      [0.052, 1.335],
       [0.02, 1.356],
       [0.001, 1.362],
     ],
-    52,
+    64,
   );
 
-  // Carve diagonal kerf slot on the front-right face of the mitre
-  const pos = geo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const y = pos.getY(i);
-    const z = pos.getZ(i);
-    if (y > 0.88 && y < 1.21) {
-      // Rotate into diagonal cleft frame (angled ~35° across the mitre face)
-      const cx = x * 0.86 - z * 0.5;
-      const cz = x * 0.5 + z * 0.86;
-      if (cz > -0.02) {
-        // Diagonal plane equation across the mitre: y - 1.055 ≈ -0.68 * (cz - 0.12)
-        const planeDist = Math.abs((y - 1.06) - (cz - 0.1) * 0.58);
-        const halfWidth = 0.036;
-        if (planeDist < halfWidth && Math.abs(cx) < 0.22) {
-          const t = 1 - planeDist / halfWidth;
-          // Smoothly indented V-kerf carved deep into the wood mitre
-          const depthFactor = Math.min(1, (cz + 0.02) / 0.14);
-          const carve = t * t * depthFactor * 0.54;
-          pos.setX(i, x * (1 - carve));
-          pos.setZ(i, z * (1 - carve));
+  const nonIndexed = baseLathe.toNonIndexed();
+  baseLathe.dispose();
+
+  const srcPos = nonIndexed.attributes.position;
+  const srcNorm = nonIndexed.attributes.normal;
+  const srcUv = nonIndexed.attributes.uv;
+
+  const S = Math.SQRT1_2;
+  const y0 = BISHOP_KERF_Y0;
+  const h = BISHOP_KERF_HALF_WIDTH;
+  const vMin = BISHOP_KERF_V_MIN;
+
+  // Orthonormal 45° cut coordinates:
+  // u = ((y - y0) - x) * sqrt(1/2)  (perpendicular to 45° saw cut; +u is upper-left)
+  // v = ((y - y0) + x) * sqrt(1/2)  (along 45° saw cut; +v is outward upper-right)
+  const evalU = (p: CutVertex) => ((p.y - y0) - p.x) * S;
+  const evalV = (p: CutVertex) => ((p.y - y0) + p.x) * S;
+
+  const outPositions: number[] = [];
+  const outNormals: number[] = [];
+  const outUvs: number[] = [];
+
+  const pushTri = (a: CutVertex, b: CutVertex, c: CutVertex) => {
+    outPositions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+    outNormals.push(a.nx, a.ny, a.nz, b.nx, b.ny, b.nz, c.nx, c.ny, c.nz);
+    outUvs.push(a.u, a.v, b.u, b.v, c.u, c.v);
+  };
+
+  const pushPoly = (poly: CutVertex[]) => {
+    for (let i = 1; i < poly.length - 1; i++) {
+      pushTri(poly[0], poly[i], poly[i + 1]);
+    }
+  };
+
+  // Boundary vertex collectors for the 3 planar interior cut faces
+  const upperWallPts: CutVertex[] = []; // plane u = +h, v >= vMin
+  const lowerWallPts: CutVertex[] = []; // plane u = -h, v >= vMin
+  const floorWallPts: CutVertex[] = []; // plane v = vMin, |u| <= h
+  const ON_PLANE_EPS = 1e-4;
+
+  const readVertex = (idx: number): CutVertex => ({
+    x: srcPos.getX(idx),
+    y: srcPos.getY(idx),
+    z: srcPos.getZ(idx),
+    nx: srcNorm.getX(idx),
+    ny: srcNorm.getY(idx),
+    nz: srcNorm.getZ(idx),
+    u: srcUv.getX(idx),
+    v: srcUv.getY(idx),
+  });
+
+  for (let i = 0; i < srcPos.count; i += 3) {
+    const v0 = readVertex(i);
+    const v1 = readVertex(i + 1);
+    const v2 = readVertex(i + 2);
+
+    const minY = Math.min(v0.y, v1.y, v2.y);
+    const maxY = Math.max(v0.y, v1.y, v2.y);
+
+    // Pedestal, stem, collar, and finial stay 100% untouched
+    if (maxY < 0.82 || minY > 1.24) {
+      pushTri(v0, v1, v2);
+      continue;
+    }
+
+    const tri = [v0, v1, v2];
+    const uVals = tri.map(evalU);
+    const vVals = tri.map(evalV);
+
+    // Fast path: triangle completely outside the 45° kerf slab
+    if (
+      Math.min(uVals[0], uVals[1], uVals[2]) >= h ||
+      Math.max(uVals[0], uVals[1], uVals[2]) <= -h ||
+      Math.max(vVals[0], vVals[1], vVals[2]) <= vMin
+    ) {
+      pushTri(v0, v1, v2);
+      continue;
+    }
+
+    // Exact disjoint partition of R^3 \ { |u| < h && v > vMin } with shared seam vertices
+    const r1 = clipPolygonHalfSpace(tri, (p) => evalU(p) - h);
+    if (r1.length >= 3) {
+      const r1Front = clipPolygonHalfSpace(r1, (p) => evalV(p) - vMin);
+      const r1Back = clipPolygonHalfSpace(r1, (p) => vMin - evalV(p));
+      pushPoly(r1Front);
+      pushPoly(r1Back);
+      for (const p of r1Front) {
+        if (Math.abs(evalU(p) - h) < ON_PLANE_EPS && evalV(p) >= vMin - ON_PLANE_EPS) {
+          upperWallPts.push(p);
+        }
+      }
+    }
+
+    const r2 = clipPolygonHalfSpace(tri, (p) => -h - evalU(p));
+    if (r2.length >= 3) {
+      const r2Front = clipPolygonHalfSpace(r2, (p) => evalV(p) - vMin);
+      const r2Back = clipPolygonHalfSpace(r2, (p) => vMin - evalV(p));
+      pushPoly(r2Front);
+      pushPoly(r2Back);
+      for (const p of r2Front) {
+        if (Math.abs(evalU(p) + h) < ON_PLANE_EPS && evalV(p) >= vMin - ON_PLANE_EPS) {
+          lowerWallPts.push(p);
+        }
+      }
+    }
+
+    const r3Band = clipPolygonHalfSpace(
+      clipPolygonHalfSpace(tri, (p) => evalU(p) + h),
+      (p) => h - evalU(p),
+    );
+    if (r3Band.length >= 3) {
+      const r3 = clipPolygonHalfSpace(r3Band, (p) => vMin - evalV(p));
+      pushPoly(r3);
+      for (const p of r3) {
+        if (Math.abs(evalV(p) - vMin) < ON_PLANE_EPS && Math.abs(evalU(p)) <= h + ON_PLANE_EPS) {
+          floorWallPts.push(p);
         }
       }
     }
   }
-  pos.needsUpdate = true;
-  geo.computeVertexNormals();
+
+  nonIndexed.dispose();
+
+  // Helper to deduplicate and fan-triangulate a strictly convex planar cut wall
+  // where (axisA × axisB) equals the outward unit normal (nx, ny, nz).
+  const appendConvexPlanarCap = (
+    rawPts: CutVertex[],
+    nx: number,
+    ny: number,
+    nz: number,
+    projectA: (p: CutVertex) => number,
+    projectB: (p: CutVertex) => number,
+  ) => {
+    if (rawPts.length < 3) return;
+    const unique: Array<{ p: CutVertex; a: number; b: number }> = [];
+    for (const p of rawPts) {
+      const a = projectA(p);
+      const b = projectB(p);
+      let duplicate = false;
+      for (let j = 0; j < unique.length; j++) {
+        if (Math.hypot(unique[j].a - a, unique[j].b - b) < 1e-4) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (!duplicate) {
+        unique.push({ p, a, b });
+      }
+    }
+    if (unique.length < 3) return;
+
+    let ca = 0;
+    let cb = 0;
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    for (const item of unique) {
+      ca += item.a;
+      cb += item.b;
+      cx += item.p.x;
+      cy += item.p.y;
+      cz += item.p.z;
+    }
+    ca /= unique.length;
+    cb /= unique.length;
+    cx /= unique.length;
+    cy /= unique.length;
+    cz /= unique.length;
+
+    unique.sort((p1, p2) => Math.atan2(p1.b - cb, p1.a - ca) - Math.atan2(p2.b - cb, p2.a - ca));
+
+    const makeFlatVertex = (x: number, y: number, z: number): CutVertex => ({
+      x,
+      y,
+      z,
+      nx,
+      ny,
+      nz,
+      u: 0.5 + z * 1.35,
+      v: Math.max(0, Math.min(1, y / 1.362)),
+    });
+
+    const center = makeFlatVertex(cx, cy, cz);
+    for (let i = 0; i < unique.length; i++) {
+      const cur = unique[i].p;
+      const nxt = unique[(i + 1) % unique.length].p;
+      pushTri(
+        center,
+        makeFlatVertex(cur.x, cur.y, cur.z),
+        makeFlatVertex(nxt.x, nxt.y, nxt.z),
+      );
+    }
+  };
+
+  // Wall A: Upper overhanging 45° cut ceiling (u = +h, v >= vMin)
+  // Outward normal = -e_u = (+S, -S, 0) = e_v × e_z  -> (A = v, B = z)
+  appendConvexPlanarCap(upperWallPts, S, -S, 0, evalV, (p) => p.z);
+
+  // Wall B: Lower 45° cut shelf (u = -h, v >= vMin)
+  // Outward normal = +e_u = (-S, +S, 0) = e_z × e_v  -> (A = z, B = v)
+  appendConvexPlanarCap(lowerWallPts, -S, S, 0, (p) => p.z, evalV);
+
+  // Wall C: Deep back floor of the 45° saw kerf (v = vMin, |u| <= h)
+  // Outward normal = +e_v = (+S, +S, 0) = e_u × e_z  -> (A = u, B = z)
+  appendConvexPlanarCap(floorWallPts, S, S, 0, evalU, (p) => p.z);
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(outPositions, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(outNormals, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(outUvs, 2));
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
   return geo;
 }
 
@@ -440,7 +691,7 @@ const _shadeColor = new THREE.Color();
  */
 function bakePieceCreviceContrast(
   geo: THREE.BufferGeometry,
-  mode: 'lathe' | 'carved',
+  mode: 'lathe' | 'carved' | 'bishop',
   outerRadiusRef = 0.26,
 ): THREE.BufferGeometry {
   const pos = geo.attributes.position;
@@ -459,7 +710,7 @@ function bakePieceCreviceContrast(
     const crownCatch = ny > 0.3 ? Math.pow((ny - 0.3) / 0.7, 1.2) * 0.045 : 0;
 
     let cavityShade = 0;
-    if (mode === 'lathe') {
+    if (mode === 'lathe' || mode === 'bishop') {
       const r = Math.hypot(x, z);
       const radialRatio = Math.min(1, r / Math.max(0.08, outerRadiusRef));
       cavityShade = (1 - radialRatio) * 0.075;
@@ -469,11 +720,26 @@ function bakePieceCreviceContrast(
       }
     }
 
-    const lum = Math.max(0.82, Math.min(1.02, 1.0 - underHang - cavityShade + crownCatch));
+    // Subtle natural ambient occlusion inside the Bishop's deep 45° saw-kerf walls
+    let minLum = 0.82;
+    if (mode === 'bishop' && y > 0.9 && y < 1.22) {
+      const kerfU = ((y - BISHOP_KERF_Y0) - x) * Math.SQRT1_2;
+      const kerfV = ((y - BISHOP_KERF_Y0) + x) * Math.SQRT1_2;
+      if (
+        Math.abs(kerfU) <= BISHOP_KERF_HALF_WIDTH + 0.002 &&
+        kerfV >= BISHOP_KERF_V_MIN - 0.002
+      ) {
+        const depthT = Math.max(0, Math.min(1, 1 - (kerfV - BISHOP_KERF_V_MIN) / 0.24));
+        cavityShade += 0.07 + depthT * depthT * 0.17;
+        minLum = 0.66;
+      }
+    }
+
+    const lum = Math.max(minLum, Math.min(1.02, 1.0 - underHang - cavityShade + crownCatch));
     const shadowDepth = Math.max(0, 1.0 - lum);
     const sR = lum;
-    const sG = Math.max(0.76, lum - shadowDepth * 0.08);
-    const sB = Math.max(0.7, lum - shadowDepth * 0.16);
+    const sG = Math.max(minLum - 0.03, lum - shadowDepth * 0.03);
+    const sB = Math.max(minLum - 0.05, lum - shadowDepth * 0.06);
 
     _shadeColor.setRGB(sR, sG, sB, THREE.SRGBColorSpace);
     colors[i * 3] = _shadeColor.r;
@@ -617,7 +883,7 @@ export function createPieceGeometryCache(): PieceGeometryCache {
   bakePieceCreviceContrast(cache.knightBrow, 'carved');
   bakePieceCreviceContrast(cache.knightManeRidge, 'carved');
   bakePieceCreviceContrast(cache.knightEar, 'carved');
-  bakePieceCreviceContrast(cache.bishopBody, 'lathe', 0.26);
+  bakePieceCreviceContrast(cache.bishopBody, 'bishop', 0.26);
   bakePieceCreviceContrast(cache.queenBody, 'lathe', 0.3);
   bakePieceCreviceContrast(cache.kingBody, 'lathe', 0.31);
   bakePieceCreviceContrast(cache.kingCross, 'carved');
@@ -761,9 +1027,9 @@ export function buildSculptedPiece(
 
     case 'b': {
       const body = enableShadows(new THREE.Mesh(cache.bishopBody, materials.body), castShadow);
-      if (color === 'b') {
-        body.rotation.y = Math.PI;
-      }
+      // Angle the 45° saw-kerf ~19° toward the player so both the crisp diagonal
+      // silhouette notch and the recessed wooden cut shelf read clearly from either side
+      body.rotation.y = color === 'w' ? -0.34 : Math.PI - 0.34;
       group.add(body);
       break;
     }

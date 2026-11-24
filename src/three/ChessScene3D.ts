@@ -584,11 +584,11 @@ export class ChessScene3D {
 
     const whitePiecePbr = createProceduralPbrMaps(
       whitePieceHex,
-      '#5c3d1b',
+      '#756e65',
       'wood',
       101,
       maxAniso,
-      { size: 512, tileSeam: false, rotateQuarter: true, grainContrast: 1.85, smoothTurned: true },
+      { size: 512, tileSeam: false, rotateQuarter: true, grainContrast: 1.35, smoothTurned: true },
     );
     const blackPiecePbr = createProceduralPbrMaps(
       blackPieceHex,
@@ -1498,19 +1498,16 @@ export class ChessScene3D {
   public setAngelOverlayVisible(visible: boolean): void {
     if (this.webglUnavailable || this.disposed || this.angelOverlayVisible === visible) return;
     this.angelOverlayVisible = visible;
+    this.userAdjustedCamera = false;
     const w = Math.max(this.container.clientWidth || window.innerWidth, 1);
     const h = Math.max(this.container.clientHeight || window.innerHeight, 1);
-    if (!this.userAdjustedCamera) {
-      const pose = this.frameCameraPoseForViewport(this.currentPreset, w, h);
-      this.camGoalPos = null;
-      this.camGoalTarget = null;
-      this.camera.position.copy(pose.pos);
-      this.controls.target.copy(pose.target);
-      this.controls.update();
-      this.emitUpperRightVoid(w, h, pose.pos, pose.target);
-    } else {
-      this.emitUpperRightVoid(w, h, this.camera.position, this.controls.target);
-    }
+    const pose = this.frameCameraPoseForViewport(this.currentPreset, w, h);
+    this.camGoalPos = null;
+    this.camGoalTarget = null;
+    this.camera.position.copy(pose.pos);
+    this.controls.target.copy(pose.target);
+    this.controls.update();
+    this.emitUpperRightVoid(w, h, pose.pos, pose.target);
     this.requestRender();
   }
 
@@ -2815,15 +2812,17 @@ export class ChessScene3D {
     const pt = new THREE.Vector4();
 
     const isPortrait = w < h;
-    const padX = Math.max(4, Math.round(w * 0.012));
+    const padX = this.angelOverlayVisible
+      ? Math.max(4, Math.round(w * 0.012))
+      : Math.max(2, Math.round(w * 0.008));
 
     if (isPortrait) {
       const minTopClearPx = this.angelOverlayVisible
         ? Math.round(Math.min(188, h * 0.21))
-        : 34;
+        : 24;
       const bottomMarginPx = this.angelOverlayVisible
         ? Math.round(Math.max(26, Math.min(72, (h - w * 1.15) * 0.28)))
-        : 28;
+        : 16;
       const offsetY = Math.round((bottomMarginPx - minTopClearPx) * 0.5);
       this.camera.setViewOffset(w, h, 0, offsetY, w, h);
       this.camera.updateProjectionMatrix();
@@ -2863,15 +2862,29 @@ export class ChessScene3D {
       return { pos, target };
     }
 
-    // Landscape / Desktop: first solve centered maximum vertical/horizontal extent,
-    // then consolidate spare left-side void to the right so the board stays at maximum zoom
-    // while giving Chess Angel clean unobstructed upper-right void space.
-    const baseOffsetY = -5;
+    // Landscape / Desktop:
+    // - When Angel Modal is OFF, fill the entire viewport edge-to-edge centered (zero lateral offset).
+    // - When Angel Modal is ON, keep the exact side-by-side framing with upper-right void for Chess Angel.
+    const baseOffsetY = this.angelOverlayVisible ? -5 : -2;
     this.camera.setViewOffset(w, h, 0, baseOffsetY, w, h);
     this.camera.updateProjectionMatrix();
 
-    const topPx = h <= 540 ? 28 : 36;
-    const bottomPx = h - (h <= 540 ? 20 : 24);
+    const topPx = this.angelOverlayVisible
+      ? h <= 540
+        ? 28
+        : 36
+      : h <= 540
+        ? 18
+        : 26;
+    const bottomPx =
+      h -
+      (this.angelOverlayVisible
+        ? h <= 540
+          ? 20
+          : 24
+        : h <= 540
+          ? 10
+          : 14);
     const minAngelCornerW = this.angelOverlayVisible
       ? Math.round(Math.min(182, w * 0.21))
       : 0;

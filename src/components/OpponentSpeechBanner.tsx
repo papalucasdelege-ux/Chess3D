@@ -209,6 +209,7 @@ function safePlayVideo(video: HTMLVideoElement | null, forceImmediate = false): 
   if (!video) return;
   silenceVideoElement(video);
   if (!video.paused) return;
+  if (video.ended) return;
   if (video.error || video.networkState === 3) return;
   if (inFlightVideoPlays.has(video)) return;
   const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -328,6 +329,8 @@ function ChessAngelPortraitVideo({
   const lastIdleEndedAtMsRef = useRef<number>(0);
   const idleClipCurrentlyPlayingRef = useRef<boolean>(false);
   const prevSpeakingRef = useRef<boolean>(false);
+  const speechObservedForTriggerRef = useRef<boolean>(false);
+  const speakingFinishedForTriggerRef = useRef<boolean>(false);
   const isSpeakingLiveRef = useRef<boolean>(isSpeaking);
   const soundEnabledLiveRef = useRef<boolean>(soundEnabled);
   const angelVoiceLiveRef = useRef<AngelVoiceMode>(angelVoice);
@@ -463,6 +466,7 @@ function ChessAngelPortraitVideo({
       }
       if (inFinalEofWindow && luma < 6 && slotLastLumaRef.current[slot] > 18) {
         video.pause();
+        slotAutoPlayRef.current[slot] = false;
         slotSafeEndedRef.current[slot] = true;
         return slotHasFrameRef.current[slot];
       }
@@ -489,6 +493,7 @@ function ChessAngelPortraitVideo({
 
     if (nearEos) {
       video.pause();
+      slotAutoPlayRef.current[slot] = false;
       slotSafeEndedRef.current[slot] = true;
     }
 
@@ -1044,6 +1049,7 @@ function ChessAngelPortraitVideo({
    */
   const settleIntoPostSpeechRest = (keepOutgoingLive: boolean) => {
     hasDeliveredSpeechRef.current = true;
+    speakingFinishedForTriggerRef.current = true;
     lastSpeechEndedAtMsRef.current = performance.now();
     isInExtendedLipSyncRef.current = false;
     startTransitionTo(resolveAngelIdleVideo(), 'idle', keepOutgoingLive, false);
@@ -1779,6 +1785,8 @@ function ChessAngelPortraitVideo({
 
     if (lastTriggerRef.current === '') {
       lastTriggerRef.current = triggerKey;
+      speechObservedForTriggerRef.current = false;
+      speakingFinishedForTriggerRef.current = false;
       activeSlotRef.current = 0;
       outgoingSlotRef.current = 1;
       activeRoleRef.current = targetRole;
@@ -1897,12 +1905,22 @@ function ChessAngelPortraitVideo({
       }
 
       // Hot-swap immediately if the user just uploaded a new .mp4 or toggled Lip-Sync ON/OFF in Video Studio
+      // (Never restart a video that already finished for this triggerKey or merely gained a ?v= hydration query.)
+      const prevBaseUrl = lastRequestedSpeakingUrlRef.current.split('?')[0];
+      const nextBaseUrl = desiredSrc.split('?')[0];
+      const isSameFileQueryOnlyHydration =
+        Boolean(prevBaseUrl) &&
+        prevBaseUrl === nextBaseUrl &&
+        !lastRequestedSpeakingUrlRef.current.includes('?v=');
       if (
         targetRole === 'speaking' &&
+        !isSameFileQueryOnlyHydration &&
         ((activeRoleRef.current !== 'speaking' &&
+          !speakingFinishedForTriggerRef.current &&
           (isSpeakingLiveRef.current || desiredSrc !== lastRequestedSpeakingUrlRef.current)) ||
           (!isInExtendedLipSyncRef.current && desiredSrc !== lastRequestedSpeakingUrlRef.current))
       ) {
+        speakingFinishedForTriggerRef.current = false;
         isInExtendedLipSyncRef.current = desiredSrc === resolveDefaultSpeakingLipVideo();
         startTransitionTo(desiredSrc, 'speaking', true, true);
       } else if (targetRole === 'idle' && activeRoleRef.current === 'speaking') {
@@ -1927,6 +1945,8 @@ function ChessAngelPortraitVideo({
     }
 
     lastTriggerRef.current = triggerKey;
+    speechObservedForTriggerRef.current = false;
+    speakingFinishedForTriggerRef.current = false;
     const isExplicitStudioTest = triggerKey.startsWith('preview:') || Boolean(forcedIdleUrl);
     const isExplicitStudioIdleTest = Boolean(forcedIdleUrl);
     const isExplicitBranchSilentPlay = triggerKey.startsWith('idle:calc:');
@@ -1955,6 +1975,18 @@ function ChessAngelPortraitVideo({
     }
 
     if (!isExplicitStudioTest && !isExplicitBranchSilentPlay && isActiveBaseProtectedFromCut()) {
+      // Never queue a duplicate back-to-back playback of the exact same No-Cut video that is already playing!
+      const activeBaseUrl = slotUrlRef.current[activeSlotRef.current].split('?')[0];
+      const nextBaseUrl = nextUrl.split('?')[0];
+      if (
+        targetRole === 'speaking' &&
+        activeRoleRef.current === 'speaking' &&
+        Boolean(activeBaseUrl) &&
+        activeBaseUrl === nextBaseUrl
+      ) {
+        ensureRenderLoop();
+        return;
+      }
       deferredTransitionRef.current = {
         url: nextUrl,
         role: targetRole,
@@ -2026,7 +2058,25 @@ function ChessAngelPortraitVideo({
     }
 
     if (!wasSpeaking && isSpeaking && soundEnabled && angelVoice !== 'off' && !isIdleTrigger) {
+      const isInitialSpeechArrival = !speechObservedForTriggerRef.current;
+      speechObservedForTriggerRef.current = true;
       const elapsedSinceStart = performance.now() - lastSpeakingStartMsRef.current;
+
+      // If this is the initial audio start for the current triggerKey (even if MP3 fetch/decode
+      // took > 900ms), NEVER restart the speaking video that is already playing (or just finished)!
+      if (
+        isInitialSpeechArrival &&
+        (activeRoleRef.current === 'speaking' || speakingFinishedForTriggerRef.current)
+      ) {
+        if (
+          pendingEscapeCuesRef.current.length > 0 ||
+          deferredPostVideoCuesRef.current.length > 0
+        ) {
+          ensureRenderLoop();
+        }
+        return;
+      }
+
       if (elapsedSinceStart > 900) {
         if (
           !triggerKey.startsWith('preview:') &&
@@ -2055,6 +2105,7 @@ function ChessAngelPortraitVideo({
           };
           ensureRenderLoop();
         } else {
+          speakingFinishedForTriggerRef.current = false;
           isInExtendedLipSyncRef.current = nextIsExtended;
           startTransitionTo(desiredSrc, 'speaking', true, true);
         }
@@ -2215,7 +2266,7 @@ function ChessAngelPortraitVideo({
     el.loop = false;
     silenceVideoElement(el);
 
-    if (slotAutoPlayRef.current[slot]) {
+    if (slotAutoPlayRef.current[slot] && !slotSafeEndedRef.current[slot] && !el.ended) {
       safePlayVideo(el, true);
       armVideoFramePump(el);
       ensureRenderLoop();
@@ -2245,6 +2296,13 @@ function ChessAngelPortraitVideo({
     el.loop = false;
     silenceVideoElement(el);
     slotRetryKeyRef.current[slot] = '';
+
+    if (slotSafeEndedRef.current[slot] || el.ended) {
+      slotAutoPlayRef.current[slot] = false;
+      el.pause();
+      ensureRenderLoop();
+      return;
+    }
 
     if (slotAutoPlayRef.current[slot]) {
       slotPrimingStillRef.current[slot] = false;
@@ -2281,6 +2339,7 @@ function ChessAngelPortraitVideo({
     el.loop = false;
     el.pause();
     silenceVideoElement(el);
+    slotAutoPlayRef.current[slot] = false;
     slotPrimingStillRef.current[slot] = false;
     slotSafeEndedRef.current[slot] = true;
     ensureRenderLoop();
@@ -2568,6 +2627,7 @@ interface OpponentSpeechBannerProps {
   onStepTreeSimulation: (delta: -1 | 1) => void;
   onToggleTreeOnlyTopThree: () => void;
   onContinueFromTree: () => void;
+  onOpenTreeBrowser?: (onlyTopThree?: boolean) => void;
   onExportTreeJpg: () => void;
   frontalTreeViewOpen?: boolean;
   thinkingLinesProjected?: boolean;
@@ -2582,6 +2642,7 @@ interface OpponentSpeechBannerProps {
   onUndoAndShowBetter: (alternatives: { uci: string; san: string }[]) => void;
   onAcceptHint: (uci: string, san: string) => void;
   onDismiss: () => void;
+  onTurnOffAngel?: () => void;
   onOpenVideoStudio?: () => void;
   powerSaveMode?: boolean;
 }
@@ -2613,6 +2674,7 @@ export function OpponentSpeechBanner({
   onStepTreeSimulation,
   onToggleTreeOnlyTopThree,
   onContinueFromTree,
+  onOpenTreeBrowser,
   onExportTreeJpg,
   frontalTreeViewOpen = false,
   thinkingLinesProjected = false,
@@ -2627,6 +2689,7 @@ export function OpponentSpeechBanner({
   onUndoAndShowBetter,
   onAcceptHint,
   onDismiss,
+  onTurnOffAngel,
   onOpenVideoStudio,
   powerSaveMode = false,
 }: OpponentSpeechBannerProps) {
@@ -2943,7 +3006,7 @@ export function OpponentSpeechBanner({
       'Browse calmly through all my simulations one by one before we go on, or click below to see only my three best evaluations.';
 
     modalCardContent = (
-      <div className={`w-full bg-black border border-[#d6ae63]/70 shadow-2xl pointer-events-auto ${treeMaxHeightClass}`}>
+      <div className={`w-full max-h-[56dvh] overflow-y-auto bg-black border border-[#d6ae63]/70 shadow-2xl pointer-events-auto ${treeMaxHeightClass}`}>
         <div className={`flex flex-wrap items-center justify-between ${isRoomy ? 'gap-1.5' : 'gap-1'}`}>
           <div className={`flex flex-wrap items-center ${isRoomy ? 'gap-1.5' : 'gap-1'} min-w-0`}>
             <span className={`${isRoomy ? 'w-6 h-6 rounded-md' : isMediumPlus ? 'w-4 h-4 rounded' : 'w-3.5 h-3.5 rounded'} bg-black border border-[#38bdf8]/60 inline-flex items-center justify-center shrink-0`}>
@@ -3021,8 +3084,10 @@ export function OpponentSpeechBanner({
               <Sparkles className={`${footerBtnIconClass} shrink-0`} />
               <span>
                 {treeBrowser.onlyTopThree
-                  ? `3 Best · All ${allSims.length}`
-                  : 'Only 3 Best'}
+                  ? `Showing 3 Best · Show All ${allSims.length}`
+                  : isRoomy
+                    ? 'Only 3 Best Evaluations'
+                    : 'Only 3 Best'}
               </span>
             </button>
           </div>
@@ -3137,7 +3202,7 @@ export function OpponentSpeechBanner({
               </div>
             )}
 
-            <div className={`${simChipListClass} flex flex-wrap`}>
+            <div className={`${simChipListClass} ${isRoomy ? 'max-h-[112px]' : 'max-h-[82px]'} overflow-y-auto pr-0.5 flex flex-wrap`}>
               {visibleSims.map((sim, idx) => {
                 const spec = getSimulationColorSpec(
                   idx,
@@ -3353,6 +3418,27 @@ export function OpponentSpeechBanner({
           </div>
         )}
 
+        {message.clipId.startsWith('tree_browse_') && onOpenTreeBrowser && (
+          <div className={`${isRoomy ? 'mt-2 gap-1.5' : 'mt-1 gap-1'} flex flex-wrap items-center`}>
+            <button
+              type="button"
+              onClick={() => onOpenTreeBrowser(false)}
+              className={primaryActionBtnClass}
+            >
+              <GitBranch className={iconSmClass} />
+              <span>Browse Simulations</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onOpenTreeBrowser(true)}
+              className={`inline-flex items-center ${footerBtnCompactPadClass} bg-black hover:bg-[#141923] border border-[#d6ae63]/65 font-semibold text-[#f3cf83] cursor-pointer`}
+            >
+              <Sparkles className={footerBtnIconClass} />
+              <span>Only 3 Best</span>
+            </button>
+          </div>
+        )}
+
         <div className={sectionDividerClass}>
           {renderThinkingAndThreeMoves(false)}
         </div>
@@ -3365,6 +3451,13 @@ export function OpponentSpeechBanner({
   const unifiedColumnWidthClass = isCompactPortrait
     ? tier.compactPortraitWidthClass
     : tier.portraitWidthClass;
+
+  // When Chess Angel is playing her angel_modal_off farewell (from clicking her or toggling Off),
+  // hide the modal box underneath immediately so only her farewell portrait animation plays out cleanly.
+  const isTurningOffAngel = Boolean(
+    activeBannerMessage?.clipId.startsWith('angel_modal_off_'),
+  );
+  const showModalBelow = !isTurningOffAngel && Boolean(modalCardContent);
 
   return (
     <aside
@@ -3383,13 +3476,21 @@ export function OpponentSpeechBanner({
         angelVoice={angelVoice}
         triggerKey={triggerKey}
         portraitWidthClass="w-full"
-        hasCardBelow
+        hasCardBelow={showModalBelow}
         powerSaveMode={powerSaveMode}
-        onClick={canClickPortraitToReplay ? onReplayVoice : undefined}
-        title={canClickPortraitToReplay ? 'Click to replay Chess Angel voice' : 'Chess Angel'}
+        onClick={onTurnOffAngel ?? (canClickPortraitToReplay ? onReplayVoice : undefined)}
+        title={
+          onTurnOffAngel
+            ? isTurningOffAngel
+              ? 'Click again to hide Chess Angel immediately'
+              : 'Click Chess Angel to turn Angel & Modal off'
+            : canClickPortraitToReplay
+              ? 'Click to replay Chess Angel voice'
+              : 'Chess Angel'
+        }
       />
 
-      {modalCardContent}
+      {showModalBelow ? modalCardContent : null}
     </aside>
   );
 }

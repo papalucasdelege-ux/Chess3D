@@ -3,12 +3,143 @@ import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
 import { defineConfig } from 'vite';
+import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
   return {
     plugins: [
       react(),
       tailwindcss(),
+      VitePWA({
+        registerType: 'autoUpdate',
+        includeAssets: [
+          'favicon.png',
+          'icon.svg',
+          'apple-touch-icon.png',
+          'pwa-192x192.png',
+          'pwa-512x512.png',
+          'pwa-maskable-512x512.png',
+        ],
+        manifest: {
+          id: '/',
+          name: 'ChessAngel 3D',
+          short_name: 'ChessAngel',
+          description:
+            'Hand-carved 3D wooden Staunton chess with Chess Angel voice & video commentary, 3D search-tree lines, and hints.',
+          theme_color: '#000000',
+          background_color: '#000000',
+          display: 'standalone',
+          orientation: 'any',
+          start_url: '/',
+          scope: '/',
+          categories: ['games', 'board', 'entertainment'],
+          icons: [
+            {
+              src: '/pwa-192x192.png',
+              sizes: '192x192',
+              type: 'image/png',
+              purpose: 'any',
+            },
+            {
+              src: '/pwa-512x512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'any',
+            },
+            {
+              src: '/pwa-maskable-512x512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'maskable',
+            },
+          ],
+        },
+        workbox: {
+          // Precache app shell, 3D chess engine, UI bundle, and icons (keep initial install fast on mobile)
+          globPatterns: ['**/*.{js,css,html,ico,svg,woff,woff2}', 'favicon.png', 'apple-touch-icon.png', 'pwa-*.png'],
+          maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+          cleanupOutdatedCaches: true,
+          clientsClaim: true,
+          skipWaiting: true,
+          navigateFallback: '/index.html',
+          navigateFallbackDenylist: [/^\/api\//, /^\/ws$/],
+          runtimeCaching: [
+            {
+              // Never cache authenticated or live API routes
+              urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
+              handler: 'NetworkOnly',
+            },
+            {
+              // Voice clips are small (~40-70 KB) and fetched as ArrayBuffers: cache on first play for offline speech
+              urlPattern: ({ url }) =>
+                url.pathname.startsWith('/voices/') || url.pathname === '/seduction.mp3',
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'chessangel-voices-v3-3',
+                expiration: {
+                  maxEntries: 220,
+                  maxAgeSeconds: 60 * 60 * 24 * 30,
+                  purgeOnQuotaError: true,
+                },
+                cacheableResponse: {
+                  statuses: [200],
+                },
+              },
+            },
+            {
+              // Chess Angel portrait MP4s: use RangeRequestsPlugin so Android HTTP 206 Range streaming NEVER stalls
+              urlPattern: ({ url }) =>
+                url.pathname.startsWith('/assets/aistudio/') && url.pathname.endsWith('.mp4'),
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'chessangel-videos-v3-3',
+                rangeRequests: true,
+                expiration: {
+                  maxEntries: 45,
+                  maxAgeSeconds: 60 * 60 * 24 * 30,
+                  purgeOnQuotaError: true,
+                },
+                cacheableResponse: {
+                  statuses: [200],
+                },
+              },
+            },
+            {
+              // Keep video registry fresh online while remaining playable offline
+              urlPattern: ({ url }) => url.pathname === '/assets/aistudio/angel_video_map.json',
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'chessangel-registry-v3-3',
+                cacheableResponse: {
+                  statuses: [200],
+                },
+              },
+            },
+            {
+              // Static art/emblem images
+              urlPattern: ({ url }) =>
+                url.pathname.startsWith('/assets/aistudio/') &&
+                /\.(png|jpg|jpeg|webp|svg)$/i.test(url.pathname),
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'chessangel-images-v3-3',
+                expiration: {
+                  maxEntries: 40,
+                  maxAgeSeconds: 60 * 60 * 24 * 30,
+                  purgeOnQuotaError: true,
+                },
+                cacheableResponse: {
+                  statuses: [200],
+                },
+              },
+            },
+          ],
+        },
+        devOptions: {
+          enabled: true,
+          type: 'module',
+        },
+      }),
       // Ensures 100% of Chess Angel .mp4 videos in public/assets/aistudio/ are registered in
       // angel_video_map.json before bundling and copied cleanly into dist/ when Publish runs.
       {
@@ -54,7 +185,7 @@ export default defineConfig(() => {
               if (!m) continue;
               const kind = m[1].toLowerCase();
               const key = m[2].toLowerCase();
-              const versioned = `${cleanPath}?v=${Math.floor(stat.mtimeMs)}`;
+              const versioned = cleanPath;
 
               if (kind === 'idle') {
                 const normKey = key === 'idle_listening' ? 'idle_1' : key;
@@ -121,7 +252,7 @@ export default defineConfig(() => {
               fs.cpSync(srcSub, dstSub, { recursive: true, force: true });
             }
           }
-          for (const rootFile of ['seduction.mp3', '_headers', '_redirects', 'sw.js']) {
+          for (const rootFile of ['seduction.mp3', '_headers', '_redirects']) {
             const srcFile = path.resolve(__dirname, 'public', rootFile);
             if (fs.existsSync(srcFile)) {
               fs.copyFileSync(srcFile, path.resolve(distDir, rootFile));

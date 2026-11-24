@@ -31,6 +31,7 @@ import {
   AlertCircle,
   Leaf,
 } from 'lucide-react';
+import { PWAInstallButton } from './PWAInstallButton';
 import {
   ENGINE_LEVELS,
   type AnalysisSnapshot,
@@ -129,6 +130,7 @@ interface ControlDockProps {
   justSaved: boolean;
   onOpenLoadDrawer?: () => void;
   onSecretStudioTrigger?: () => void;
+  onTitleTribute?: () => void;
 }
 
 const QUALITY_COLORS: Record<MoveQuality, string> = {
@@ -243,16 +245,16 @@ export function ControlDock(props: ControlDockProps) {
   };
 
   const handleBrandSecretTap = () => {
-    if (!props.onSecretStudioTrigger) return;
     const now = performance.now();
     const recent = secretTapTimesRef.current.filter((t) => now - t <= 2800);
     recent.push(now);
-    if (recent.length >= 5) {
+    if (props.onSecretStudioTrigger && recent.length >= 5) {
       secretTapTimesRef.current = [];
       props.onSecretStudioTrigger();
-    } else {
-      secretTapTimesRef.current = recent;
+      return;
     }
+    secretTapTimesRef.current = recent;
+    props.onTitleTribute?.();
   };
 
   const copyText = (key: string, value: string) => {
@@ -302,12 +304,14 @@ export function ControlDock(props: ControlDockProps) {
       >
         {/* Unified Menu Header Bar: Logo + ChessAngel 3D + Version + Copyright on Left | Controls + Play/Analysis/Replay on Far Right */}
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 border-b border-white/10 bg-[#0d1017]/95">
-          <div
-            onClick={handleBrandSecretTap}
-            className="flex flex-wrap items-center gap-2 select-none cursor-default"
-          >
-            {/* ChessAngel 3D Logo Emblem on the Very Left Before Game Title */}
-            <div className="inline-flex items-center gap-2 whitespace-nowrap shrink-0">
+          <div className="flex flex-wrap items-center gap-2 select-none">
+            {/* ChessAngel 3D Logo Emblem + Interactive Title & Version */}
+            <button
+              type="button"
+              onClick={handleBrandSecretTap}
+              title="ChessAngel 3D v3.3"
+              className="group inline-flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer rounded-md focus-visible:outline-2 focus-visible:outline-[#e3be78]"
+            >
               {!emblemBroken ? (
                 <img
                   src="/assets/aistudio/chess3D-angel_414f5812.png"
@@ -316,7 +320,7 @@ export function ControlDock(props: ControlDockProps) {
                   onContextMenu={(e) => e.preventDefault()}
                   referrerPolicy="no-referrer"
                   onError={() => setEmblemBroken(true)}
-                  className="w-7 h-7 rounded-md object-cover border border-white/15 shadow-sm shrink-0"
+                  className="w-7 h-7 rounded-md object-cover border border-white/15 group-hover:border-[#d6ae63]/65 shadow-sm shrink-0 transition-colors"
                 />
               ) : (
                 <span
@@ -326,10 +330,10 @@ export function ControlDock(props: ControlDockProps) {
                   ♞
                 </span>
               )}
-              <span className="font-display text-base font-medium tracking-tight text-[#f5f0e6] whitespace-nowrap">
-                ChessAngel 3D v3.2
+              <span className="font-display text-base font-medium tracking-tight text-[#f5f0e6] group-hover:text-[#f3d38b] transition-colors whitespace-nowrap">
+                ChessAngel 3D v3.3
               </span>
-            </div>
+            </button>
 
             <span className="text-[11px] text-[#9aa3b2] whitespace-nowrap">
               © Jan Rom 2026
@@ -337,6 +341,8 @@ export function ControlDock(props: ControlDockProps) {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <PWAInstallButton variant="dock" />
+
             <button
               type="button"
               onClick={props.onToggleSearchTree}
