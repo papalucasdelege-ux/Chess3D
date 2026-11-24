@@ -44,6 +44,7 @@ import {
   getVideoOptimizedInfo,
   getVideoSlotMaxPlays,
   LONG_VIDEO_AUTO_NO_CUT_MIN_SEC,
+  IS_VIDEO_STUDIO_DEV_ENV,
   isCaseUsingDefaultLipSync,
   isEffectiveCasePlayToEnd,
   isEscapeCueEnabled,
@@ -173,19 +174,23 @@ export function AngelVideoStudioModal({
       const sizeDetail =
         inBytes && outBytes
           ? compressed
-            ? `compressed ${formatBytes(inBytes)} → ${formatBytes(outBytes)} (-${Math.max(1, Math.round((1 - outBytes / inBytes) * 100))}%, 554×740 CRF ${crf || effectiveTargetCrf})`
-            : `${formatBytes(outBytes)} (already optimal)`
+            ? `compressed ${formatBytes(inBytes)} → ${formatBytes(outBytes)} (-${Math.max(1, Math.round((1 - outBytes / inBytes) * 100))}%, 560×752 CRF ${crf || effectiveTargetCrf})`
+            : `${formatBytes(outBytes)} (560×752 Android-safe)`
           : 'silent + faststart';
       setStatusNote(
         extractedAudio
-          ? `ACTIVE IMMEDIATELY: "${file.name}" live for "${key}" — #000000 background & white balance matched, ${sizeDetail}, embedded sound synced.`
-          : `ACTIVE IMMEDIATELY: "${file.name}" live for "${key}" — #000000 background & white balance matched, ${sizeDetail}, sound & black tail stripped.`,
+          ? `ACTIVE IMMEDIATELY: "${file.name}" live for "${key}" — #000000 background matched, ${sizeDetail}, embedded sound synced. Tip: send a quick message in AI Studio chat before closing so the workspace snapshots it permanently!`
+          : `ACTIVE IMMEDIATELY: "${file.name}" live for "${key}" — #000000 background matched, ${sizeDetail}, sound stripped. Tip: send a quick message in AI Studio chat before closing so the workspace snapshots it permanently!`,
       );
       if (autoPreview) {
         autoPreview(uploadedUrl);
       }
     } catch {
-      setStatusNote(`Could not upload "${file.name}". Please check that it is an MP4/WebM video.`);
+      setStatusNote(
+        IS_VIDEO_STUDIO_DEV_ENV
+          ? `Could not upload "${file.name}". Please check that it is an MP4/WebM video.`
+          : `Cannot upload "${file.name}" on a published/static URL (Netlify or Cloud Run). Open ChessAngel 3D inside the AI Studio Build editor to upload new .mp4 files permanently.`,
+      );
     } finally {
       setBusySlot(null);
     }
@@ -195,7 +200,7 @@ export function AngelVideoStudioModal({
     if (compressingAll) return;
     setCompressingAll(true);
     setStatusNote(
-      `Running 554×740 Lanczos H.264 (CRF ${effectiveTargetCrf}) compression across Studio videos…`,
+      `Running 560×752 Mod-16 H.264 (Main@3.1 · bf=0 · CRF ${effectiveTargetCrf}) compression across Studio videos…`,
     );
     try {
       const res = await compressAngelStudioVideos({
@@ -210,7 +215,7 @@ export function AngelVideoStudioModal({
         );
       } else {
         setStatusNote(
-          `All ${res.totalFiles} Studio videos are already optimal at 554×740 CRF ${res.crf} (${formatBytes(res.afterBytes)} total).`,
+          `All ${res.totalFiles} Studio videos are already optimal at 560×752 CRF ${res.crf} (${formatBytes(res.afterBytes)} total).`,
         );
       }
     } catch {
@@ -237,7 +242,7 @@ export function AngelVideoStudioModal({
         );
       } else {
         setStatusNote(
-          `"${labelName}" is already optimal at ${formatBytes(res.afterBytes)} (554×740 CRF ${res.crf}).`,
+          `"${labelName}" is already optimal at ${formatBytes(res.afterBytes)} (560×752 CRF ${res.crf}).`,
         );
       }
     } catch {
@@ -549,8 +554,8 @@ export function AngelVideoStudioModal({
     const isSingleBusy = compressingUrl === clean;
     const isOptimizedAtTarget = Boolean(
       optInfo &&
-        optInfo.width === 554 &&
-        optInfo.height === 740 &&
+        optInfo.width === 560 &&
+        optInfo.height === 752 &&
         optInfo.crf >= effectiveTargetCrf,
     );
 
@@ -564,8 +569,8 @@ export function AngelVideoStudioModal({
         }}
         title={
           isOptimizedAtTarget
-            ? `Optimized 554×740 H.264 (CRF ${optInfo?.crf || 21}) · ${formatBytes(sizeBytes)}. Click to re-run compression on "${labelName}" at CRF ${effectiveTargetCrf}.`
-            : `Click to compress "${labelName}" (${formatBytes(sizeBytes)}${optInfo?.width ? `, ${optInfo.width}×${optInfo.height}` : ''}) to 554×740 H.264 CRF ${effectiveTargetCrf}.`
+            ? `Optimized 560×752 Mod-16 H.264 Main@3.1 (CRF ${optInfo?.crf || 21}) · ${formatBytes(sizeBytes)}. Click to re-run compression on "${labelName}" at CRF ${effectiveTargetCrf}.`
+            : `Click to compress "${labelName}" (${formatBytes(sizeBytes)}${optInfo?.width ? `, ${optInfo.width}×${optInfo.height}` : ''}) to 560×752 Mod-16 H.264 CRF ${effectiveTargetCrf}.`
         }
         className={`inline-flex items-center gap-1 font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer whitespace-nowrap ${
           isOptimizedAtTarget
@@ -592,8 +597,8 @@ export function AngelVideoStudioModal({
     return Boolean(
       info &&
         info.size === sz &&
-        info.width === 554 &&
-        info.height === 740 &&
+        info.width === 560 &&
+        info.height === 752 &&
         info.crf >= effectiveTargetCrf,
     );
   }).length;
@@ -605,15 +610,15 @@ export function AngelVideoStudioModal({
   }> = [
     {
       value: 'lossless_21',
-      label: 'Visually Lossless · CRF 21 (554×740 · Default)',
+      label: 'Visually Lossless · CRF 21 (560×752 Mod-16 · Default)',
     },
     {
       value: 'balanced_24',
-      label: 'Compact · CRF 24 (554×740 · ~35% smaller)',
+      label: 'Compact · CRF 24 (560×752 Mod-16 · ~35% smaller)',
     },
     {
       value: 'mobile_27',
-      label: 'Ultra-Light Mobile · CRF 27 (554×740 · ~55% smaller)',
+      label: 'Ultra-Light Mobile · CRF 27 (560×752 Mod-16 · ~55% smaller)',
     },
     {
       value: 'mute_only',
@@ -681,13 +686,15 @@ export function AngelVideoStudioModal({
                 ChessAngel 3D Video Studio
               </h2>
               <span className="font-mono-tabular text-xs font-bold px-1.5 py-0.5 rounded border border-[#d6ae63]/65 bg-[#261d0e] text-[#fde68a] whitespace-nowrap">
-                v3.1
+                v3.2
               </span>
               <span
                 title="Opened via 5 clicks on the game title; hidden from regular players. All attached .mp4 files, Play-per-Game quotas, and No-Cut flags are bundled into the deployed app."
                 className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/45 bg-emerald-950/40 text-emerald-300 font-medium whitespace-nowrap"
               >
-                Studio Unlocked · Bundled on Deploy
+                {IS_VIDEO_STUDIO_DEV_ENV
+                  ? 'Studio Unlocked · Bundled on Deploy'
+                  : 'Read-Only Deployed Build'}
               </span>
             </div>
             <p className="text-[11px] text-[#9aa3b2] truncate">
@@ -720,6 +727,16 @@ export function AngelVideoStudioModal({
         </div>
       </div>
 
+      {!IS_VIDEO_STUDIO_DEV_ENV ? (
+        <div className="px-4 py-2.5 bg-[#29170a] border-b border-amber-500/55 text-[11px] text-amber-200 leading-snug">
+          <strong>Deployed Static / Cloud Run Mode:</strong> Uploading new <code className="text-amber-100">.mp4</code> files here cannot be saved permanently because Netlify &amp; published containers are read-only/ephemeral. Always upload new <code className="text-amber-100">.mp4</code> files inside the <strong>AI Studio Build preview</strong>, then send one chat message (e.g. <em>&quot;save my new videos&quot;</em>) before closing or publishing!
+        </div>
+      ) : (
+        <div className="px-4 py-2 bg-[#131b26] border-b border-sky-500/35 text-[11px] text-sky-200 leading-snug">
+          <strong>Permanent Save Tip:</strong> After uploading any new <code className="text-sky-100">.mp4</code> here, send a quick message in AI Studio chat (e.g. <em>&quot;lock in my uploaded videos&quot;</em>) before ending your session so AI Studio commits the files into permanent workspace storage!
+        </div>
+      )}
+
       {statusNote && (
         <div className="px-4 py-2 bg-[#101c16] border-b border-emerald-500/30 text-xs text-emerald-200">
           {statusNote}
@@ -748,7 +765,7 @@ export function AngelVideoStudioModal({
                   }`}
                 >
                   {pendingCompressCount === 0 && totalStudioVideos > 0
-                    ? `✓ All ${totalStudioVideos} Optimized (554×740 · CRF ≤${effectiveTargetCrf})`
+                    ? `✓ All ${totalStudioVideos} Android-Safe (560×752 · Main@3.1 · bf=0)`
                     : `${pendingCompressCount} Can Compress to CRF ${effectiveTargetCrf}`}
                 </span>
                 {lastCompressRun && lastCompressRun.compressedCount > 0 && (
@@ -759,10 +776,10 @@ export function AngelVideoStudioModal({
               </div>
               <p className="text-[11px] text-[#9fb0a9] mt-1 leading-snug">
                 Every attached <span className="text-emerald-200 font-medium">.mp4</span> is
-                automatically scaled to <span className="font-mono-tabular text-[#e2e8f0]">554×740</span>{' '}
-                (Lanczos), H.264 film-tuned, audio-stripped, and{' '}
-                <span className="font-mono-tabular text-[#e2e8f0]">+faststart</span> indexed — or
-                batch-compress the entire Studio library below.
+                automatically scaled to <span className="font-mono-tabular text-[#e2e8f0]">560×752</span>{' '}
+                (Mod-16 Lanczos), H.264 <span className="font-mono-tabular text-[#e2e8f0]">Main@3.1 · bf=0</span>{' '}
+                for instant Android playback, audio-stripped, and{' '}
+                <span className="font-mono-tabular text-[#e2e8f0]">+faststart</span> indexed.
               </p>
             </div>
           </div>
@@ -785,7 +802,7 @@ export function AngelVideoStudioModal({
                   setStatusNote(
                     nextPreset === 'mute_only'
                       ? 'Upload profile set to Mute Audio Only (no video re-encoding on upload).'
-                      : `Compression profile set to CRF ${getTargetCrfForPreset(nextPreset)} (554×740 Lanczos + faststart) for uploads & batch runs.`,
+                      : `Compression profile set to CRF ${getTargetCrfForPreset(nextPreset)} (560×752 Mod-16 Main@3.1 + faststart) for uploads & batch runs.`,
                   );
                 }}
                 className="bg-transparent text-emerald-100 text-[11px] focus:outline-none cursor-pointer truncate"
@@ -803,7 +820,7 @@ export function AngelVideoStudioModal({
                 type="button"
                 disabled={compressingAll || totalStudioVideos === 0}
                 onClick={() => void handleCompressLibrary(false)}
-                title={`Compress all Studio .mp4 files not yet at 554×740 CRF ${effectiveTargetCrf}`}
+                title={`Compress all Studio .mp4 files not yet at 560×752 CRF ${effectiveTargetCrf}`}
                 className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50 ${
                   pendingCompressCount > 0
                     ? 'bg-[#133224] hover:bg-[#194230] border-emerald-400/70 text-emerald-100 shadow-sm'

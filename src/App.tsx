@@ -428,9 +428,51 @@ export default function App() {
   const [angelModalEnabled, setAngelModalEnabled] = useState<boolean>(true);
   const [angelVisible, setAngelVisible] = useState<boolean>(true);
   const angelModalOffTimerRef = useRef<number | null>(null);
-  const [shadowsEnabled, setShadowsEnabled] = useState<boolean>(
-    () => typeof navigator === 'undefined' || !/Android|iPhone|iPad/i.test(navigator.userAgent),
-  );
+  const [powerSaveMode, setPowerSaveMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const saved = window.localStorage.getItem('chess_angel_power_save_v1');
+      if (saved === '1') return true;
+      if (saved === '0') return false;
+    } catch {
+      // ignore storage errors
+    }
+    return Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+  });
+  const [shadowsEnabled, setShadowsEnabled] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        if (window.localStorage.getItem('chess_angel_power_save_v1') === '1') {
+          return false;
+        }
+      } catch {
+        // ignore
+      }
+      if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        return false;
+      }
+    }
+    return typeof navigator === 'undefined' || !/Android|iPhone|iPad/i.test(navigator.userAgent);
+  });
+  const prePowerSaveShadowsRef = useRef<boolean | null>(null);
+  const handleTogglePowerSaveMode = useCallback(() => {
+    const next = !powerSaveMode;
+    setPowerSaveMode(next);
+    try {
+      window.localStorage.setItem('chess_angel_power_save_v1', next ? '1' : '0');
+    } catch {
+      // ignore
+    }
+    if (next) {
+      prePowerSaveShadowsRef.current = shadowsEnabled;
+      if (shadowsEnabled) {
+        setShadowsEnabled(false);
+      }
+    } else if (prePowerSaveShadowsRef.current !== null) {
+      setShadowsEnabled(prePowerSaveShadowsRef.current);
+      prePowerSaveShadowsRef.current = null;
+    }
+  }, [powerSaveMode, shadowsEnabled]);
   const [upperRightVoid, setUpperRightVoid] = useState<UpperRightVoidSpec>(() =>
     computeFallbackUpperRightVoid(
       typeof window !== 'undefined' ? window.innerWidth : 1280,
@@ -1334,6 +1376,10 @@ export default function App() {
   useEffect(() => {
     sceneRef.current?.setShadowsEnabled(shadowsEnabled);
   }, [shadowsEnabled]);
+
+  useEffect(() => {
+    sceneRef.current?.setPowerSaveMode(powerSaveMode);
+  }, [powerSaveMode]);
 
   useEffect(() => {
     sceneRef.current?.setAngelOverlayVisible(angelVisible);
@@ -3256,7 +3302,9 @@ export default function App() {
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
         e.preventDefault();
       }}
-      className="relative w-full h-full overflow-hidden bg-black select-none"
+      className={`relative w-full h-full overflow-hidden bg-black select-none${
+        powerSaveMode ? ' power-save-mode' : ''
+      }`}
     >
       {/* Isolated Full-Viewport 3D WebGL Canvas Container (Explicit Non-Zero Sizing) */}
       <div ref={canvasContainerRef} className="webgl-viewport-container z-0" />
@@ -3363,11 +3411,11 @@ export default function App() {
         </button>
 
         <span
-          aria-label="ChessAngel 3D v3.1"
+          aria-label="ChessAngel 3D v3.2"
           className="inline-flex items-baseline px-1.5 py-0.5 bg-transparent font-display text-sm sm:text-base font-medium tracking-tight text-[#f5f0e6]/85 [text-shadow:0_1px_6px_rgba(0,0,0,0.95)] whitespace-nowrap"
         >
           <span className="hidden sm:inline">ChessAngel 3D&nbsp;</span>
-          <span>v3.1</span>
+          <span>v3.2</span>
         </span>
       </div>
 
@@ -3505,7 +3553,12 @@ export default function App() {
           }
         }}
         shadowsEnabled={shadowsEnabled}
-        onToggleShadows={() => setShadowsEnabled((s) => !s)}
+        onToggleShadows={() => {
+          prePowerSaveShadowsRef.current = null;
+          setShadowsEnabled((s) => !s);
+        }}
+        powerSaveMode={powerSaveMode}
+        onTogglePowerSaveMode={handleTogglePowerSaveMode}
         showCoordinates={showCoordinates}
         onToggleCoordinates={() => setShowCoordinates((c) => !c)}
         showSearchTree={showSearchTree}
@@ -3611,6 +3664,7 @@ export default function App() {
         angelVoice={angelVoice}
         soundEnabled={soundEnabled}
         voiceState={voiceState}
+        powerSaveMode={powerSaveMode}
         calcPreview={calcPreview}
         treeBrowser={treeBrowser}
         idlePreviewNonce={idlePreviewNonce}

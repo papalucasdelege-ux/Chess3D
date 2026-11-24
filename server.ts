@@ -1265,8 +1265,8 @@ async function startServer(): Promise<void> {
     const gExpr = buildLutRgbChannelExpr(calib.cutG, knee, calib.gammaG);
     const bExpr = buildLutRgbChannelExpr(calib.cutB, knee, calib.gammaB);
     const vfChain = [
-      'scale=554:740:force_original_aspect_ratio=increase:flags=lanczos',
-      'crop=554:740',
+      'scale=560:752:force_original_aspect_ratio=increase:flags=lanczos',
+      'crop=560:752',
       'format=rgb24',
       `lutrgb=r='${rExpr}':g='${gExpr}':b='${bExpr}'`,
       'scale=out_color_matrix=bt709:out_range=tv',
@@ -1284,16 +1284,26 @@ async function startServer(): Promise<void> {
         ...trimArgs,
         '-vf',
         vfChain,
+        '-r',
+        '24',
         '-c:v',
         'libx264',
         '-preset',
-        'slow',
+        'medium',
         '-crf',
         String(effectiveCrf),
         '-profile:v',
         'main',
         '-level',
         '3.1',
+        '-bf',
+        '0',
+        '-refs',
+        '2',
+        '-g',
+        '24',
+        '-keyint_min',
+        '12',
         '-pix_fmt',
         'yuv420p',
         '-color_range',
@@ -1312,24 +1322,7 @@ async function startServer(): Promise<void> {
       { timeout: 90000 },
     );
 
-    let outBytes = fs.statSync(outputPath).size;
-    // Never revert to uncalibrated `-c:v copy` if the input needed dark-background or BT.709 color calibration!
-    if (trimArgs.length === 0 && !calib.needsBackdropFix && outBytes >= inBytes) {
-      await execFileAsync(
-        'ffmpeg',
-        ['-y', '-loglevel', 'error', '-i', inputPath, '-c:v', 'copy', '-an', '-movflags', '+faststart', outputPath],
-        { timeout: 25000 },
-      );
-      outBytes = fs.statSync(outputPath).size;
-      return {
-        inBytes,
-        outBytes,
-        compressed: outBytes < inBytes,
-        crfApplied: effectiveCrf,
-        backdropCalibrated: false,
-        whiteBalanceAdjusted: false,
-      };
-    }
+    const outBytes = fs.statSync(outputPath).size;
 
     return {
       inBytes,
@@ -1824,7 +1817,7 @@ async function startServer(): Promise<void> {
       // Fall back to disk discovery
     }
 
-    // Discover seduction.mp3 duration & cache-busted URL from /public/voices/female/seduction.mp3
+    // Discover seduction.mp3 & seduction_<N>.mp3 durations & cache-busted URLs from /public/voices/female/
     try {
       if (fs.existsSync(seductionVoiceMp3Path)) {
         const sStat = fs.statSync(seductionVoiceMp3Path);
@@ -1836,6 +1829,29 @@ async function startServer(): Promise<void> {
         }
         if (!result.seductionAudioUrl) {
           result.seductionAudioUrl = `/voices/female/seduction.mp3?v=${Math.floor(sStat.mtimeMs)}`;
+        }
+      }
+      const voicesFemaleDir = path.dirname(seductionVoiceMp3Path);
+      if (fs.existsSync(voicesFemaleDir)) {
+        result.seductionAudioVariants = result.seductionAudioVariants || {};
+        result.seductionAudioDurations = result.seductionAudioDurations || {};
+        for (const entry of fs.readdirSync(voicesFemaleDir, { withFileTypes: true })) {
+          if (!entry.isFile()) continue;
+          const sm = /^seduction_(\d+)\.mp3$/i.exec(entry.name);
+          if (!sm) continue;
+          const variantKey = `seduction_${sm[1]}`;
+          const fullMp3 = path.join(voicesFemaleDir, entry.name);
+          const vStat = fs.statSync(fullMp3);
+          const existingUrl = result.seductionAudioVariants[variantKey];
+          if (!existingUrl || (!IS_PROD && stripQueryFromAssetUrl(existingUrl) === entry.name)) {
+            result.seductionAudioVariants[variantKey] = `/voices/female/${entry.name}?v=${Math.floor(vStat.mtimeMs)}`;
+          }
+          if (!IS_PROD || !result.seductionAudioDurations[variantKey]) {
+            const vDur = getVideoDurationSec(fullMp3, vStat.mtimeMs);
+            if (vDur !== null) {
+              result.seductionAudioDurations[variantKey] = vDur;
+            }
+          }
         }
       }
     } catch {
@@ -1881,7 +1897,7 @@ async function startServer(): Promise<void> {
               const dims = getVideoDimensions(full, stat.mtimeMs);
               const kbps = dur && dur > 0 ? (stat.size * 8) / (dur * 1000) : 9999;
               const autoOptimized =
-                Boolean(dims && dims.width === 554 && dims.height === 740 && kbps <= 2300);
+                Boolean(dims && dims.width === 560 && dims.height === 752 && kbps <= 2600);
               const inferred: StoredVideoOptimizedInfo = {
                 size: stat.size,
                 crf: autoOptimized ? 21 : 0,
@@ -2495,8 +2511,8 @@ async function startServer(): Promise<void> {
           Boolean(
             existingOpt &&
               existingOpt.size === statBefore.size &&
-              existingOpt.width === 554 &&
-              existingOpt.height === 740 &&
+              existingOpt.width === 560 &&
+              existingOpt.height === 752 &&
               existingOpt.crf >= targetCrf,
           );
 
@@ -2517,10 +2533,10 @@ async function startServer(): Promise<void> {
             enforceBackdropMatch: true,
           });
           const needsDimNormalize =
-            !existingOpt || existingOpt.width !== 554 || existingOpt.height !== 740;
+            !existingOpt || existingOpt.width !== 560 || existingOpt.height !== 752;
           if (
             comp.outBytes > 1000 &&
-            (comp.outBytes < statBefore.size || comp.backdropCalibrated || (needsDimNormalize && force))
+            (comp.outBytes < statBefore.size || comp.backdropCalibrated || needsDimNormalize)
           ) {
             fs.copyFileSync(tmpOpt, full);
             const statAfter = fs.statSync(full);
@@ -2530,8 +2546,8 @@ async function startServer(): Promise<void> {
             const info: StoredVideoOptimizedInfo = {
               size: statAfter.size,
               crf: targetCrf,
-              width: 554,
-              height: 740,
+              width: 560,
+              height: 752,
             };
             recordedVideoOptByPath.set(cleanPublicPath, info);
           } else {
@@ -2541,8 +2557,8 @@ async function startServer(): Promise<void> {
             const info: StoredVideoOptimizedInfo = {
               size: statBefore.size,
               crf: Math.max(existingOpt?.crf || 0, targetCrf),
-              width: dims?.width || 554,
-              height: dims?.height || 740,
+              width: dims?.width || 560,
+              height: dims?.height || 752,
             };
             recordedVideoOptByPath.set(cleanPublicPath, info);
           }
@@ -2716,8 +2732,8 @@ async function startServer(): Promise<void> {
           recordedVideoOptByPath.set(cleanUploadedPath, {
             size: stat.size,
             crf: comp.crfApplied,
-            width: dims?.width || 554,
-            height: dims?.height || 740,
+            width: dims?.width || 560,
+            height: dims?.height || 752,
           });
 
           const publicUrl = `/assets/aistudio/${fileName}?v=${Date.now()}`;

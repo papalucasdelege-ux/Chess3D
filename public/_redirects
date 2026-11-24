@@ -1,0 +1,7 @@
+# Never rewrite missing media files to index.html (prevents HTML poisoning of <video>/<audio> elements)
+/assets/*  /404.html  404
+/voices/*  /404.html  404
+/api/*     /404.html  404
+
+# SPA fallback for client routes
+/*         /index.html  200

@@ -85,6 +85,19 @@ export default defineConfig(() => {
               }
             }
 
+            // Prune any stale map references to deleted files so published builds never hit 404
+            for (const dict of [idleVariants, groups, cases, escapes]) {
+              for (const [k, v] of Object.entries(dict)) {
+                if (typeof v !== 'string') continue;
+                const clean = v.split('?')[0];
+                const fname = path.basename(clean);
+                if (!fs.existsSync(path.join(aistudioDir, fname))) {
+                  delete dict[k];
+                  changed = true;
+                }
+              }
+            }
+
             if (changed) {
               rawMap.idleVariants = idleVariants;
               rawMap.groups = groups;
@@ -108,9 +121,11 @@ export default defineConfig(() => {
               fs.cpSync(srcSub, dstSub, { recursive: true, force: true });
             }
           }
-          const rootSed = path.resolve(__dirname, 'public', 'seduction.mp3');
-          if (fs.existsSync(rootSed)) {
-            fs.copyFileSync(rootSed, path.resolve(distDir, 'seduction.mp3'));
+          for (const rootFile of ['seduction.mp3', '_headers', '_redirects', 'sw.js']) {
+            const srcFile = path.resolve(__dirname, 'public', rootFile);
+            if (fs.existsSync(srcFile)) {
+              fs.copyFileSync(srcFile, path.resolve(distDir, rootFile));
+            }
           }
         },
       },

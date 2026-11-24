@@ -1,0 +1,67 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Static media & API 404 guards (force = false ensures all existing files in dist/ are served first with HTTP 206 Range support)
+[[redirects]]
+  from = "/assets/*"
+  to = "/404.html"
+  status = 404
+  force = false
+
+[[redirects]]
+  from = "/voices/*"
+  to = "/404.html"
+  status = 404
+  force = false
+
+[[redirects]]
+  from = "/api/*"
+  to = "/404.html"
+  status = 404
+  force = false
+
+# SPA fallback for client routes
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+  force = false
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Content-Type = "application/javascript; charset=utf-8"
+    Cache-Control = "no-store, no-cache, must-revalidate"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+    X-Content-Type-Options = "nosniff"
+
+[[headers]]
+  for = "/assets/aistudio/angel_video_map.json"
+  [headers.values]
+    Content-Type = "application/json; charset=utf-8"
+    Cache-Control = "public, max-age=0, must-revalidate"
+    Access-Control-Allow-Origin = "*"
+
+[[headers]]
+  for = "/assets/aistudio/*.mp4"
+  [headers.values]
+    Content-Type = "video/mp4"
+    Accept-Ranges = "bytes"
+    Cache-Control = "public, max-age=604800"
+    X-Content-Type-Options = "nosniff"
+
+[[headers]]
+  for = "/voices/female/*.mp3"
+  [headers.values]
+    Content-Type = "audio/mpeg"
+    Accept-Ranges = "bytes"
+    Cache-Control = "public, max-age=604800"
+    X-Content-Type-Options = "nosniff"

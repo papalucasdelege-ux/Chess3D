@@ -29,6 +29,7 @@ import {
   HelpCircle,
   AlertTriangle,
   AlertCircle,
+  Leaf,
 } from 'lucide-react';
 import {
   ENGINE_LEVELS,
@@ -78,6 +79,8 @@ interface ControlDockProps {
   onChangeAngelVisible: (visible: boolean) => void;
   shadowsEnabled: boolean;
   onToggleShadows: () => void;
+  powerSaveMode: boolean;
+  onTogglePowerSaveMode: () => void;
   showCoordinates: boolean;
   onToggleCoordinates: () => void;
   showSearchTree: boolean;
@@ -324,7 +327,7 @@ export function ControlDock(props: ControlDockProps) {
                 </span>
               )}
               <span className="font-display text-base font-medium tracking-tight text-[#f5f0e6] whitespace-nowrap">
-                ChessAngel 3D v3.1
+                ChessAngel 3D v3.2
               </span>
             </div>
 
@@ -365,7 +368,7 @@ export function ControlDock(props: ControlDockProps) {
               onClick={props.onToggleShadows}
               aria-pressed={props.shadowsEnabled}
               title="Switch dynamic 3D board & piece shadows on or off"
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded border transition-colors whitespace-nowrap cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded border transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-[#e3be78] ${
                 props.shadowsEnabled
                   ? 'bg-[#1f2634] border-[#c89d54]/50 text-[#f3efe4]'
                   : 'bg-[#171c26] border-white/10 text-[#8d96a6] hover:text-white'
@@ -373,6 +376,25 @@ export function ControlDock(props: ControlDockProps) {
             >
               <Sun className="w-3.5 h-3.5 text-[#c89d54]" />
               Shadows: {props.shadowsEnabled ? 'On' : 'Off'}
+            </button>
+
+            <button
+              type="button"
+              onClick={props.onTogglePowerSaveMode}
+              aria-pressed={props.powerSaveMode}
+              title="Reduce 3D render frame rate (24 FPS), lower resolution scaling, and disable non-essential animations to save battery on mobile devices"
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded border transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-[#e3be78] ${
+                props.powerSaveMode
+                  ? 'bg-[#162922] border-[#34d399]/60 text-[#a7f3d0]'
+                  : 'bg-[#171c26] border-white/10 text-[#8d96a6] hover:text-white'
+              }`}
+            >
+              <Leaf
+                className={`w-3.5 h-3.5 ${
+                  props.powerSaveMode ? 'text-[#34d399]' : 'text-[#8d96a6]'
+                }`}
+              />
+              Power Save Mode: {props.powerSaveMode ? 'On' : 'Off'}
             </button>
 
             <button

@@ -272,8 +272,12 @@ export class ChessScene3D {
   private hoveredSquare: string | null = null;
   private lastHoverRaycastTime = 0;
 
-  // Render scheduling (on-demand + software GL fence pacing)
+  // Render scheduling (on-demand + software GL fence pacing + Power Save Mode FPS cap)
   private frameId = 0;
+  private powerSaveTimerId = 0;
+  private powerSaveMode = false;
+  private lastRenderAtMs = 0;
+  private readonly POWER_SAVE_FRAME_INTERVAL_MS = 42; // ~24 FPS active cap in Power Save Mode
   private renderBusy = false;
   private renderDirty = false;
   private lastFrameTime = performance.now();
@@ -449,6 +453,8 @@ export class ChessScene3D {
       e.preventDefault();
       cancelAnimationFrame(this.frameId);
       window.clearTimeout(this.frameId);
+      window.clearTimeout(this.powerSaveTimerId);
+      this.powerSaveTimerId = 0;
       this.renderBusy = false;
       this.callbacks.onContextLost?.();
     };
@@ -1398,6 +1404,97 @@ export class ChessScene3D {
     this.requestRender();
   }
 
+  public getPowerSaveMode(): boolean {
+    return this.powerSaveMode;
+  }
+
+  public setPowerSaveMode(enabled: boolean): void {
+    if (this.webglUnavailable || this.disposed || this.powerSaveMode === enabled) return;
+    this.powerSaveMode = enabled;
+
+    const dpr =
+      enabled || this.isSoftwareGl
+        ? 1
+        : this.isMobileDevice
+          ? Math.min(window.devicePixelRatio || 1, 1.5)
+          : Math.min(window.devicePixelRatio || 1, 2);
+    this.renderer.setPixelRatio(dpr);
+    const w = Math.max(this.container.clientWidth || window.innerWidth, 1);
+    const h = Math.max(this.container.clientHeight || window.innerHeight, 1);
+    this.renderer.setSize(w, h);
+
+    this.controls.enableDamping = !this.isSoftwareGl && !enabled;
+
+    if (enabled) {
+      // Snap any in-flight non-essential piece, camera, arrow, search-tree, and highlight animations
+      if (this.animations.length > 0) {
+        for (const anim of this.animations) {
+          anim.obj.position.copy(anim.endPos);
+        }
+        this.animations = [];
+      }
+
+      if (this.camGoalPos && this.camGoalTarget) {
+        this.camera.position.copy(this.camGoalPos);
+        this.controls.target.copy(this.camGoalTarget);
+        this.camGoalPos = null;
+        this.camGoalTarget = null;
+        this.controls.update();
+      }
+
+      if (this.arrowFadeActive) {
+        this.arrowFadeActive = false;
+        const doneCb = this.arrowFadeCompleteCb;
+        this.arrowFadeCompleteCb = null;
+        this.syncArrows([]);
+        doneCb?.();
+      }
+
+      if (this.treeSweepPhase === 'developing' && this.treeSweepMesh) {
+        this.treeVisibleEdgesFloat = this.treeSweepTotalEdges;
+        this.treeSweepMesh.geometry.setDrawRange(0, this.treeSweepTotalEdges * 6);
+        (this.treeSweepMesh.material as THREE.LineBasicMaterial).opacity = 0.96;
+        if (this.treeFinalized) {
+          this.treeSweepPhase = 'holding';
+          const devCb = this.treeDevelopedCb;
+          this.treeDevelopedCb = null;
+          devCb?.();
+          if (this.treeHoldDurationSec > 0) {
+            this.treeHoldTimer = window.setTimeout(() => {
+              this.treeHoldTimer = 0;
+              if (this.disposed || this.treeSweepPhase !== 'holding') return;
+              const doneCb = this.treeSweepCompleteCb;
+              this.stopSearchTreeThinLines();
+              doneCb?.();
+            }, Math.max(50, Math.round(this.treeHoldDurationSec * 1000)));
+          }
+        }
+      } else if (this.treeSweepPhase === 'fading' && this.treeSweepMesh) {
+        const doneCb = this.treeSweepCompleteCb;
+        this.stopSearchTreeThinLines();
+        doneCb?.();
+      }
+
+      for (const child of this.speechHighlightGroup.children) {
+        if (child.userData.isSpeechRing) {
+          child.scale.set(1, 1, 1);
+        }
+      }
+      for (const item of this.activeSpeechHighlights) {
+        const entry = this.pieceMap.get(item.square);
+        if (entry) {
+          entry.group.position.y = BOARD_TOP_Y;
+        }
+      }
+    } else if (this.powerSaveTimerId) {
+      window.clearTimeout(this.powerSaveTimerId);
+      this.powerSaveTimerId = 0;
+      this.renderBusy = false;
+    }
+
+    this.requestRender();
+  }
+
   public setAngelOverlayVisible(visible: boolean): void {
     if (this.webglUnavailable || this.disposed || this.angelOverlayVisible === visible) return;
     this.angelOverlayVisible = visible;
@@ -1424,7 +1521,7 @@ export class ChessScene3D {
     const w = Math.max(this.container.clientWidth || window.innerWidth, 1);
     const h = Math.max(this.container.clientHeight || window.innerHeight, 1);
     const pose = this.frameCameraPoseForViewport(preset, w, h);
-    if (immediate) {
+    if (immediate || this.powerSaveMode) {
       this.camGoalPos = null;
       this.camGoalTarget = null;
       this.camera.position.copy(pose.pos);
@@ -1966,6 +2063,16 @@ export class ChessScene3D {
     const count = this.populateSearchTreeMesh(edges);
     if (count === 0 || !this.treeSweepMesh) return;
 
+    if (this.powerSaveMode) {
+      this.treeVisibleEdgesFloat = count;
+      this.treeFinalized = false;
+      this.treeSweepPhase = 'holding';
+      this.treeSweepMesh.geometry.setDrawRange(0, count * 6);
+      (this.treeSweepMesh.material as THREE.LineBasicMaterial).opacity = 0.96;
+      this.requestRender();
+      return;
+    }
+
     if (this.treeSweepPhase !== 'developing') {
       this.treeVisibleEdgesFloat = Math.min(3, count);
       this.treeSweepPhase = 'developing';
@@ -2008,6 +2115,32 @@ export class ChessScene3D {
     if (count === 0 || !this.treeSweepMesh) {
       this.stopSearchTreeThinLines();
       opts?.onComplete?.();
+      return;
+    }
+
+    if (this.powerSaveMode) {
+      this.treeVisibleEdgesFloat = count;
+      this.treeHoldDurationSec = opts?.holdSec ?? 0;
+      this.treeFadeDurationSec = 0;
+      this.treeFadeElapsed = 0;
+      this.treeFinalized = true;
+      this.treeSweepPhase = 'holding';
+      this.treeDevelopedCb = null;
+      this.treeSweepCompleteCb = opts?.onComplete ?? null;
+      this.treeSweepMesh.geometry.setDrawRange(0, count * 6);
+      (this.treeSweepMesh.material as THREE.LineBasicMaterial).opacity = 0.96;
+      this.requestRender();
+      opts?.onDeveloped?.();
+
+      if (this.treeHoldDurationSec > 0) {
+        this.treeHoldTimer = window.setTimeout(() => {
+          this.treeHoldTimer = 0;
+          if (this.disposed || this.treeSweepPhase !== 'holding') return;
+          const doneCb = this.treeSweepCompleteCb;
+          this.stopSearchTreeThinLines();
+          doneCb?.();
+        }, Math.max(50, Math.round(this.treeHoldDurationSec * 1000)));
+      }
       return;
     }
 
@@ -2174,20 +2307,24 @@ export class ChessScene3D {
 
         if (movingExisting.type === targetSpec.type) {
           this.pieceMap.set(movedHint.to, movingExisting);
-          animatedMovedObj = movingExisting.group;
           const endPos = squareToWorld(movedHint.to);
-          const startPos = movingExisting.group.position.clone();
-          const isKnight = movingExisting.type === 'n';
-          const baseDur = durationOverrideSec ?? 0.25;
           this.animations = this.animations.filter((a) => a.obj !== movingExisting.group);
-          this.animations.push({
-            obj: movingExisting.group,
-            startPos,
-            endPos,
-            elapsed: 0,
-            duration: isKnight ? baseDur * 1.2 : baseDur,
-            arcHeight: isKnight ? 1.15 : 0.28,
-          });
+          if (this.powerSaveMode) {
+            movingExisting.group.position.copy(endPos);
+          } else {
+            animatedMovedObj = movingExisting.group;
+            const startPos = movingExisting.group.position.clone();
+            const isKnight = movingExisting.type === 'n';
+            const baseDur = durationOverrideSec ?? 0.25;
+            this.animations.push({
+              obj: movingExisting.group,
+              startPos,
+              endPos,
+              elapsed: 0,
+              duration: isKnight ? baseDur * 1.2 : baseDur,
+              arcHeight: isKnight ? 1.15 : 0.28,
+            });
+          }
         } else {
           this.pieceGroup.remove(movingExisting.group);
         }
@@ -2594,7 +2731,8 @@ export class ChessScene3D {
 
   private handlePointerMove(e: PointerEvent): void {
     const now = performance.now();
-    if (now - this.lastHoverRaycastTime < 40) return;
+    const minIntervalMs = this.powerSaveMode ? 120 : 40;
+    if (now - this.lastHoverRaycastTime < minIntervalMs) return;
     this.lastHoverRaycastTime = now;
 
     const sq = this.pickSquare(e.clientX, e.clientY);
@@ -3032,209 +3170,253 @@ export class ChessScene3D {
       return;
     }
     this.renderBusy = true;
-    this.frameId = requestAnimationFrame(() => {
+
+    const scheduleFrame = () => {
       if (this.disposed || this.webglUnavailable) return;
-      this.renderDirty = false;
-      const now = performance.now();
-      const dt = Math.min(0.05, Math.max(0.001, (now - this.lastFrameTime) / 1000));
-      this.lastFrameTime = now;
+      this.frameId = requestAnimationFrame(() => {
+        if (this.disposed || this.webglUnavailable) return;
+        this.renderDirty = false;
+        const now = performance.now();
+        const dt = Math.min(0.05, Math.max(0.001, (now - this.lastFrameTime) / 1000));
+        this.lastFrameTime = now;
 
-      let keepAnimating = false;
+        let keepAnimating = false;
 
-      if (this.animations.length > 0) {
-        const remaining: ActivePieceAnim[] = [];
-        for (const anim of this.animations) {
-          anim.elapsed += dt;
-          const t = Math.min(1, anim.elapsed / anim.duration);
-          const eased = 1 - Math.pow(1 - t, 3);
-          anim.obj.position.lerpVectors(anim.startPos, anim.endPos, eased);
-          anim.obj.position.y += Math.sin(t * Math.PI) * anim.arcHeight;
+        if (this.animations.length > 0) {
+          if (this.powerSaveMode) {
+            for (const anim of this.animations) {
+              anim.obj.position.copy(anim.endPos);
+            }
+            this.animations = [];
+          } else {
+            const remaining: ActivePieceAnim[] = [];
+            for (const anim of this.animations) {
+              anim.elapsed += dt;
+              const t = Math.min(1, anim.elapsed / anim.duration);
+              const eased = 1 - Math.pow(1 - t, 3);
+              anim.obj.position.lerpVectors(anim.startPos, anim.endPos, eased);
+              anim.obj.position.y += Math.sin(t * Math.PI) * anim.arcHeight;
+              if (t < 1) {
+                remaining.push(anim);
+                keepAnimating = true;
+              } else {
+                anim.obj.position.copy(anim.endPos);
+              }
+            }
+            this.animations = remaining;
+          }
+        }
+
+        if (this.camGoalPos && this.camGoalTarget) {
+          if (this.powerSaveMode) {
+            this.camera.position.copy(this.camGoalPos);
+            this.controls.target.copy(this.camGoalTarget);
+            this.camGoalPos = null;
+            this.camGoalTarget = null;
+          } else {
+            const lambda = 7.5;
+            this.camera.position.x = THREE.MathUtils.damp(
+              this.camera.position.x,
+              this.camGoalPos.x,
+              lambda,
+              dt,
+            );
+            this.camera.position.y = THREE.MathUtils.damp(
+              this.camera.position.y,
+              this.camGoalPos.y,
+              lambda,
+              dt,
+            );
+            this.camera.position.z = THREE.MathUtils.damp(
+              this.camera.position.z,
+              this.camGoalPos.z,
+              lambda,
+              dt,
+            );
+
+            this.controls.target.x = THREE.MathUtils.damp(
+              this.controls.target.x,
+              this.camGoalTarget.x,
+              lambda,
+              dt,
+            );
+            this.controls.target.y = THREE.MathUtils.damp(
+              this.controls.target.y,
+              this.camGoalTarget.y,
+              lambda,
+              dt,
+            );
+            this.controls.target.z = THREE.MathUtils.damp(
+              this.controls.target.z,
+              this.camGoalTarget.z,
+              lambda,
+              dt,
+            );
+
+            if (
+              this.camera.position.distanceTo(this.camGoalPos) < 0.04 &&
+              this.controls.target.distanceTo(this.camGoalTarget) < 0.02
+            ) {
+              this.camera.position.copy(this.camGoalPos);
+              this.controls.target.copy(this.camGoalTarget);
+              this.camGoalPos = null;
+              this.camGoalTarget = null;
+            } else {
+              keepAnimating = true;
+            }
+          }
+        }
+
+        if (this.arrowFadeActive) {
+          this.arrowFadeElapsed += dt;
+          const t = this.powerSaveMode
+            ? 1
+            : Math.min(1, this.arrowFadeElapsed / Math.max(0.05, this.arrowFadeDuration));
+          const alphaScale = 1 - t * t * (3 - 2 * t);
+          for (const child of this.arrowGroup.children) {
+            const mesh = child as THREE.Mesh;
+            const mat = mesh.material as THREE.Material & { opacity: number };
+            const base =
+              typeof mesh.userData.baseOpacity === 'number' ? mesh.userData.baseOpacity : 0.88;
+            mat.opacity = Math.max(0, base * alphaScale);
+          }
           if (t < 1) {
-            remaining.push(anim);
             keepAnimating = true;
           } else {
-            anim.obj.position.copy(anim.endPos);
+            this.arrowFadeActive = false;
+            const doneCb = this.arrowFadeCompleteCb;
+            this.arrowFadeCompleteCb = null;
+            this.syncArrows([]);
+            doneCb?.();
           }
         }
-        this.animations = remaining;
-      }
 
-      if (this.camGoalPos && this.camGoalTarget) {
-        const lambda = 7.5;
-        this.camera.position.x = THREE.MathUtils.damp(
-          this.camera.position.x,
-          this.camGoalPos.x,
-          lambda,
-          dt,
-        );
-        this.camera.position.y = THREE.MathUtils.damp(
-          this.camera.position.y,
-          this.camGoalPos.y,
-          lambda,
-          dt,
-        );
-        this.camera.position.z = THREE.MathUtils.damp(
-          this.camera.position.z,
-          this.camGoalPos.z,
-          lambda,
-          dt,
-        );
+        if (this.treeSweepPhase === 'developing' && this.treeSweepMesh) {
+          this.treeVisibleEdgesFloat += this.treeDevelopRateEdgesPerSec * dt;
+          const maxAllowed = this.treeFinalized
+            ? this.treeSweepTotalEdges
+            : Math.max(1, this.treeSweepTotalEdges - 1);
+          const vis = this.powerSaveMode
+            ? maxAllowed
+            : Math.min(maxAllowed, Math.max(1, Math.ceil(this.treeVisibleEdgesFloat)));
+          this.treeSweepMesh.geometry.setDrawRange(0, vis * 6);
+          (this.treeSweepMesh.material as THREE.LineBasicMaterial).opacity = 0.96;
 
-        this.controls.target.x = THREE.MathUtils.damp(
-          this.controls.target.x,
-          this.camGoalTarget.x,
-          lambda,
-          dt,
-        );
-        this.controls.target.y = THREE.MathUtils.damp(
-          this.controls.target.y,
-          this.camGoalTarget.y,
-          lambda,
-          dt,
-        );
-        this.controls.target.z = THREE.MathUtils.damp(
-          this.controls.target.z,
-          this.camGoalTarget.z,
-          lambda,
-          dt,
-        );
+          if (this.treeFinalized && vis >= this.treeSweepTotalEdges) {
+            this.treeSweepPhase = 'holding';
+            const devCb = this.treeDevelopedCb;
+            this.treeDevelopedCb = null;
+            devCb?.();
 
-        if (
-          this.camera.position.distanceTo(this.camGoalPos) < 0.04 &&
-          this.controls.target.distanceTo(this.camGoalTarget) < 0.02
-        ) {
-          this.camera.position.copy(this.camGoalPos);
-          this.controls.target.copy(this.camGoalTarget);
-          this.camGoalPos = null;
-          this.camGoalTarget = null;
-        } else {
-          keepAnimating = true;
-        }
-      }
-
-      if (this.arrowFadeActive) {
-        this.arrowFadeElapsed += dt;
-        const t = Math.min(1, this.arrowFadeElapsed / Math.max(0.05, this.arrowFadeDuration));
-        const alphaScale = 1 - t * t * (3 - 2 * t);
-        for (const child of this.arrowGroup.children) {
-          const mesh = child as THREE.Mesh;
-          const mat = mesh.material as THREE.Material & { opacity: number };
-          const base = typeof mesh.userData.baseOpacity === 'number' ? mesh.userData.baseOpacity : 0.88;
-          mat.opacity = Math.max(0, base * alphaScale);
-        }
-        if (t < 1) {
-          keepAnimating = true;
-        } else {
-          this.arrowFadeActive = false;
-          const doneCb = this.arrowFadeCompleteCb;
-          this.arrowFadeCompleteCb = null;
-          this.syncArrows([]);
-          doneCb?.();
-        }
-      }
-
-      if (this.treeSweepPhase === 'developing' && this.treeSweepMesh) {
-        this.treeVisibleEdgesFloat += this.treeDevelopRateEdgesPerSec * dt;
-        const maxAllowed = this.treeFinalized
-          ? this.treeSweepTotalEdges
-          : Math.max(1, this.treeSweepTotalEdges - 1);
-        const vis = Math.min(maxAllowed, Math.max(1, Math.ceil(this.treeVisibleEdgesFloat)));
-        this.treeSweepMesh.geometry.setDrawRange(0, vis * 6);
-        (this.treeSweepMesh.material as THREE.LineBasicMaterial).opacity = 0.96;
-
-        if (this.treeFinalized && vis >= this.treeSweepTotalEdges) {
-          this.treeSweepPhase = 'holding';
-          const devCb = this.treeDevelopedCb;
-          this.treeDevelopedCb = null;
-          devCb?.();
-
-          if (this.treeHoldDurationSec > 0) {
-            this.treeHoldTimer = window.setTimeout(() => {
-              this.treeHoldTimer = 0;
-              if (this.disposed || this.treeSweepPhase !== 'holding') return;
-              this.treeSweepPhase = 'fading';
-              this.treeFadeElapsed = 0;
-              this.requestRender();
-            }, Math.max(50, Math.round(this.treeHoldDurationSec * 1000)));
+            if (this.treeHoldDurationSec > 0) {
+              this.treeHoldTimer = window.setTimeout(() => {
+                this.treeHoldTimer = 0;
+                if (this.disposed || this.treeSweepPhase !== 'holding') return;
+                this.treeSweepPhase = 'fading';
+                this.treeFadeElapsed = 0;
+                this.requestRender();
+              }, Math.max(50, Math.round(this.treeHoldDurationSec * 1000)));
+            }
+          } else if (!this.powerSaveMode) {
+            keepAnimating = true;
           }
-        } else {
+        } else if (this.treeSweepPhase === 'fading' && this.treeSweepMesh) {
+          this.treeFadeElapsed += dt;
+          const ft = this.powerSaveMode
+            ? 1
+            : Math.min(1, this.treeFadeElapsed / Math.max(0.05, this.treeFadeDurationSec));
+          const mat = this.treeSweepMesh.material as THREE.LineBasicMaterial;
+          mat.opacity = Math.max(0, 0.96 * (1 - ft * ft * (3 - 2 * ft)));
+          if (ft < 1) {
+            keepAnimating = true;
+          } else {
+            const doneCb = this.treeSweepCompleteCb;
+            this.stopSearchTreeThinLines();
+            doneCb?.();
+          }
+        }
+
+        if (this.activeSpeechHighlights.length > 0) {
+          const pulse = this.powerSaveMode
+            ? 0.65
+            : 0.5 - 0.5 * Math.cos((this.speechPulseTime += dt) * 5.0);
+
+          const setSetIntensity = (set: PieceMaterialSet, base: number, amp: number) => {
+            const val = base + pulse * amp;
+            (set.body as THREE.MeshStandardMaterial).emissiveIntensity = val;
+            (set.collar as THREE.MeshStandardMaterial).emissiveIntensity = val * 0.9;
+            set.groove.emissiveIntensity = val * 0.65;
+          };
+
+          setSetIntensity(this.whiteDangerMats, 0.09, 0.14);
+          setSetIntensity(this.blackDangerMats, 0.13, 0.18);
+          setSetIntensity(this.whiteAttackerMats, 0.07, 0.12);
+          setSetIntensity(this.blackAttackerMats, 0.1, 0.15);
+
+          this.speechDangerRingMat.opacity = 0.58 + pulse * 0.28;
+          this.speechDangerDiscMat.opacity = 0.09 + pulse * 0.11;
+          this.speechAttackerRingMat.opacity = 0.56 + pulse * 0.28;
+          this.speechAttackerDiscMat.opacity = 0.08 + pulse * 0.1;
+
+          const ringScale = this.powerSaveMode ? 1 : 1 + pulse * 0.075;
+          for (const child of this.speechHighlightGroup.children) {
+            if (child.userData.isSpeechRing) {
+              child.scale.set(ringScale, ringScale, 1);
+            }
+          }
+
+          for (const item of this.activeSpeechHighlights) {
+            const entry = this.pieceMap.get(item.square);
+            if (!entry) continue;
+            const isMoving = this.animations.some((a) => a.obj === entry.group);
+            if (!isMoving) {
+              entry.group.position.y = this.powerSaveMode
+                ? BOARD_TOP_Y
+                : BOARD_TOP_Y + pulse * (item.role === 'danger' ? 0.048 : 0.034);
+            }
+          }
+
+          if (!this.powerSaveMode) {
+            keepAnimating = true;
+          }
+        }
+
+        if (this.controls.update()) {
           keepAnimating = true;
         }
-      } else if (this.treeSweepPhase === 'fading' && this.treeSweepMesh) {
-        this.treeFadeElapsed += dt;
-        const ft = Math.min(1, this.treeFadeElapsed / Math.max(0.05, this.treeFadeDurationSec));
-        const mat = this.treeSweepMesh.material as THREE.LineBasicMaterial;
-        mat.opacity = Math.max(0, 0.96 * (1 - ft * ft * (3 - 2 * ft)));
-        if (ft < 1) {
-          keepAnimating = true;
-        } else {
-          const doneCb = this.treeSweepCompleteCb;
-          this.stopSearchTreeThinLines();
-          doneCb?.();
-        }
-      }
 
-      if (this.activeSpeechHighlights.length > 0) {
-        this.speechPulseTime += dt;
-        const pulse = 0.5 - 0.5 * Math.cos(this.speechPulseTime * 5.0);
+        this.renderer.render(this.scene, this.camera);
+        this.lastRenderAtMs = performance.now();
 
-        const setSetIntensity = (set: PieceMaterialSet, base: number, amp: number) => {
-          const val = base + pulse * amp;
-          (set.body as THREE.MeshStandardMaterial).emissiveIntensity = val;
-          (set.collar as THREE.MeshStandardMaterial).emissiveIntensity = val * 0.9;
-          set.groove.emissiveIntensity = val * 0.65;
+        const done = () => {
+          if (this.disposed) return;
+          this.renderBusy = false;
+          if (this.renderDirty || keepAnimating) {
+            this.requestRender();
+          }
         };
 
-        setSetIntensity(this.whiteDangerMats, 0.09, 0.14);
-        setSetIntensity(this.blackDangerMats, 0.13, 0.18);
-        setSetIntensity(this.whiteAttackerMats, 0.07, 0.12);
-        setSetIntensity(this.blackAttackerMats, 0.1, 0.15);
-
-        this.speechDangerRingMat.opacity = 0.58 + pulse * 0.28;
-        this.speechDangerDiscMat.opacity = 0.09 + pulse * 0.11;
-        this.speechAttackerRingMat.opacity = 0.56 + pulse * 0.28;
-        this.speechAttackerDiscMat.opacity = 0.08 + pulse * 0.1;
-
-        const ringScale = 1 + pulse * 0.075;
-        for (const child of this.speechHighlightGroup.children) {
-          if (child.userData.isSpeechRing) {
-            child.scale.set(ringScale, ringScale, 1);
-          }
+        if (this.isSoftwareGl) {
+          this.afterDraw(done);
+        } else {
+          done();
         }
+      });
+    };
 
-        for (const item of this.activeSpeechHighlights) {
-          const entry = this.pieceMap.get(item.square);
-          if (!entry) continue;
-          const isMoving = this.animations.some((a) => a.obj === entry.group);
-          if (!isMoving) {
-            entry.group.position.y =
-              BOARD_TOP_Y + pulse * (item.role === 'danger' ? 0.048 : 0.034);
-          }
-        }
-
-        keepAnimating = true;
+    if (this.powerSaveMode && !this.isSoftwareGl) {
+      const elapsedSinceLast = performance.now() - this.lastRenderAtMs;
+      if (elapsedSinceLast < this.POWER_SAVE_FRAME_INTERVAL_MS) {
+        const waitMs = Math.max(1, Math.ceil(this.POWER_SAVE_FRAME_INTERVAL_MS - elapsedSinceLast));
+        this.powerSaveTimerId = window.setTimeout(() => {
+          this.powerSaveTimerId = 0;
+          scheduleFrame();
+        }, waitMs);
+        return;
       }
+    }
 
-      if (this.controls.update()) {
-        keepAnimating = true;
-      }
-
-      this.renderer.render(this.scene, this.camera);
-
-      const done = () => {
-        if (this.disposed) return;
-        this.renderBusy = false;
-        if (this.renderDirty || keepAnimating) {
-          this.requestRender();
-        }
-      };
-
-      if (this.isSoftwareGl) {
-        this.afterDraw(done);
-      } else {
-        done();
-      }
-    });
+    scheduleFrame();
   }
 
   public dispose(): void {
@@ -3243,6 +3425,8 @@ export class ChessScene3D {
     this.stopSearchTreeThinLines();
     cancelAnimationFrame(this.frameId);
     window.clearTimeout(this.frameId);
+    window.clearTimeout(this.powerSaveTimerId);
+    this.powerSaveTimerId = 0;
     this.resizeObserver?.disconnect();
 
     if (this.webglUnavailable || !this.renderer) return;

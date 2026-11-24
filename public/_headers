@@ -1,0 +1,34 @@
+/sw.js
+  Content-Type: application/javascript; charset=utf-8
+  Cache-Control: no-store, no-cache, must-revalidate
+
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+  X-Content-Type-Options: nosniff
+
+/assets/aistudio/angel_video_map.json
+  Content-Type: application/json; charset=utf-8
+  Cache-Control: public, max-age=0, must-revalidate
+  Access-Control-Allow-Origin: *
+
+/assets/aistudio/*.mp4
+  Content-Type: video/mp4
+  Accept-Ranges: bytes
+  Cache-Control: public, max-age=604800
+  X-Content-Type-Options: nosniff
+
+/chess_angel_midgame_tree_animation.mp4
+  Content-Type: video/mp4
+  Accept-Ranges: bytes
+  Cache-Control: public, max-age=604800
+
+/voices/female/*.mp3
+  Content-Type: audio/mpeg
+  Accept-Ranges: bytes
+  Cache-Control: public, max-age=604800
+  X-Content-Type-Options: nosniff
+
+/seduction.mp3
+  Content-Type: audio/mpeg
+  Accept-Ranges: bytes
+  Cache-Control: public, max-age=604800

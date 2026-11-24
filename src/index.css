@@ -68,3 +68,14 @@
 .thin-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.28);
 }
+
+/* Disable non-essential CSS transitions & animations in Power Save Mode */
+.power-save-mode *,
+.power-save-mode *::before,
+.power-save-mode *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
