@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { APP_VERSION, withAssetBuildVersion } from '../chess/assetVersion';
 import {
   ChevronDown,
   ChevronUp,
@@ -344,12 +345,12 @@ export function ControlDock(props: ControlDockProps) {
             <button
               type="button"
               onClick={handleBrandSecretTap}
-              title="ChessAngel 3D v4.0"
+              title={`ChessAngel 3D v${APP_VERSION}`}
               className="group inline-flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer rounded-md focus-visible:outline-2 focus-visible:outline-[#e3be78]"
             >
               {!emblemBroken ? (
                 <img
-                  src="/assets/aistudio/chess3D-angel_414f5812.png"
+                  src={withAssetBuildVersion('/assets/aistudio/chess3D-angel_414f5812.png')}
                   alt="ChessAngel 3D logo"
                   draggable={false}
                   onContextMenu={(e) => e.preventDefault()}
@@ -366,7 +367,7 @@ export function ControlDock(props: ControlDockProps) {
                 </span>
               )}
               <span className="font-display text-base font-medium tracking-tight text-[#f5f0e6] group-hover:text-[#f3d38b] transition-colors whitespace-nowrap">
-                ChessAngel 3D v4.0
+                ChessAngel 3D v{APP_VERSION}
               </span>
             </button>
 

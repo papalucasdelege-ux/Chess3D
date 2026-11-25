@@ -851,9 +851,16 @@ async function startServer(): Promise<void> {
       res.setHeader('X-Robots-Tag', 'index, follow, noarchive, noai, noimageai');
     }
 
-    // Keep PWA service worker and manifest always revalidated for clean updates
-    if (lowerPath === '/sw.js' || lowerPath === '/manifest.webmanifest') {
-      res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+    // Keep PWA shell, service worker, manifest, and video registry always freshly revalidated
+    if (
+      lowerPath === '/' ||
+      lowerPath === '/index.html' ||
+      lowerPath === '/sw.js' ||
+      lowerPath === '/registerSW.js' ||
+      lowerPath === '/manifest.webmanifest' ||
+      lowerPath === '/assets/aistudio/angel_video_map.json'
+    ) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     }
     next();
   });
@@ -879,11 +886,12 @@ async function startServer(): Promise<void> {
   app.use(
     '/voices',
     express.static(resolvedVoicesDir, {
-      maxAge: IS_PROD ? '7d' : 0,
+      maxAge: 0,
       acceptRanges: true,
       fallthrough: true,
       setHeaders: (res) => {
         res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
       },
     }),
   );
@@ -1023,29 +1031,44 @@ async function startServer(): Promise<void> {
     }
     next();
   });
+  const setAssetCacheHeaders = (res: express.Response, filePath: string): void => {
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    const normalized = filePath.replace(/\\/g, '/').toLowerCase();
+    if (normalized.endsWith('/angel_video_map.json')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      return;
+    }
+    // Only Vite content-hashed JS/CSS chunks under /dist/assets/ get immutable long caching;
+    // unhashed media under /assets/aistudio/ always revalidate so replaced files renew immediately.
+    if (
+      IS_PROD &&
+      !normalized.includes('/aistudio/') &&
+      /\-[a-z0-9_-]{6,}\.(js|css)$/i.test(normalized)
+    ) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      return;
+    }
+    res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+  };
   const distAssetsDir = path.resolve(__dirname, 'dist', 'assets');
   if (IS_PROD && fs.existsSync(distAssetsDir)) {
     app.use(
       '/assets',
       express.static(distAssetsDir, {
-        maxAge: '7d',
+        maxAge: 0,
         acceptRanges: true,
         fallthrough: true,
-        setHeaders: (res) => {
-          res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-        },
+        setHeaders: setAssetCacheHeaders,
       }),
     );
   }
   app.use(
     '/assets',
     express.static(publicAssetsDir, {
-      maxAge: IS_PROD ? '7d' : 0,
+      maxAge: 0,
       acceptRanges: true,
       fallthrough: true,
-      setHeaders: (res) => {
-        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-      },
+      setHeaders: setAssetCacheHeaders,
     }),
   );
   // Strict 404 guard so missing /assets/* files NEVER fall through to Vite SPA index.html (text/html)
@@ -2439,6 +2462,15 @@ async function startServer(): Promise<void> {
     res.json(readAngelVideoMap());
   });
 
+  // Strictly disable all Video Studio mutation endpoints in consumer production builds
+  app.use('/api/angel-videos', (req, res, next) => {
+    if (IS_PROD && req.method !== 'GET' && req.method !== 'HEAD') {
+      res.status(403).json({ error: 'Video Studio endpoints are disabled in production.' });
+      return;
+    }
+    next();
+  });
+
   app.put('/api/angel-videos/lip-sync', express.json(), (req, res) => {
     if (!requireStudioDeveloperAuth(req, res)) return;
     const body = (req.body || {}) as {
@@ -3500,7 +3532,24 @@ async function startServer(): Promise<void> {
 
   const distDir = path.resolve(__dirname, 'dist');
   if (IS_PROD && fs.existsSync(distDir)) {
-    app.use(express.static(distDir));
+    app.use(
+      express.static(distDir, {
+        maxAge: 0,
+        setHeaders: (res, filePath) => {
+          const lower = filePath.replace(/\\/g, '/').toLowerCase();
+          if (
+            lower.endsWith('/index.html') ||
+            lower.endsWith('/sw.js') ||
+            lower.endsWith('/registersw.js') ||
+            lower.endsWith('/manifest.webmanifest')
+          ) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          } else {
+            res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+          }
+        },
+      }),
+    );
     app.get('*', (req, res) => {
       const p = req.path || '';
       if (
@@ -3512,6 +3561,7 @@ async function startServer(): Promise<void> {
         res.status(404).end();
         return;
       }
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.join(distDir, 'index.html'));
     });
   } else {

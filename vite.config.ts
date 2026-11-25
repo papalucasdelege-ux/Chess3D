@@ -6,7 +6,14 @@ import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
+  const appVersion = '4.5';
+  const appBuildId = `4.5.0-${Date.now().toString(36)}`;
+
   return {
+    define: {
+      __APP_VERSION__: JSON.stringify(appVersion),
+      __APP_BUILD_ID__: JSON.stringify(appBuildId),
+    },
     plugins: [
       react(),
       tailwindcss(),
@@ -55,8 +62,9 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
-          // Precache app shell, 3D chess engine, UI bundle, and icons (keep initial install fast on mobile)
-          globPatterns: ['**/*.{js,css,html,ico,svg,woff,woff2}', 'favicon.png', 'apple-touch-icon.png', 'pwa-*.png'],
+          cacheId: 'chessangel-v4-5',
+          // Precache app shell, 3D chess engine, and UI bundle (icons included via includeAssets above)
+          globPatterns: ['**/*.{js,css,html,ico,woff,woff2}'],
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           cleanupOutdatedCaches: true,
           clientsClaim: true,
@@ -70,14 +78,14 @@ export default defineConfig(() => {
               handler: 'NetworkOnly',
             },
             {
-              // Voice clips & seduction soundtrack MP3s: cache for instant offline playback (with range requests for streaming)
+              // Voice clips & soundtrack MP3s (URL-stamped with ?v=<APP_BUILD_ID> for guaranteed freshness on republish)
               urlPattern: ({ url }) =>
                 url.pathname.startsWith('/voices/') ||
                 url.pathname === '/seduction.mp3' ||
                 (url.pathname.startsWith('/assets/aistudio/') && url.pathname.endsWith('.mp3')),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-voices-v4-2',
+                cacheName: 'chessangel-voices-v4-5',
                 rangeRequests: true,
                 expiration: {
                   maxEntries: 260,
@@ -90,12 +98,12 @@ export default defineConfig(() => {
               },
             },
             {
-              // Chess Angel portrait MP4s: hold all ~76 videos (maxEntries: 150) with RangeRequestsPlugin so Android tablets NEVER evict or stall
+              // Chess Angel portrait MP4s (URL-stamped with ?v=<APP_BUILD_ID> so replaced videos renew immediately)
               urlPattern: ({ url }) =>
                 url.pathname.startsWith('/assets/aistudio/') && url.pathname.endsWith('.mp4'),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-videos-v4-2',
+                cacheName: 'chessangel-videos-v4-5',
                 rangeRequests: true,
                 expiration: {
                   maxEntries: 150,
@@ -112,7 +120,7 @@ export default defineConfig(() => {
               urlPattern: ({ url }) => url.pathname === '/assets/aistudio/angel_video_map.json',
               handler: 'NetworkFirst',
               options: {
-                cacheName: 'chessangel-registry-v4-2',
+                cacheName: 'chessangel-registry-v4-5',
                 networkTimeoutSeconds: 3,
                 cacheableResponse: {
                   statuses: [200],
@@ -120,13 +128,13 @@ export default defineConfig(() => {
               },
             },
             {
-              // Static art/emblem images
+              // Static art/emblem images (URL-stamped with ?v=<APP_BUILD_ID>)
               urlPattern: ({ url }) =>
                 url.pathname.startsWith('/assets/aistudio/') &&
                 /\.(png|jpg|jpeg|webp|svg)$/i.test(url.pathname),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-images-v4-2',
+                cacheName: 'chessangel-images-v4-5',
                 expiration: {
                   maxEntries: 40,
                   maxAgeSeconds: 60 * 60 * 24 * 30,

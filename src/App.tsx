@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { APP_VERSION } from './chess/assetVersion';
 import { Maximize2, Minimize2, X } from 'lucide-react';
 import { Chess, type Move, type Square } from 'chess.js';
 import { ChessScene3D, type SuggestionArrow } from './three/ChessScene3D';
@@ -4861,12 +4862,12 @@ export default function App() {
         <button
           type="button"
           onClick={handleTriggerCreatorTribute}
-          aria-label="ChessAngel 3D v4.0"
-          title="ChessAngel 3D v4.0"
+          aria-label={`ChessAngel 3D v${APP_VERSION}`}
+          title={`ChessAngel 3D v${APP_VERSION}`}
           className="pointer-events-auto inline-flex items-baseline px-1.5 py-0.5 rounded-md bg-transparent font-display text-sm sm:text-base font-medium tracking-tight text-[#f5f0e6]/85 hover:text-[#f3d38b] [text-shadow:0_1px_6px_rgba(0,0,0,0.95)] transition-colors cursor-pointer whitespace-nowrap focus-visible:outline-2 focus-visible:outline-[#e3be78]"
         >
           <span className="hidden sm:inline">ChessAngel 3D&nbsp;</span>
-          <span>v4.0</span>
+          <span>v{APP_VERSION}</span>
         </button>
       </div>
 

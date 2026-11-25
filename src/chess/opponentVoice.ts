@@ -1,4 +1,5 @@
 import { Chess, type PieceSymbol, type Square } from 'chess.js';
+import { APP_BUILD_ID, stripAssetQuery, withAssetBuildVersion } from './assetVersion';
 import type { HumanMoveAudit } from './engine';
 import {
   ENGINE_LEVELS,
@@ -2324,7 +2325,7 @@ export type VoicePlaybackState = 'idle' | 'speaking' | 'awaiting-gesture';
 
 type StateListener = (state: VoicePlaybackState) => void;
 
-const VOICE_ASSET_VERSION = 'angel10';
+const VOICE_ASSET_VERSION = APP_BUILD_ID;
 let seductionCustomAudioUrl: string | null = null;
 let nextSeductionSlotAudioUrl: string | null = null;
 let thankJanCustomAudioUrl: string | null = null;
@@ -2349,10 +2350,13 @@ export interface MusicPlaybackSnapshot {
 
 type MusicStateListener = (snapshot: MusicPlaybackSnapshot) => void;
 
-export const QUEEN_THEME_MUSIC_URL =
-  '/assets/aistudio/Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3';
+export const QUEEN_THEME_MUSIC_URL = withAssetBuildVersion(
+  '/assets/aistudio/Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3',
+);
 
-export const CHESS_ANGEL_RAP_MUSIC_URL = '/assets/aistudio/Chess_Angle_RAP.mp3';
+export const CHESS_ANGEL_RAP_MUSIC_URL = withAssetBuildVersion(
+  '/assets/aistudio/Chess_Angle_RAP.mp3',
+);
 
 export const DEFAULT_MUSIC_TRACKS: readonly MusicTrack[] = [
   {
@@ -2588,28 +2592,35 @@ class OpponentSpeechController {
   }
 
   public setMusicTracks(tracks: MusicTrack[]): void {
-    const cleaned = tracks.filter(
-      (t) =>
-        t &&
-        typeof t.url === 'string' &&
-        t.url.trim().length > 0 &&
-        typeof t.title === 'string' &&
-        t.title.trim().length > 0,
-    );
+    const cleaned = tracks
+      .filter(
+        (t) =>
+          t &&
+          typeof t.url === 'string' &&
+          t.url.trim().length > 0 &&
+          typeof t.title === 'string' &&
+          t.title.trim().length > 0,
+      )
+      .map((t) => ({ ...t, url: withAssetBuildVersion(t.url) }));
     // Always preserve all locked DEFAULT_MUSIC_TRACKS so neither song can ever disappear
     const merged: MusicTrack[] = [...DEFAULT_MUSIC_TRACKS];
-    const seen = new Set<string>(merged.map((t) => t.url));
+    const seen = new Set<string>(merged.map((t) => stripAssetQuery(t.url)));
     for (const t of cleaned) {
-      if (!seen.has(t.url)) {
-        seen.add(t.url);
+      const cleanUrl = stripAssetQuery(t.url);
+      if (!seen.has(cleanUrl)) {
+        seen.add(cleanUrl);
         merged.push(t);
       }
     }
     const nextTracks = merged;
-    const currentUrl = this.musicTracks[this.musicTrackIndex]?.url ?? this.bgMusicUrl;
+    const currentClean = this.musicTracks[this.musicTrackIndex]?.url
+      ? stripAssetQuery(this.musicTracks[this.musicTrackIndex].url)
+      : this.bgMusicUrl
+        ? stripAssetQuery(this.bgMusicUrl)
+        : null;
     this.musicTracks = nextTracks;
-    if (currentUrl) {
-      const matchedIdx = nextTracks.findIndex((t) => t.url === currentUrl);
+    if (currentClean) {
+      const matchedIdx = nextTracks.findIndex((t) => stripAssetQuery(t.url) === currentClean);
       this.musicTrackIndex = matchedIdx >= 0 ? matchedIdx : 0;
     } else {
       this.musicTrackIndex = 0;

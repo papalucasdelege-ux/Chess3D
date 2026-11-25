@@ -12,6 +12,7 @@ import {
   type VoiceClipId,
 } from './opponentVoice';
 import bundledAngelVideoMapJson from '../../public/assets/aistudio/angel_video_map.json';
+import { stripAssetQuery, withAssetBuildVersion } from './assetVersion';
 
 /**
  * True ONLY inside the AI Studio / local Vite development environment (`import.meta.env.DEV`)
@@ -1189,16 +1190,29 @@ let dogRunJumpMutationSeq = 0;
 let dogRunJumpDebounceTimer: number | null = null;
 let pendingDogRunJumpSec: number | null = null;
 
+function stampMediaRecord<T extends Record<string, string | undefined>>(
+  record?: T,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!record) return out;
+  for (const [k, v] of Object.entries(record)) {
+    if (typeof v === 'string' && v.length > 0) {
+      out[k] = withAssetBuildVersion(v);
+    }
+  }
+  return out;
+}
+
 function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMapPayload {
-  const variants: Record<string, string> = { ...ANGEL_LOCKED_IDLE_VARIANTS };
+  const variants: Record<string, string> = stampMediaRecord(ANGEL_LOCKED_IDLE_VARIANTS);
   if (data?.idle) {
-    variants.idle_1 = data.idle;
+    variants.idle_1 = withAssetBuildVersion(data.idle);
   }
   if (data?.idleVariants && typeof data.idleVariants === 'object') {
     for (const [k, v] of Object.entries(data.idleVariants)) {
       if (typeof v === 'string' && v.length > 0) {
         const normKey = k === 'idle_listening' ? 'idle_1' : k;
-        variants[normKey] = v;
+        variants[normKey] = withAssetBuildVersion(v);
       }
     }
   }
@@ -1298,10 +1312,11 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
     lipSync.cases.thank_jan = 'off';
   }
 
-  const seductionAudioUrl =
+  const seductionAudioUrl = withAssetBuildVersion(
     typeof data?.seductionAudioUrl === 'string' && data.seductionAudioUrl.length > 0
       ? data.seductionAudioUrl
-      : runtimeOverrides.seductionAudioUrl;
+      : runtimeOverrides.seductionAudioUrl || ANGEL_SEDUCTION_AUDIO_SRC,
+  );
   const seductionAudioDuration =
     typeof data?.seductionAudioDuration === 'number' &&
     Number.isFinite(data.seductionAudioDuration) &&
@@ -1309,10 +1324,11 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
       ? data.seductionAudioDuration
       : runtimeOverrides.seductionAudioDuration ?? 4.5;
 
-  const thankJanAudioUrl =
+  const thankJanAudioUrl = withAssetBuildVersion(
     typeof data?.thankJanAudioUrl === 'string' && data.thankJanAudioUrl.length > 0
       ? data.thankJanAudioUrl
-      : runtimeOverrides.thankJanAudioUrl;
+      : runtimeOverrides.thankJanAudioUrl || '/voices/female/thank_jan.mp3',
+  );
   const thankJanAudioDuration =
     typeof data?.thankJanAudioDuration === 'number' &&
     Number.isFinite(data.thankJanAudioDuration) &&
@@ -1320,10 +1336,10 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
       ? data.thankJanAudioDuration
       : runtimeOverrides.thankJanAudioDuration ?? 7.5;
 
-  const seductionAudioVariants: Record<string, string> = {
+  const seductionAudioVariants: Record<string, string> = stampMediaRecord({
     ...(runtimeOverrides.seductionAudioVariants || {}),
     ...(data?.seductionAudioVariants || {}),
-  };
+  });
   const seductionAudioDurations: Record<string, number> = {
     ...(runtimeOverrides.seductionAudioDurations || {}),
     ...(data?.seductionAudioDurations || {}),
@@ -1345,23 +1361,29 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
   setThankJanAudioUrlOverride(thankJanAudioUrl);
 
   const rawMusicTracks: MusicTrack[] = Array.isArray(data?.musicTracks)
-    ? data.musicTracks.filter(
-        (t): t is MusicTrack =>
-          Boolean(
-            t &&
-              typeof t.id === 'string' &&
-              typeof t.title === 'string' &&
-              typeof t.url === 'string' &&
-              t.url.startsWith('/assets/aistudio/'),
-          ),
-      )
-    : runtimeOverrides.musicTracks || [];
+    ? data.musicTracks
+        .filter(
+          (t): t is MusicTrack =>
+            Boolean(
+              t &&
+                typeof t.id === 'string' &&
+                typeof t.title === 'string' &&
+                typeof t.url === 'string' &&
+                t.url.startsWith('/assets/aistudio/'),
+            ),
+        )
+        .map((t) => ({ ...t, url: withAssetBuildVersion(t.url) }))
+    : (runtimeOverrides.musicTracks || []).map((t) => ({ ...t, url: withAssetBuildVersion(t.url) }));
   // Always keep both locked soundtrack MP3s present even if a cached JSON registry is older
-  const mergedMusicTracks: MusicTrack[] = [...DEFAULT_MUSIC_TRACKS];
-  const seenMusicUrls = new Set<string>(mergedMusicTracks.map((t) => t.url));
+  const mergedMusicTracks: MusicTrack[] = DEFAULT_MUSIC_TRACKS.map((t) => ({
+    ...t,
+    url: withAssetBuildVersion(t.url),
+  }));
+  const seenMusicUrls = new Set<string>(mergedMusicTracks.map((t) => stripAssetQuery(t.url)));
   for (const track of rawMusicTracks) {
-    if (!seenMusicUrls.has(track.url)) {
-      seenMusicUrls.add(track.url);
+    const cleanUrl = stripAssetQuery(track.url);
+    if (!seenMusicUrls.has(cleanUrl)) {
+      seenMusicUrls.add(cleanUrl);
       mergedMusicTracks.push(track);
     }
   }
@@ -1380,18 +1402,20 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
       : runtimeOverrides.compressionPreset || 'lossless_21';
 
   return {
-    idle: variants.idle_1 || data?.idle,
+    idle: variants.idle_1 || (data?.idle ? withAssetBuildVersion(data.idle) : undefined),
     idleVariants: variants,
-    defaultSpeaking: data?.defaultSpeaking || ANGEL_DEFAULT_SPEAKING_VIDEO_SRC,
-    groups: data?.groups || {},
-    cases: {
+    defaultSpeaking: withAssetBuildVersion(
+      data?.defaultSpeaking || ANGEL_DEFAULT_SPEAKING_VIDEO_SRC,
+    ),
+    groups: stampMediaRecord(data?.groups),
+    cases: stampMediaRecord({
       ...ANGEL_LOCKED_CASES,
       ...(data?.cases || {}),
-    },
-    escapes: {
+    }),
+    escapes: stampMediaRecord({
       ...ANGEL_LOCKED_ESCAPES,
       ...(data?.escapes || {}),
-    },
+    }),
     escapeEnabled,
     caseEscapeCues,
     videoMaxPlays,
@@ -1409,10 +1433,11 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
     seductionTriggerMode,
     thankJanAudioUrl,
     thankJanAudioDuration,
-    dogRunVideo:
+    dogRunVideo: withAssetBuildVersion(
       typeof data?.dogRunVideo === 'string' && data.dogRunVideo.length > 0
         ? data.dogRunVideo
         : ANGEL_DOG_RUN_VIDEO_SRC,
+    ),
     dogRunJumpSec:
       pendingDogRunJumpSec !== null
         ? pendingDogRunJumpSec
@@ -1422,10 +1447,11 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
             data.dogRunJumpSec <= 30
           ? Math.round(data.dogRunJumpSec * 10) / 10
           : runtimeOverrides.dogRunJumpSec ?? 4.2,
-    danceStarsVideo:
+    danceStarsVideo: withAssetBuildVersion(
       typeof data?.danceStarsVideo === 'string' && data.danceStarsVideo.length > 0
         ? data.danceStarsVideo
         : ANGEL_DANCE_STARS_VIDEO_SRC,
+    ),
     musicTracks,
   };
 }
@@ -2112,7 +2138,7 @@ export async function updateAngelDogRunJumpSec(
 export function getAngelDogRunVideoUrl(
   map: AngelVideoMapPayload = runtimeOverrides,
 ): string | undefined {
-  return map.dogRunVideo || ANGEL_DOG_RUN_VIDEO_SRC;
+  return withAssetBuildVersion(map.dogRunVideo || ANGEL_DOG_RUN_VIDEO_SRC);
 }
 
 export function getAngelDogRunJumpSec(
@@ -2126,7 +2152,7 @@ export function getAngelDogRunJumpSec(
 export function getAngelDanceStarsVideoUrl(
   map: AngelVideoMapPayload = runtimeOverrides,
 ): string | undefined {
-  return map.danceStarsVideo || ANGEL_DANCE_STARS_VIDEO_SRC;
+  return withAssetBuildVersion(map.danceStarsVideo || ANGEL_DANCE_STARS_VIDEO_SRC);
 }
 
 export async function updateAngelEscapeEnabled(
@@ -2375,7 +2401,7 @@ export function getAngelIdleVideoPool(map: AngelVideoMapPayload = runtimeOverrid
     }
   }
 
-  return pool.length > 0 ? pool : [ANGEL_IDLE_LISTENING_VIDEO_SRC];
+  return pool.length > 0 ? pool : [withAssetBuildVersion(ANGEL_IDLE_LISTENING_VIDEO_SRC)];
 }
 
 /**
@@ -2886,7 +2912,7 @@ export function isCaseUsingDefaultLipSync(
 }
 
 export function resolveDefaultSpeakingLipVideo(): string {
-  return runtimeOverrides.defaultSpeaking || ANGEL_DEFAULT_SPEAKING_VIDEO_SRC;
+  return withAssetBuildVersion(runtimeOverrides.defaultSpeaking || ANGEL_DEFAULT_SPEAKING_VIDEO_SRC);
 }
 
 /**
@@ -3138,7 +3164,7 @@ export function resolveAngelSpeakingVideo(
     const caseLipRule = lip.cases[caseId];
 
     if (staticCase) {
-      return staticCase;
+      return withAssetBuildVersion(staticCase);
     }
 
     if (caseLipRule === 'off') return null;
