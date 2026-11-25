@@ -1023,6 +1023,20 @@ async function startServer(): Promise<void> {
     }
     next();
   });
+  const distAssetsDir = path.resolve(__dirname, 'dist', 'assets');
+  if (IS_PROD && fs.existsSync(distAssetsDir)) {
+    app.use(
+      '/assets',
+      express.static(distAssetsDir, {
+        maxAge: '7d',
+        acceptRanges: true,
+        fallthrough: true,
+        setHeaders: (res) => {
+          res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+        },
+      }),
+    );
+  }
   app.use(
     '/assets',
     express.static(publicAssetsDir, {
@@ -3487,7 +3501,17 @@ async function startServer(): Promise<void> {
   const distDir = path.resolve(__dirname, 'dist');
   if (IS_PROD && fs.existsSync(distDir)) {
     app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
+    app.get('*', (req, res) => {
+      const p = req.path || '';
+      if (
+        p.startsWith('/assets/') ||
+        p.startsWith('/voices/') ||
+        p.startsWith('/api/') ||
+        /\.[a-z0-9]{2,6}$/i.test(p)
+      ) {
+        res.status(404).end();
+        return;
+      }
       res.sendFile(path.join(distDir, 'index.html'));
     });
   } else {

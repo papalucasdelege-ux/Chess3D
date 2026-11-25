@@ -487,7 +487,7 @@ function ChessAngelPortraitVideo({
 
     if (!IS_MOBILE_DEVICE && (inInitialGuard || inFinalEofWindow)) {
       const luma = probeBoundaryLuminance(video);
-      if (inInitialGuard && luma < 2) {
+      if (inInitialGuard && slotAutoPlayRef.current[slot] && luma < 2) {
         return false;
       }
       if (inFinalEofWindow && luma < 6 && slotLastLumaRef.current[slot] > 18) {
@@ -1231,7 +1231,7 @@ function ChessAngelPortraitVideo({
       const curSec = activeVideo.currentTime;
       const durSec = activeVideo.duration;
       const targetSec = Math.max(0, activeCueSec);
-      const nearStartThreshold = targetSec <= 0.1 ? 0.5 : Math.min(targetSec, 1.5);
+      const nearStartThreshold = targetSec <= 0.1 ? 0.6 : Math.max(1.8, targetSec - 0.5);
       if (curSec < nearStartThreshold) {
         forcedIdleObservedNearStartRef.current = true;
       }
@@ -1248,13 +1248,13 @@ function ChessAngelPortraitVideo({
       }
     }
 
-    // 1a. Incoming Frame Watchdog: fall back immediately (220ms) ONLY on actual <video> decode/404 error,
+    // 1a. Incoming Frame Watchdog: give Blob/network retry a fair window (1.4s) on media errors,
     //     otherwise allow 7.5s for 1.5–3.0MB clips to stream over Wi-Fi/LTE on Android tablets so diverse videos never get overwritten!
     if (waitingForIncomingFrameRef.current && !activeReady && incomingWaitStartMsRef.current > 0) {
       const waitedMs = now - incomingWaitStartMsRef.current;
       const hasMediaError = Boolean(activeVideo?.error);
-      const fallbackThresholdMs = hasMediaError ? 220 : 7500;
-      const hardUnlockThresholdMs = hasMediaError ? 1400 : 9000;
+      const fallbackThresholdMs = hasMediaError ? 1400 : 7500;
+      const hardUnlockThresholdMs = hasMediaError ? 2600 : 9000;
       if (waitedMs > fallbackThresholdMs && !slotFallbackUsedRef.current[activeSlot]) {
         slotFallbackUsedRef.current[activeSlot] = true;
         const fallbackUrl =
@@ -2338,7 +2338,11 @@ function ChessAngelPortraitVideo({
     if (powerSaveMode) {
       clearIdleCycleTimer();
       resetEscapeOverlayState(true, true);
-      if (activeRoleRef.current === 'idle' && idleClipCurrentlyPlayingRef.current) {
+      if (
+        activeRoleRef.current === 'idle' &&
+        idleClipCurrentlyPlayingRef.current &&
+        !forcedIdleUrlLiveRef.current
+      ) {
         idleClipCurrentlyPlayingRef.current = false;
         const activeVid = getVideoBySlot(activeSlotRef.current);
         if (activeVid && !activeVid.paused) {
@@ -2470,19 +2474,46 @@ function ChessAngelPortraitVideo({
     }
 
     slotRetryKeyRef.current[slot] = url;
+    // Recover from Service Worker / Android Range-request glitches by fetching the full MP4 into a Blob URL
+    // (Blob URLs bypass Range requests completely and decode reliably on installed PWAs).
     window.setTimeout(() => {
       if (slot !== activeSlotRef.current || slotUrlRef.current[slot] !== url) return;
       const vid = getVideoBySlot(slot);
       if (!vid) return;
-      vid.preload = 'auto';
-      vid.src = url;
-      vid.load();
-      if (slotAutoPlayRef.current[slot]) {
-        safePlayVideo(vid, true);
-        armVideoFramePump(vid);
-      }
-      ensureRenderLoop();
-    }, 120);
+      const cleanRetryUrl = `${url}${url.includes('?') ? '&' : '?'}retry=1`;
+      void fetch(cleanRetryUrl, { credentials: 'same-origin' })
+        .then(async (res) => {
+          if (!res.ok) return null;
+          const ct = (res.headers.get('content-type') || '').toLowerCase();
+          if (ct.includes('text/html')) return null;
+          const buf = await res.arrayBuffer();
+          if (buf.byteLength < 4096) return null;
+          return URL.createObjectURL(new Blob([buf], { type: 'video/mp4' }));
+        })
+        .catch(() => null)
+        .then((blobUrl) => {
+          if (slot !== activeSlotRef.current || slotUrlRef.current[slot] !== url) {
+            if (blobUrl) {
+              try {
+                URL.revokeObjectURL(blobUrl);
+              } catch {
+                // ignore
+              }
+            }
+            return;
+          }
+          const currentVid = getVideoBySlot(slot);
+          if (!currentVid) return;
+          currentVid.preload = 'auto';
+          currentVid.src = blobUrl || cleanRetryUrl;
+          currentVid.load();
+          if (slotAutoPlayRef.current[slot]) {
+            safePlayVideo(currentVid, true);
+            armVideoFramePump(currentVid);
+          }
+          ensureRenderLoop();
+        });
+    }, 100);
   };
 
   const handleEscapeVideoError = () => {

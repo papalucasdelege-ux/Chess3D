@@ -25,11 +25,13 @@ import { TacticalTrainingHud, type TacticalRunStatus } from './components/Tactic
 import { ControlDock } from './components/ControlDock';
 import { PromotionModal } from './components/PromotionModal';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton';
-const LazyAngelVideoStudioModal = lazy(() =>
-  import('./components/AngelVideoStudioModal').then((m) => ({
-    default: m.AngelVideoStudioModal,
-  })),
-);
+const LazyAngelVideoStudioModal = import.meta.env.DEV
+  ? lazy(() =>
+      import('./components/AngelVideoStudioModal').then((m) => ({
+        default: m.AngelVideoStudioModal,
+      })),
+    )
+  : null;
 import {
   OpponentSpeechBanner,
   type CalcPreviewProgress,
@@ -45,6 +47,7 @@ import {
   type UpperRightVoidSpec,
 } from './utils/deviceLayout';
 import {
+  IS_VIDEO_STUDIO_DEV_ENV,
   VOICE_CLIP_DURATION_SEC,
   extractCaseIdFromClip,
   getAngelDanceStarsVideoUrl,
@@ -60,6 +63,8 @@ import {
   subscribeStudioDeveloperAuth,
   unlockStudioDeveloperSession,
 } from './chess/angelPortraitVideos';
+
+const ALLOW_VIDEO_STUDIO = Boolean(import.meta.env.DEV) && IS_VIDEO_STUDIO_DEV_ENV;
 import {
   composeBotMoveCommentary,
   composeHesitationCommentary,
@@ -2042,26 +2047,44 @@ export default function App() {
       if (shouldPlayVideo && dogUrl) {
         const clipSec = getVideoFileDurationSec(dogUrl, snap) ?? Math.max(6, jumpSec + 3.2);
         const remainingClipSec = Math.max(0.8, clipSec - jumpSec);
+        let puppyLaunched = false;
 
-        // Fire the 3D puppy strictly when the <video>'s live currentTime reaches jumpSec (e.g. 4.2s)
-        dogRunCueCallbackRef.current = () => {
+        const firePuppyOnce = () => {
+          if (puppyLaunched) return;
+          puppyLaunched = true;
+          if (dogJumpTimerRef.current !== null) {
+            window.clearTimeout(dogJumpTimerRef.current);
+            dogJumpTimerRef.current = null;
+          }
+          dogRunCueCallbackRef.current = null;
+          setDogRunCueSec(null);
           launch3DPuppy();
           if (dogVideoClearTimerRef.current !== null) {
             window.clearTimeout(dogVideoClearTimerRef.current);
           }
-          const postLaunchClearMs = Math.max(4200, Math.round((remainingClipSec + 0.6) * 1000));
+          const postLaunchClearMs = Math.max(4600, Math.round((remainingClipSec + 0.8) * 1000));
           dogVideoClearTimerRef.current = window.setTimeout(() => {
             dogVideoClearTimerRef.current = null;
             dogEventActiveRef.current = false;
             setPreviewIdleUrl(null);
           }, postLaunchClearMs);
         };
+
+        // Fire the 3D puppy frame-synced when the <video>'s live currentTime reaches jumpSec (e.g. 4.2s)
+        dogRunCueCallbackRef.current = firePuppyOnce;
         setDogRunCueSec(jumpSec);
         setPreviewIdleUrl(dogUrl);
         setOpponentMessage(null);
         setIdlePreviewNonce((n) => n + 1);
 
-        // Safety watchdog only if video never loads/reaches cue (generous buffer so it never cuts early)
+        // Guaranteed fallback launch if mobile/PWA video buffering delays the live frame cue
+        const fallbackLaunchMs = Math.max(1200, Math.round((jumpSec + 1.4) * 1000));
+        dogJumpTimerRef.current = window.setTimeout(() => {
+          dogJumpTimerRef.current = null;
+          firePuppyOnce();
+        }, fallbackLaunchMs);
+
+        // Safety watchdog to guarantee cleanup even if everything stalls
         const safetyMs = Math.max(12000, Math.round((clipSec + 8.0) * 1000));
         dogVideoClearTimerRef.current = window.setTimeout(() => {
           dogVideoClearTimerRef.current = null;
@@ -2342,13 +2365,13 @@ export default function App() {
         turnStartedAtRef.current = now;
       }
 
-      // 5. Fluffy White Puppy Idle Event — triggers naturally when waiting for a match (~32s)
-      //    or waiting long during a match (~75s) while Chess Angel is visible & quiet.
-      const activitySig = `${snap.gameMode}|${snap.localFen}|${snap.activeRoom?.id || ''}|${snap.activeRoom?.status || ''}|${snap.activeRoom?.moves.length ?? 0}|${snap.selectedSquare || ''}|${snap.localResult?.reason || ''}`;
+      // 5. Playful Special Events (Dance with Stars, Fluffy White Puppy, 3D Mini Hamsters Chase)
+      //    Triggers naturally when waiting for a match (~18s) or thinking quietly during a match (~38s).
+      const activitySig = `${snap.gameMode}|${snap.localFen}|${snap.activeRoom?.id || ''}|${snap.activeRoom?.status || ''}|${snap.activeRoom?.moves.length ?? 0}|${snap.localResult?.reason || ''}`;
       if (activitySig !== prevPuppyActivitySigRef.current) {
         prevPuppyActivitySigRef.current = activitySig;
         puppyIdleAccumMsRef.current = 0;
-        // If a move or new match started before the puppy jumped out, cancel the pending jump cleanly
+        // If an actual move or match change happened before the puppy jumped out, cancel the pending jump cleanly
         if ((dogJumpTimerRef.current !== null || dogRunCueCallbackRef.current !== null) && !snap.videoStudioOpen) {
           if (dogJumpTimerRef.current !== null) {
             window.clearTimeout(dogJumpTimerRef.current);
@@ -2398,10 +2421,10 @@ export default function App() {
           // Pause (don't reset) while Chess Angel briefly speaks; only count quiet time
           if (voiceStateRef.current !== 'speaking') {
             puppyIdleAccumMsRef.current += dtMs;
-            const thresholdMs = isWaitingForMatch ? 32_000 : 75_000;
+            const thresholdMs = isWaitingForMatch ? 18_000 : 38_000;
             const cooldownOk =
-              lastPuppyAutoAtRef.current === 0 || now - lastPuppyAutoAtRef.current >= 110_000;
-            const quietSinceSpeechOk = now - lastSpeechEndedAtRef.current >= 4_500;
+              lastPuppyAutoAtRef.current === 0 || now - lastPuppyAutoAtRef.current >= 55_000;
+            const quietSinceSpeechOk = now - lastSpeechEndedAtRef.current >= 3_500;
             const canPlayPuppy =
               snap.angelModalEnabled &&
               snap.angelVisible &&
@@ -3604,12 +3627,14 @@ export default function App() {
   );
 
   const handleSecretStudioTrigger = useCallback(() => {
+    if (!ALLOW_VIDEO_STUDIO) return;
     unlockStudioDeveloperSession();
     setStudioUnlocked(true);
     setVideoStudioOpen(true);
   }, []);
 
   useEffect(() => {
+    if (!ALLOW_VIDEO_STUDIO) return;
     const onSecretKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v') {
         const tag = (e.target as HTMLElement | null)?.tagName;
@@ -5020,7 +5045,7 @@ export default function App() {
         canSaveCurrent={!isReplayMode && gameMode !== 'tactical'}
         justSaved={justSaved}
         onOpenLoadDrawer={() => announceControlEvent(createLoadGameMessage())}
-        onSecretStudioTrigger={handleSecretStudioTrigger}
+        onSecretStudioTrigger={ALLOW_VIDEO_STUDIO ? handleSecretStudioTrigger : undefined}
         onTitleTribute={handleTriggerCreatorTribute}
         onStartTacticalTraining={handleStartTacticalTraining}
         onReturnToCasualPlay={handleReturnToCasualPlay}
@@ -5117,12 +5142,12 @@ export default function App() {
           }
         }}
         onOpenVideoStudio={
-          studioUnlocked ? () => setVideoStudioOpen(true) : undefined
+          ALLOW_VIDEO_STUDIO && studioUnlocked ? () => setVideoStudioOpen(true) : undefined
         }
       />
 
-      {/* Hidden Chess Angel Video Studio (Opened directly via 5 clicks on game title; lazy chunk never loaded for normal players) */}
-      {studioUnlocked && videoStudioOpen && (
+      {/* Developer-only Chess Angel Video Studio (completely excluded from consumer production builds via import.meta.env.DEV) */}
+      {import.meta.env.DEV && ALLOW_VIDEO_STUDIO && studioUnlocked && videoStudioOpen && LazyAngelVideoStudioModal && (
         <Suspense fallback={null}>
           <LazyAngelVideoStudioModal
             onClose={() => setVideoStudioOpen(false)}

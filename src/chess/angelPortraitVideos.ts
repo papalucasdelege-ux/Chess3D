@@ -21,7 +21,10 @@ import bundledAngelVideoMapJson from '../../public/assets/aistudio/angel_video_m
  */
 export const IS_VIDEO_STUDIO_DEV_ENV =
   Boolean(import.meta.env.DEV) &&
-  (typeof window === 'undefined' || !window.location.hostname.startsWith('ais-pre-'));
+  (typeof window === 'undefined' ||
+    (!window.location.hostname.startsWith('ais-pre-') &&
+      !window.matchMedia?.('(display-mode: standalone)').matches &&
+      !(window.navigator as { standalone?: boolean }).standalone));
 
 /**
  * Built-in frameless 3:4 portrait video played (silently, once, holding last frame)
@@ -836,7 +839,7 @@ function notifyStudioAuthListeners(): void {
 }
 
 export function isStudioDeveloperUnlocked(): boolean {
-  return studioSessionUnlocked;
+  return IS_VIDEO_STUDIO_DEV_ENV && studioSessionUnlocked;
 }
 
 export function subscribeStudioDeveloperAuth(listener: () => void): () => void {
@@ -847,6 +850,7 @@ export function subscribeStudioDeveloperAuth(listener: () => void): () => void {
 }
 
 export function unlockStudioDeveloperSession(): void {
+  if (!IS_VIDEO_STUDIO_DEV_ENV) return;
   if (!studioSessionUnlocked) {
     studioSessionUnlocked = true;
     notifyStudioAuthListeners();
@@ -1340,7 +1344,7 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
   VOICE_CLIP_DURATION_SEC.thank_jan_v3 = thankJanAudioDuration;
   setThankJanAudioUrlOverride(thankJanAudioUrl);
 
-  const musicTracks: MusicTrack[] | undefined = Array.isArray(data?.musicTracks)
+  const rawMusicTracks: MusicTrack[] = Array.isArray(data?.musicTracks)
     ? data.musicTracks.filter(
         (t): t is MusicTrack =>
           Boolean(
@@ -1351,10 +1355,18 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
               t.url.startsWith('/assets/aistudio/'),
           ),
       )
-    : runtimeOverrides.musicTracks;
-  if (musicTracks && musicTracks.length > 0) {
-    setMusicTracksOverride(musicTracks);
+    : runtimeOverrides.musicTracks || [];
+  // Always keep both locked soundtrack MP3s present even if a cached JSON registry is older
+  const mergedMusicTracks: MusicTrack[] = [...DEFAULT_MUSIC_TRACKS];
+  const seenMusicUrls = new Set<string>(mergedMusicTracks.map((t) => t.url));
+  for (const track of rawMusicTracks) {
+    if (!seenMusicUrls.has(track.url)) {
+      seenMusicUrls.add(track.url);
+      mergedMusicTracks.push(track);
+    }
   }
+  const musicTracks: MusicTrack[] = mergedMusicTracks;
+  setMusicTracksOverride(musicTracks);
 
   const validPresets: ReadonlySet<string> = new Set([
     'lossless_21',
@@ -1837,13 +1849,16 @@ export function getAngelVideoOverridesSnapshot(): AngelVideoMapPayload {
 }
 
 export async function refreshAngelVideoOverrides(): Promise<AngelVideoMapPayload> {
-  const endpoints = import.meta.env.DEV
-    ? ['/api/angel-videos', '/assets/aistudio/angel_video_map.json']
-    : ['/assets/aistudio/angel_video_map.json'];
+  // In production consumer builds, bundledAngelVideoMapJson is statically locked at build time;
+  // skipping network fetch prevents a stale Service Worker cache from downgrading videos or music tracks.
+  if (!import.meta.env.DEV) {
+    return runtimeOverrides;
+  }
+  const endpoints = ['/api/angel-videos', '/assets/aistudio/angel_video_map.json'];
   for (const endpoint of endpoints) {
     try {
       const res = await fetch(endpoint, {
-        cache: import.meta.env.DEV ? 'no-store' : 'no-cache',
+        cache: 'no-store',
       });
       const contentType = res.headers.get('content-type') || '';
       if (res.ok && contentType.includes('json')) {

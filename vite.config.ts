@@ -77,7 +77,7 @@ export default defineConfig(() => {
                 (url.pathname.startsWith('/assets/aistudio/') && url.pathname.endsWith('.mp3')),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-voices-v4-0',
+                cacheName: 'chessangel-voices-v4-2',
                 rangeRequests: true,
                 expiration: {
                   maxEntries: 260,
@@ -95,7 +95,7 @@ export default defineConfig(() => {
                 url.pathname.startsWith('/assets/aistudio/') && url.pathname.endsWith('.mp4'),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-videos-v4-0',
+                cacheName: 'chessangel-videos-v4-2',
                 rangeRequests: true,
                 expiration: {
                   maxEntries: 150,
@@ -110,9 +110,10 @@ export default defineConfig(() => {
             {
               // Keep video registry fresh online while remaining playable offline
               urlPattern: ({ url }) => url.pathname === '/assets/aistudio/angel_video_map.json',
-              handler: 'StaleWhileRevalidate',
+              handler: 'NetworkFirst',
               options: {
-                cacheName: 'chessangel-registry-v4-0',
+                cacheName: 'chessangel-registry-v4-2',
+                networkTimeoutSeconds: 3,
                 cacheableResponse: {
                   statuses: [200],
                 },
@@ -125,7 +126,7 @@ export default defineConfig(() => {
                 /\.(png|jpg|jpeg|webp|svg)$/i.test(url.pathname),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-images-v4-0',
+                cacheName: 'chessangel-images-v4-2',
                 expiration: {
                   maxEntries: 40,
                   maxAgeSeconds: 60 * 60 * 24 * 30,

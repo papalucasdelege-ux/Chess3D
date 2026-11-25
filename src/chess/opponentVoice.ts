@@ -2409,6 +2409,8 @@ class OpponentSpeechController {
   private preloadedMusicBlobUrls = new Map<string, string>();
   private preloadedMusicAudio = new Map<string, HTMLAudioElement>();
   private preloadingMusicUrls = new Set<string>();
+  private musicPreloadRunning = false;
+  private bgMusicSeq = 0;
   private rawBytesCache = new Map<string, ArrayBuffer>();
   private bufferCache = new Map<string, AudioBuffer>();
   private speakSeq = 0;
@@ -2433,51 +2435,65 @@ class OpponentSpeechController {
       }, 60);
       window.setTimeout(() => {
         this.preloadBackgroundMusicTracks();
-      }, 140);
+      }, 180);
     }
   }
 
+  private isValidMp3Buffer(buf: ArrayBuffer): boolean {
+    if (buf.byteLength < 65_536) return false;
+    const view = new Uint8Array(buf, 0, Math.min(32, buf.byteLength));
+    // Standard ID3v2 tag header ("ID3")
+    if (view[0] === 0x49 && view[1] === 0x44 && view[2] === 0x33) return true;
+    // Raw MPEG audio frame sync (11 set bits: 0xFF 0xE0..0xFF)
+    for (let i = 0; i < view.length - 1; i++) {
+      if (view[i] === 0xff && (view[i + 1] & 0xe0) === 0xe0) return true;
+    }
+    return false;
+  }
+
   public preloadBackgroundMusicTracks(): void {
-    if (typeof window === 'undefined') return;
-    for (const track of this.musicTracks) {
-      const url = track.url;
-      if (!url) continue;
-      // Warm an HTMLAudioElement immediately so streaming play starts without delay
-      if (!this.preloadedMusicAudio.has(url)) {
-        try {
-          const el = new Audio(url);
-          el.preload = 'auto';
-          el.loop = false;
-          el.load();
-          this.preloadedMusicAudio.set(url, el);
-        } catch {
-          // ignore
-        }
-      }
-      // Also fetch the untouched MP3 bytes into an in-memory Blob URL so switching tracks is instantaneous
-      if (!this.preloadedMusicBlobUrls.has(url) && !this.preloadingMusicUrls.has(url)) {
-        this.preloadingMusicUrls.add(url);
-        void fetch(url)
-          .then((res) => (res.ok ? res.blob() : null))
-          .then((blob) => {
-            if (!blob || blob.size < 4096) return;
+    if (typeof window === 'undefined' || this.musicPreloadRunning) return;
+    const urls = this.musicTracks
+      .map((t) => t.url)
+      .filter((u): u is string => Boolean(u) && !this.preloadedMusicBlobUrls.has(u));
+    if (urls.length === 0) return;
+
+    this.musicPreloadRunning = true;
+    void (async () => {
+      try {
+        // Fetch each untouched MP3 sequentially into verified Blob URLs so neither track competes
+        // for bandwidth or triggers Range-request deadlocks on installed Android/desktop PWAs.
+        for (const url of urls) {
+          if (this.preloadedMusicBlobUrls.has(url) || this.preloadingMusicUrls.has(url)) continue;
+          this.preloadingMusicUrls.add(url);
+          try {
+            const res = await fetch(url, { credentials: 'same-origin' });
+            if (!res.ok) continue;
+            const ct = (res.headers.get('content-type') || '').toLowerCase();
+            if (ct.includes('text/html')) continue;
+            const bytes = await res.arrayBuffer();
+            if (!this.isValidMp3Buffer(bytes)) continue;
+
+            const blob = new Blob([bytes], { type: 'audio/mpeg' });
             const objUrl = URL.createObjectURL(blob);
             this.preloadedMusicBlobUrls.set(url, objUrl);
-            const warmEl = this.preloadedMusicAudio.get(url);
-            if (warmEl && warmEl !== this.bgMusicAudio && warmEl.paused) {
-              warmEl.src = objUrl;
-              warmEl.preload = 'auto';
-              warmEl.load();
-            }
-          })
-          .catch(() => {
+
+            // Warm a dedicated blob-backed audio element for instant zero-latency start
+            const warmEl = new Audio(objUrl);
+            warmEl.preload = 'auto';
+            warmEl.loop = false;
+            warmEl.load();
+            this.preloadedMusicAudio.set(url, warmEl);
+          } catch {
             // Keep direct URL streaming fallback
-          })
-          .finally(() => {
+          } finally {
             this.preloadingMusicUrls.delete(url);
-          });
+          }
+        }
+      } finally {
+        this.musicPreloadRunning = false;
       }
-    }
+    })();
   }
 
   public subscribe(listener: StateListener): () => void {
@@ -2580,7 +2596,16 @@ class OpponentSpeechController {
         typeof t.title === 'string' &&
         t.title.trim().length > 0,
     );
-    const nextTracks = cleaned.length > 0 ? cleaned : [...DEFAULT_MUSIC_TRACKS];
+    // Always preserve all locked DEFAULT_MUSIC_TRACKS so neither song can ever disappear
+    const merged: MusicTrack[] = [...DEFAULT_MUSIC_TRACKS];
+    const seen = new Set<string>(merged.map((t) => t.url));
+    for (const t of cleaned) {
+      if (!seen.has(t.url)) {
+        seen.add(t.url);
+        merged.push(t);
+      }
+    }
+    const nextTracks = merged;
     const currentUrl = this.musicTracks[this.musicTrackIndex]?.url ?? this.bgMusicUrl;
     this.musicTracks = nextTracks;
     if (currentUrl) {
@@ -2660,7 +2685,20 @@ class OpponentSpeechController {
     }
   }
 
-  private startBackgroundMusicUrl(url: string): void {
+  private evictBrokenMusicBlob(url: string): void {
+    const blobUrl = this.preloadedMusicBlobUrls.get(url);
+    if (blobUrl) {
+      this.preloadedMusicBlobUrls.delete(url);
+      try {
+        URL.revokeObjectURL(blobUrl);
+      } catch {
+        // ignore
+      }
+    }
+    this.preloadedMusicAudio.delete(url);
+  }
+
+  private startBackgroundMusicUrl(url: string, allowDirectFallback = true): void {
     // If the same song is already playing in the background, let it continue uninterrupted
     if (
       this.bgMusicAudio &&
@@ -2674,16 +2712,31 @@ class OpponentSpeechController {
     }
 
     this.stopBackgroundMusicInternal(false);
-    const cachedBlobUrl = this.preloadedMusicBlobUrls.get(url);
-    let audio = this.preloadedMusicAudio.get(url);
-    if (!audio) {
-      audio = new Audio(cachedBlobUrl || url);
-      this.preloadedMusicAudio.set(url, audio);
-    } else if (cachedBlobUrl && audio.src !== cachedBlobUrl) {
-      audio.src = cachedBlobUrl;
+    const seq = ++this.bgMusicSeq;
+
+    const cachedBlobUrl = allowDirectFallback ? this.preloadedMusicBlobUrls.get(url) : undefined;
+    let audio: HTMLAudioElement | undefined;
+    let usingBlob = false;
+
+    if (cachedBlobUrl) {
+      const warm = this.preloadedMusicAudio.get(url);
+      if (warm && !warm.error && warm.src === cachedBlobUrl) {
+        audio = warm;
+        usingBlob = true;
+      } else {
+        audio = new Audio(cachedBlobUrl);
+        usingBlob = true;
+      }
+    } else {
+      // Stream directly from the untouched MP3 file (with cache-bust retry when recovering from a SW/blob glitch)
+      const streamUrl = allowDirectFallback ? url : `${url}${url.includes('?') ? '&' : '?'}direct=1`;
+      audio = new Audio(streamUrl);
     }
+
     try {
-      audio.currentTime = 0;
+      if (audio.readyState >= 1) {
+        audio.currentTime = 0;
+      }
     } catch {
       // ignore if metadata not yet ready
     }
@@ -2695,38 +2748,47 @@ class OpponentSpeechController {
     this.bgMusicUrl = url;
 
     audio.onended = () => {
-      if (this.bgMusicAudio === audio) {
-        this.bgMusicAudio = null;
-        this.bgMusicUrl = null;
-        if (this.musicPlaylistEnabled && this.musicSoundAllowed && this.musicTracks.length > 0) {
-          this.musicTrackIndex = (this.musicTrackIndex + 1) % this.musicTracks.length;
-          const nextTrack = this.musicTracks[this.musicTrackIndex];
-          if (nextTrack) {
-            this.startBackgroundMusicUrl(nextTrack.url);
-            return;
-          }
+      if (this.bgMusicSeq !== seq || this.bgMusicAudio !== audio) return;
+      this.bgMusicAudio = null;
+      this.bgMusicUrl = null;
+      if (this.musicPlaylistEnabled && this.musicSoundAllowed && this.musicTracks.length > 0) {
+        this.musicTrackIndex = (this.musicTrackIndex + 1) % this.musicTracks.length;
+        const nextTrack = this.musicTracks[this.musicTrackIndex];
+        if (nextTrack) {
+          this.startBackgroundMusicUrl(nextTrack.url);
+          return;
         }
-        this.emitMusicState();
       }
+      this.emitMusicState();
     };
+
     audio.onerror = () => {
-      if (this.bgMusicAudio === audio) {
-        this.bgMusicAudio = null;
-        this.bgMusicUrl = null;
-        this.emitMusicState();
+      if (this.bgMusicSeq !== seq || this.bgMusicAudio !== audio) return;
+      this.bgMusicAudio = null;
+      this.bgMusicUrl = null;
+      if (usingBlob && allowDirectFallback) {
+        this.evictBrokenMusicBlob(url);
+        this.startBackgroundMusicUrl(url, false);
+        return;
       }
+      if (allowDirectFallback) {
+        this.startBackgroundMusicUrl(url, false);
+        return;
+      }
+      this.emitMusicState();
     };
 
     const playPromise = audio.play();
     if (playPromise !== undefined) {
       playPromise
         .then(() => {
-          if (this.bgMusicAudio === audio) {
+          if (this.bgMusicSeq === seq && this.bgMusicAudio === audio) {
             this.pendingGestureBgMusicUrl = null;
             this.emitMusicState();
           }
         })
         .catch((err) => {
+          if (this.bgMusicSeq !== seq) return;
           if (this.bgMusicAudio === audio) {
             this.bgMusicAudio = null;
             this.bgMusicUrl = null;
@@ -2735,6 +2797,17 @@ class OpponentSpeechController {
             err instanceof DOMException && err.name === 'NotAllowedError';
           if (isAutoplayBlocked) {
             this.pendingGestureBgMusicUrl = url;
+            this.emitMusicState();
+            return;
+          }
+          if (usingBlob && allowDirectFallback) {
+            this.evictBrokenMusicBlob(url);
+            this.startBackgroundMusicUrl(url, false);
+            return;
+          }
+          if (allowDirectFallback) {
+            this.startBackgroundMusicUrl(url, false);
+            return;
           }
           this.emitMusicState();
         });

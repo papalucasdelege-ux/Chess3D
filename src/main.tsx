@@ -21,6 +21,26 @@ if (typeof window !== 'undefined') {
   }
   ogUrlMeta.content = canonicalHref;
 
+  // Purge outdated runtime PWA caches (e.g. v4-0) so installed apps reclaim quota & drop stale media/registry entries
+  if ('caches' in window) {
+    const activeRuntimeCaches = new Set([
+      'chessangel-voices-v4-2',
+      'chessangel-videos-v4-2',
+      'chessangel-registry-v4-2',
+      'chessangel-images-v4-2',
+    ]);
+    void window.caches
+      .keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((k) => k.startsWith('chessangel-') && !activeRuntimeCaches.has(k))
+            .map((k) => window.caches.delete(k)),
+        ),
+      )
+      .catch(() => {});
+  }
+
   // Register the copy-secured PWA Service Worker with silent auto-updates
   registerSW({
     immediate: true,
