@@ -34,88 +34,61 @@ function createCampbellFurTextures(variant: MiniHamsterVariant): {
 
   if (ctx) {
     if (variant === 'russian-grey') {
-      // Base creamy-ivory underbelly (visible below the Campbell's 3-arch lateral flank line)
-      ctx.fillStyle = '#ebe6dc';
-      ctx.fillRect(0, 0, size, size);
-
-      // Paint dorsal agouti slate-grey Campbell's coat with the signature wavy 3-arch lateral flank border!
+      // Totally grey Campbell's dwarf hamster: uniform plush medium-grey coat all over
+      // with a crisp dark-grey dorsal stripe running all the way along his back & head.
       const img = ctx.getImageData(0, 0, size, size);
       const data = img.data;
       for (let py = 0; py < size; py++) {
-        const v = py / (size - 1); // 0 = rump, 1 = front/shoulders
-        // Signature Phodopus campbelli triple-arch flank wave (3 gentle scalloped dips along each side)
-        const triArch = Math.sin(v * Math.PI * 3.0) * 0.036 + Math.sin(v * Math.PI * 6.0) * 0.008;
+        const v = py / (size - 1); // 0 = rump/tail base, 1 = shoulders/forehead
         for (let px = 0; px < size; px++) {
           const u = px / (size - 1);
           // Angular distance from dorsal centerline (u = 0.25) wrapped onto [0, 0.5]
           let dTop = Math.abs(u - 0.25);
           if (dTop > 0.5) dTop = 1 - dTop;
 
-          // Flank boundary lies around dTop ≈ 0.285 modulated by the 3-arch wave
-          const flankEdge = 0.285 + triArch;
           const idx = (py * size + px) * 4;
+          const grain = (rand() - 0.5) * 14;
+          // Subtle natural depth: medium-grey everywhere (slightly softer silver-grey on lower belly, never white)
+          const bellyShade = THREE.MathUtils.clamp((dTop - 0.22) / 0.28, 0, 1);
+          let r = 108 + bellyShade * 14 + grain;
+          let g = 112 + bellyShade * 14 + grain;
+          let b = 119 + bellyShade * 15 + grain;
 
-          if (dTop < flankEdge + 0.045) {
-            // Smooth fur-blended transition between agouti dorsal grey & ivory cream belly
-            const blend = THREE.MathUtils.clamp((flankEdge + 0.025 - dTop) / 0.055, 0, 1);
-
-            // Authentic Campbell's agouti slate-grey with slightly warmer taupe-grey flanks & frosted ticking
-            const sideWarmth = THREE.MathUtils.clamp(dTop / 0.27, 0, 1);
-            const grain = (rand() - 0.5) * 14;
-            let r = 84 + sideWarmth * 26 + grain;
-            let g = 83 + sideWarmth * 23 + grain;
-            let b = 86 + sideWarmth * 16 + grain;
-
-            // Subtle darker ochre/charcoal agouti rim right along the 3-arch flank border
-            const rimDist = Math.abs(dTop - flankEdge);
-            if (rimDist < 0.022) {
-              const rimK = 1 - rimDist / 0.022;
-              r -= rimK * 14;
-              g -= rimK * 15;
-              b -= rimK * 14;
-            }
-
-            // Crisp, thin, signature Campbell's black dorsal stripe down the exact spine!
-            // Slightly broader between shoulders & mid-back, tapering cleanly toward tail & brow
-            const stripeWidth = 0.0155 + Math.sin(v * Math.PI) * 0.007;
-            if (dTop < stripeWidth + 0.014) {
-              const sK = THREE.MathUtils.clamp(1 - (dTop - stripeWidth * 0.45) / (stripeWidth * 0.95), 0, 1);
-              const sSmooth = sK * sK * (3 - 2 * sK);
-              r = r * (1 - sSmooth) + 18 * sSmooth;
-              g = g * (1 - sSmooth) + 18 * sSmooth;
-              b = b * (1 - sSmooth) + 21 * sSmooth;
-            }
-
-            // Blend with ivory-cream belly
-            const br = 236 + (rand() - 0.5) * 8;
-            const bg = 231 + (rand() - 0.5) * 8;
-            const bb = 221 + (rand() - 0.5) * 8;
-            data[idx] = Math.round(br * (1 - blend) + r * blend);
-            data[idx + 1] = Math.round(bg * (1 - blend) + g * blend);
-            data[idx + 2] = Math.round(bb * (1 - blend) + b * blend);
-            data[idx + 3] = 255;
-          } else {
-            // Soft off-white belly with slight micro-variation
-            const gVal = (rand() - 0.5) * 8;
-            data[idx] = Math.round(236 + gVal);
-            data[idx + 1] = Math.round(231 + gVal);
-            data[idx + 2] = Math.round(221 + gVal);
-            data[idx + 3] = 255;
+          // Continuous dark-grey dorsal stripe running ALL over his back from crown to tail!
+          const stripeWidth = 0.021 + Math.sin(v * Math.PI) * 0.008;
+          if (dTop < stripeWidth + 0.016) {
+            const sK = THREE.MathUtils.clamp(
+              1 - (dTop - stripeWidth * 0.48) / (stripeWidth * 0.92),
+              0,
+              1,
+            );
+            const sSmooth = sK * sK * (3 - 2 * sK);
+            const stripeR = 40 + (rand() - 0.5) * 8;
+            const stripeG = 43 + (rand() - 0.5) * 8;
+            const stripeB = 49 + (rand() - 0.5) * 8;
+            r = r * (1 - sSmooth) + stripeR * sSmooth;
+            g = g * (1 - sSmooth) + stripeG * sSmooth;
+            b = b * (1 - sSmooth) + stripeB * sSmooth;
           }
+
+          data[idx] = Math.round(THREE.MathUtils.clamp(r, 0, 255));
+          data[idx + 1] = Math.round(THREE.MathUtils.clamp(g, 0, 255));
+          data[idx + 2] = Math.round(THREE.MathUtils.clamp(b, 0, 255));
+          data[idx + 3] = 255;
         }
       }
       ctx.putImageData(img, 0, 0);
 
-      // Fine directional velvety short-coat fur micro-strokes flowing front-to-back
+      // Fine velvety grey short-coat fur micro-strokes flowing front-to-back
       for (let i = 0; i < 2400; i++) {
         const x = rand() * size;
         const y = rand() * size;
         const len = 5 + rand() * 11;
         const alpha = 0.06 + rand() * 0.12;
         ctx.strokeStyle =
-          rand() > 0.46
-            ? `rgba(218, 214, 206, ${alpha.toFixed(3)})`
-            : `rgba(28, 29, 34, ${alpha.toFixed(3)})`;
+          rand() > 0.48
+            ? `rgba(176, 182, 192, ${alpha.toFixed(3)})`
+            : `rgba(34, 37, 44, ${alpha.toFixed(3)})`;
         ctx.lineWidth = 0.9 + rand() * 0.9;
         ctx.beginPath();
         ctx.moveTo(x, y);
@@ -123,50 +96,77 @@ function createCampbellFurTextures(variant: MiniHamsterVariant): {
         ctx.stroke();
       }
     } else {
-      // Mottled / Pied Snow-White Campbell's Dwarf Hamster:
-      // Plush pearlescent white base with organic slate-grey pied Campbell's patches
+      // Light-grey Campbell's dwarf hamster with several darker grey spots of different sizes
       const grad = ctx.createLinearGradient(0, 0, 0, size);
-      grad.addColorStop(0, '#fcfaf7');
-      grad.addColorStop(0.55, '#ffffff');
-      grad.addColorStop(1, '#f5f0ea');
+      grad.addColorStop(0, '#c8ced7');
+      grad.addColorStop(0.5, '#d2d7e0');
+      grad.addColorStop(1, '#c5cbd5');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, size, size);
 
-      // Soft-feathered organic pied Campbell's grey fur patches across upper back & flanks
-      const patches: Array<[number, number, number, number, string]> = [
-        [0.19 * size, 0.58 * size, 58, 72, 'rgba(92, 98, 108, 0.88)'], // Left dorsal saddle
-        [0.32 * size, 0.32 * size, 48, 56, 'rgba(110, 116, 126, 0.84)'], // Right rump patch
-        [0.37 * size, 0.66 * size, 38, 44, 'rgba(96, 102, 112, 0.85)'], // Right shoulder spot
-        [0.25 * size, 0.44 * size, 32, 38, 'rgba(84, 90, 99, 0.82)'], // Mid-spine oval
-        [0.12 * size, 0.36 * size, 30, 34, 'rgba(116, 122, 132, 0.78)'], // Left hip spot
-        [0.29 * size, 0.76 * size, 24, 26, 'rgba(92, 98, 108, 0.82)'], // Upper shoulder dot
-      ];
-      for (const [cx, cy, rx, ry, col] of patches) {
-        ctx.save();
-        ctx.translate(cx, cy);
-        ctx.rotate((rand() - 0.5) * 0.7);
-        const rg = ctx.createRadialGradient(0, 0, Math.min(rx, ry) * 0.25, 0, 0, Math.max(rx, ry));
-        rg.addColorStop(0, col);
-        rg.addColorStop(0.72, col);
-        rg.addColorStop(1, 'rgba(96, 102, 112, 0)');
-        ctx.fillStyle = rg;
-        ctx.scale(1, ry / rx);
-        ctx.beginPath();
-        ctx.arc(0, 0, rx, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-      }
+      // Helper to paint an organic fur-feathered darker grey spot (wrapped horizontally across u = 0/1)
+      const paintSpot = (
+        uCenter: number,
+        vCenter: number,
+        rx: number,
+        ry: number,
+        angleRad: number,
+        rgb: [number, number, number],
+        opacity: number,
+      ) => {
+        const [r, g, b] = rgb;
+        for (const wrapOffset of [-size, 0, size]) {
+          const cx = uCenter * size + wrapOffset;
+          const cy = (1 - vCenter) * size;
+          if (cx + rx * 1.4 < 0 || cx - rx * 1.4 > size) continue;
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(angleRad);
+          const rg = ctx.createRadialGradient(
+            0,
+            0,
+            Math.min(rx, ry) * 0.28,
+            0,
+            0,
+            Math.max(rx, ry),
+          );
+          rg.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${opacity})`);
+          rg.addColorStop(0.7, `rgba(${r}, ${g}, ${b}, ${(opacity * 0.94).toFixed(3)})`);
+          rg.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+          ctx.fillStyle = rg;
+          ctx.scale(1, ry / rx);
+          ctx.beginPath();
+          ctx.arc(0, 0, rx, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      };
 
-      // Silky plush white & subtle pearl fur strokes
-      for (let i = 0; i < 2000; i++) {
+      // Several darker grey spots of clearly different sizes across back, flanks, rump, shoulders & crown
+      // (u = 0.25 is dorsal centerline, u = 0.0 / 0.5 are lateral flanks; v = 0 rump -> v = 1 front/head)
+      paintSpot(0.18, 0.56, 62, 74, 0.28, [74, 80, 90], 0.94); // Large left dorsal saddle patch
+      paintSpot(0.35, 0.28, 52, 60, -0.34, [84, 90, 100], 0.92); // Large-medium right rump patch
+      paintSpot(0.41, 0.62, 40, 48, 0.22, [68, 74, 84], 0.92); // Medium right flank spot
+      paintSpot(0.24, 0.38, 34, 42, -0.22, [78, 84, 94], 0.9); // Medium mid-back oval spot
+      paintSpot(0.08, 0.42, 32, 36, 0.45, [90, 96, 106], 0.88); // Medium-small left flank spot
+      paintSpot(0.14, 0.22, 26, 30, -0.35, [72, 78, 88], 0.9); // Small left hip dot
+      paintSpot(0.31, 0.74, 24, 28, 0.18, [66, 72, 82], 0.9); // Small right shoulder spot
+      paintSpot(0.27, 0.52, 16, 18, -0.15, [62, 68, 78], 0.88); // Tiny upper-back freckle
+      paintSpot(0.45, 0.44, 18, 22, 0.3, [82, 88, 98], 0.86); // Small lower-right flank dot
+      // Head crown & cheek-side darker grey spots (keeping snout tip light grey so the pink nose pops!)
+      paintSpot(0.17, 0.81, 30, 34, 0.25, [72, 78, 88], 0.9); // Left crown/temple patch
+      paintSpot(0.36, 0.84, 20, 22, -0.28, [86, 92, 102], 0.86); // Small right temple spot
+
+      // Silky plush light-grey & silver fur micro-strokes
+      for (let i = 0; i < 2200; i++) {
         const x = rand() * size;
         const y = rand() * size;
         const len = 5 + rand() * 10;
-        const alpha = 0.08 + rand() * 0.14;
+        const alpha = 0.07 + rand() * 0.12;
         ctx.strokeStyle =
-          rand() > 0.42
-            ? `rgba(255, 255, 255, ${(alpha * 1.4).toFixed(3)})`
-            : `rgba(216, 208, 202, ${alpha.toFixed(3)})`;
+          rand() > 0.46
+            ? `rgba(226, 231, 239, ${alpha.toFixed(3)})`
+            : `rgba(88, 94, 104, ${alpha.toFixed(3)})`;
         ctx.lineWidth = 0.9 + rand() * 0.9;
         ctx.beginPath();
         ctx.moveTo(x, y);
@@ -446,21 +446,23 @@ export class MiniHamsterActor {
         map: this.furTex,
         bumpMap: this.furBumpTex,
         bumpScale: 0.012,
-        color: isGrey ? 0xf2f0ec : 0xffffff,
-        emissive: isGrey ? 0x16171a : 0x242220,
-        emissiveIntensity: isGrey ? 0.14 : 0.16,
+        color: 0xffffff,
+        emissive: isGrey ? 0x16181d : 0x1d2026,
+        emissiveIntensity: isGrey ? 0.15 : 0.16,
         roughness: 0.89,
         metalness: 0.01,
       }),
     );
 
+    // Matching solid coat fur for chest ruff, whisker pads, chin, tail & hairy Phodopus feet:
+    // totally grey for the grey hamster, soft light grey for the spotted light-grey hamster!
     const creamFurMat = this.trackMat(
       new THREE.MeshStandardMaterial({
         bumpMap: this.furBumpTex,
         bumpScale: 0.008,
-        color: isGrey ? 0xeae4d8 : 0xfffaf7,
-        emissive: 0x161513,
-        emissiveIntensity: 0.12,
+        color: isGrey ? 0x70757d : 0xcbd1da,
+        emissive: isGrey ? 0x15171c : 0x1d2026,
+        emissiveIntensity: 0.14,
         roughness: 0.9,
         metalness: 0.0,
       }),
@@ -468,8 +470,8 @@ export class MiniHamsterActor {
 
     const earOuterMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: isGrey ? 0x525052 : 0xf4ecec,
-        emissive: isGrey ? 0x101012 : 0x221b1d,
+        color: isGrey ? 0x585d66 : 0xb4bbc6,
+        emissive: isGrey ? 0x101216 : 0x1a1d24,
         emissiveIntensity: 0.14,
         roughness: 0.84,
         metalness: 0.0,
@@ -478,8 +480,8 @@ export class MiniHamsterActor {
 
     const earInnerMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: isGrey ? 0xa3898f : 0xffadc2,
-        emissive: isGrey ? 0x180f12 : 0x3f1422,
+        color: isGrey ? 0x837f86 : 0xffaac2,
+        emissive: isGrey ? 0x141316 : 0x3f1422,
         emissiveIntensity: 0.2,
         roughness: 0.72,
         metalness: 0.0,
@@ -488,18 +490,18 @@ export class MiniHamsterActor {
 
     const pinkNoseMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: isGrey ? 0xd98f9a : 0xff6b96,
-        emissive: isGrey ? 0x240c10 : 0x521226,
-        emissiveIntensity: isGrey ? 0.18 : 0.34,
-        roughness: 0.22,
+        color: isGrey ? 0x7d747a : 0xff6294,
+        emissive: isGrey ? 0x161215 : 0x5c122a,
+        emissiveIntensity: isGrey ? 0.14 : 0.38,
+        roughness: 0.2,
         metalness: 0.05,
       }),
     );
 
     const pawSkinMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: isGrey ? 0xcda4aa : 0xffa6be,
-        emissive: isGrey ? 0x1a1012 : 0x3e1422,
+        color: isGrey ? 0x9b959a : 0xffa4be,
+        emissive: isGrey ? 0x151416 : 0x3e1422,
         emissiveIntensity: isGrey ? 0.12 : 0.22,
         roughness: 0.52,
         metalness: 0.02,
@@ -508,8 +510,8 @@ export class MiniHamsterActor {
 
     const tinyClawMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: isGrey ? 0xeadcd8 : 0xff6490,
-        emissive: isGrey ? 0x151210 : 0x4c0f22,
+        color: isGrey ? 0xc8cdd4 : 0xff608e,
+        emissive: isGrey ? 0x141518 : 0x4c0f22,
         emissiveIntensity: isGrey ? 0.08 : 0.28,
         roughness: 0.24,
         metalness: 0.06,
