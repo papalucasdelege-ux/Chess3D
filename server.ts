@@ -9,6 +9,7 @@ import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Chess } from 'chess.js';
+import { GoogleGenAI } from '@google/genai';
 import { TIME_CONTROLS } from './src/shared/types.ts';
 import type {
   BoardSkinId,
@@ -783,7 +784,7 @@ async function startServer(): Promise<void> {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader(
       'Permissions-Policy',
-      'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+      'camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=(self)',
     );
     const scriptPolicy = IS_PROD
       ? "script-src 'self' 'unsafe-inline'"
@@ -1163,39 +1164,109 @@ async function startServer(): Promise<void> {
   const discoverMusicTracks = (): Array<{ id: string; title: string; url: string }> => {
     const tracks: Array<{ id: string; title: string; url: string }> = [];
     const seenUrls = new Set<string>();
-    const excluded = new Set(['seduction.mp3', 'seduction_6.mp3', 'thank_jan.mp3']);
+    const excluded = new Set([
+      'seduction.mp3',
+      'seduction_6.mp3',
+      'thank_jan.mp3',
+      'angle_45923f8a.mp3',
+    ]);
     try {
       if (fs.existsSync(aistudioAssetsDir)) {
-        const mp3Entries = fs
+        const rawCandidates = fs
           .readdirSync(aistudioAssetsDir, { withFileTypes: true })
+          .filter((e) => {
+            if (!e.isFile() || !/\.mp3$/i.test(e.name)) return false;
+            if (excluded.has(e.name.toLowerCase()) || e.name.includes('.tmp')) return false;
+            try {
+              return fs.statSync(path.join(aistudioAssetsDir, e.name)).size >= 200 * 1024;
+            } catch {
+              return false;
+            }
+          });
+        const isQueen = (n: string) =>
+          n.toLowerCase().includes('a_beautiful_queen_and_her_infinite_re');
+        const isRap = (n: string) => {
+          const l = n.toLowerCase();
+          return l.includes('chess_angle_rap') || l.includes('chess_angel_rap');
+        };
+        const isMeditational = (n: string) => {
+          const l = n.toLowerCase();
+          return l === 'meditational.mp3' || l.startsWith('meditational_');
+        };
+        const isLegacyAngle = (n: string) => {
+          const l = n.toLowerCase();
+          return l === 'angle_45923f8a.mp3' || /^angle_[0-9a-f]{8}\.mp3$/.test(l);
+        };
+        const dedicatedAngel = rawCandidates
           .filter(
             (e) =>
-              e.isFile() &&
-              /\.mp3$/i.test(e.name) &&
-              !excluded.has(e.name.toLowerCase()) &&
-              !e.name.includes('.tmp'),
+              !isQueen(e.name) &&
+              !isRap(e.name) &&
+              !isMeditational(e.name) &&
+              !isLegacyAngle(e.name),
           )
           .sort((a, b) => {
-            const rankDiff = musicTrackSortRank(a.name) - musicTrackSortRank(b.name);
+            const la = a.name.toLowerCase();
+            const lb = b.name.toLowerCase();
+            if (la === 'chess_angle_2f568dfd.mp3') return -1;
+            if (lb === 'chess_angle_2f568dfd.mp3') return 1;
+            if (la === 'chess_angel_theme.mp3') return -1;
+            if (lb === 'chess_angel_theme.mp3') return 1;
+            return (
+              fs.statSync(path.join(aistudioAssetsDir, b.name)).mtimeMs -
+              fs.statSync(path.join(aistudioAssetsDir, a.name)).mtimeMs
+            );
+          })[0];
+        const mp3Entries = rawCandidates
+          .filter((e) => !(dedicatedAngel && isLegacyAngle(e.name)))
+          .sort((a, b) => {
+            const rank = (name: string) => {
+              if (isQueen(name)) return 0;
+              if (isRap(name)) return 1;
+              if (dedicatedAngel && name === dedicatedAngel.name) return 2;
+              if (isLegacyAngle(name)) return 2;
+              if (isMeditational(name)) return 3;
+              return 4;
+            };
+            const rankDiff = rank(a.name) - rank(b.name);
             return rankDiff !== 0 ? rankDiff : a.name.localeCompare(b.name);
           });
+        const seenIds = new Set<string>();
         for (const entry of mp3Entries) {
-          const full = path.join(aistudioAssetsDir, entry.name);
-          const stat = fs.statSync(full);
-          if (stat.size < 200 * 1024) continue;
           const url = `/assets/aistudio/${entry.name}`;
           if (seenUrls.has(url)) continue;
+          const isChosenAngel =
+            (dedicatedAngel && entry.name === dedicatedAngel.name) ||
+            (!dedicatedAngel && isLegacyAngle(entry.name));
+          if (!isChosenAngel && entry.name.toLowerCase() === 'chess_angel_theme.mp3') {
+            continue;
+          }
+          const id = isQueen(entry.name)
+            ? 'queen_infinite_reign'
+            : isRap(entry.name)
+              ? 'chess_angel_rap'
+              : isChosenAngel
+                ? 'chess_angel_theme'
+                : isMeditational(entry.name)
+                  ? 'meditational'
+                  : entry.name
+                      .replace(/\.mp3$/i, '')
+                      .toLowerCase()
+                      .replace(/[^a-z0-9]+/g, '_')
+                      .replace(/^_+|_+$/g, '') || 'chess_angel_track';
+          if (seenIds.has(id)) continue;
           seenUrls.add(url);
-          const id = entry.name
-            .replace(/\.mp3$/i, '')
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, '_')
-            .replace(/^_+|_+$/g, '');
-          tracks.push({
-            id: id || 'chess_angel_track',
-            title: formatMusicTrackTitle(entry.name),
-            url,
-          });
+          seenIds.add(id);
+          const title = isQueen(entry.name)
+            ? "Queen's Infinite Reign"
+            : isRap(entry.name)
+              ? 'Chess Angel Rap'
+              : isChosenAngel
+                ? 'Chess Angel'
+                : isMeditational(entry.name)
+                  ? 'Meditational'
+                  : formatMusicTrackTitle(entry.name);
+          tracks.push({ id, title, url });
         }
       }
     } catch {
@@ -3577,6 +3648,239 @@ async function startServer(): Promise<void> {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.sendFile(thinkingTreeMp4Path);
   });
+
+  app.get(['/api/udo-dog-video.mp4', '/chess_angel_udo_magic.mp4'], (_req, res) => {
+    const udoVideoAbs = path.join(aistudioAssetsDir, 'builtin_dog_run.mp4');
+    if (!fs.existsSync(udoVideoAbs)) {
+      res.status(404).end();
+      return;
+    }
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="chess_angel_udo_magic.mp4"',
+    );
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.sendFile(udoVideoAbs);
+  });
+
+  app.post('/api/studio-internal/omni-clip', express.json({ limit: '256kb' }), async (req, res) => {
+    const remoteIp = String(req.socket.remoteAddress || '');
+    const isLoopback =
+      remoteIp === '127.0.0.1' || remoteIp === '::1' || remoteIp === '::ffff:127.0.0.1';
+    if (IS_PROD || !isLoopback) {
+      res.status(403).json({ error: 'Forbidden.' });
+      return;
+    }
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      res.status(500).json({ error: 'GEMINI_API_KEY is not configured on the server.' });
+      return;
+    }
+
+    try {
+      const body = (req.body || {}) as {
+        images?: string[];
+        prompt?: string;
+        duration?: string;
+        aspectRatio?: '9:16' | '16:9';
+        resolution?: '360p' | '720p' | '1080p' | '4k';
+        outName?: string;
+      };
+      const relImages = Array.isArray(body.images) ? body.images : [];
+      const prompt = String(body.prompt || '').trim();
+      const duration = String(body.duration || '5s');
+      const aspectRatio: '9:16' | '16:9' = body.aspectRatio === '16:9' ? '16:9' : '9:16';
+      const resolution: '360p' | '720p' | '1080p' | '4k' =
+        body.resolution === '360p' ||
+        body.resolution === '1080p' ||
+        body.resolution === '4k'
+          ? body.resolution
+          : '720p';
+      const outName = String(body.outName || 'omni_out.mp4').replace(/[^a-zA-Z0-9._-]/g, '_');
+
+      if (!prompt || relImages.length === 0 || relImages.length > 6) {
+        res.status(400).json({ error: 'Provide 1..6 workspace image paths and a non-empty prompt.' });
+        return;
+      }
+
+      const workRoot = path.resolve(__dirname);
+      const inputParts: Array<
+        | { type: 'image'; mime_type: string; data: string }
+        | { type: 'text'; text: string }
+      > = [];
+
+      for (const rel of relImages) {
+        const absImg = path.resolve(workRoot, rel);
+        if (!absImg.startsWith(workRoot + path.sep) || !fs.existsSync(absImg)) {
+          res.status(400).json({ error: `Image not found: ${rel}` });
+          return;
+        }
+        const ext = path.extname(absImg).toLowerCase();
+        const mimeType = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'image/png';
+        const data = fs.readFileSync(absImg).toString('base64');
+        inputParts.push({ type: 'image', mime_type: mimeType, data });
+      }
+      inputParts.push({ type: 'text', text: prompt });
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      const interaction = await ai.interactions.create(
+        {
+          model: 'gemini-omni-1.2-flash',
+          input: inputParts,
+          background: false,
+          store: false,
+          stream: false,
+          response_format: {
+            type: 'video',
+            aspect_ratio: aspectRatio,
+            duration,
+            resolution,
+          },
+        },
+        { timeout: 300000 },
+      );
+
+      let videoBase64: string | undefined = interaction.output_video?.data ?? undefined;
+      let videoUri: string | undefined = interaction.output_video?.uri ?? undefined;
+
+      if (!videoBase64 && !videoUri && Array.isArray(interaction.steps)) {
+        for (const step of interaction.steps) {
+          if (step.type === 'model_output' && Array.isArray(step.content)) {
+            for (const part of step.content) {
+              if (part.type === 'video') {
+                if (part.data) videoBase64 = part.data;
+                if (part.uri) videoUri = part.uri;
+              }
+            }
+          }
+        }
+      }
+
+      let videoBuf: Buffer | null = null;
+      if (videoBase64) {
+        videoBuf = Buffer.from(videoBase64, 'base64');
+      } else if (videoUri) {
+        const dlRes = await fetch(videoUri, {
+          headers: {
+            'x-goog-api-key': apiKey,
+            'User-Agent': 'aistudio-build',
+          },
+        });
+        if (!dlRes.ok) {
+          throw new Error(`Failed downloading video URI (${dlRes.status})`);
+        }
+        videoBuf = Buffer.from(await dlRes.arrayBuffer());
+      }
+
+      if (!videoBuf || videoBuf.length < 1024) {
+        res.status(502).json({
+          error: 'No video bytes returned by gemini-omni-1.2-flash.',
+          outputText: interaction.output_text ?? null,
+        });
+        return;
+      }
+
+      const outDir = path.resolve(workRoot, 'src', 'assets', 'udo_work');
+      fs.mkdirSync(outDir, { recursive: true });
+      const outAbs = path.join(outDir, outName);
+      fs.writeFileSync(outAbs, videoBuf);
+
+      res.json({
+        ok: true,
+        outFile: `src/assets/udo_work/${outName}`,
+        bytes: videoBuf.length,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  app.post(
+    '/api/music-track/:trackKey',
+    express.raw({ type: '*/*', limit: '60mb' }),
+    (req, res) => {
+      if (IS_PROD) {
+        res.status(403).json({ error: 'Music track replacement is only enabled in development.' });
+        return;
+      }
+      const trackKey = String(req.params.trackKey || '').toLowerCase();
+      if (
+        trackKey !== 'chess_angel_theme' &&
+        trackKey !== 'chess_angel_rap' &&
+        trackKey !== 'queen_infinite_reign' &&
+        trackKey !== 'meditational'
+      ) {
+        res.status(400).json({ error: 'Invalid music track slot.' });
+        return;
+      }
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length < 1024) {
+        res.status(400).json({ error: 'Empty or invalid audio file.' });
+        return;
+      }
+
+      const targetFileName =
+        trackKey === 'chess_angel_theme'
+          ? 'Chess_Angle_2f568dfd.mp3'
+          : trackKey === 'chess_angel_rap'
+            ? 'Chess_Angel_Rap_d8f30f60.mp3'
+            : trackKey === 'meditational'
+              ? 'meditational.mp3'
+              : 'Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3';
+
+      const tmpIn = path.join(os.tmpdir(), `music_in_${process.pid}_${Date.now()}.bin`);
+      const tmpOut = path.join(os.tmpdir(), `music_out_${process.pid}_${Date.now()}.mp3`);
+      try {
+        fs.writeFileSync(tmpIn, body);
+        fs.mkdirSync(aistudioAssetsDir, { recursive: true });
+        // If already a valid MP3, preserve lossless stream; otherwise transcode cleanly at 192k stereo
+        const codecOut = execFileSync(
+          'ffprobe',
+          ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name', '-of', 'default=noprint_wrappers=1:nokey=1', tmpIn],
+          { encoding: 'utf8', timeout: 8000 },
+        )
+          .trim()
+          .toLowerCase();
+        const dstAbs = path.join(aistudioAssetsDir, targetFileName);
+        if (codecOut === 'mp3') {
+          fs.copyFileSync(tmpIn, dstAbs);
+        } else {
+          execFileSync(
+            'ffmpeg',
+            ['-y', '-loglevel', 'error', '-i', tmpIn, '-vn', '-ac', '2', '-ar', '44100', '-c:a', 'libmp3lame', '-b:a', '192k', tmpOut],
+            { timeout: 30000 },
+          );
+          fs.copyFileSync(tmpOut, dstAbs);
+        }
+        const map = readAngelVideoMap();
+        writeAngelVideoMap(map);
+        const freshUrl = `/assets/aistudio/${targetFileName}?v=${Date.now()}`;
+        res.json({ ok: true, trackKey, url: freshUrl, map });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        res.status(500).json({ error: `Failed to save music track: ${message}` });
+      } finally {
+        try {
+          if (fs.existsSync(tmpIn)) fs.unlinkSync(tmpIn);
+          if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut);
+        } catch {
+          // ignore
+        }
+      }
+    },
+  );
 
   // Application copy protection: reject archive and installer download endpoints
   app.all(['/api/download-game', '/api/download-bat'], (_req, res) => {

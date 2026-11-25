@@ -79,6 +79,7 @@ import {
   composeHesitationCommentary,
   createAngelModalOffMessage,
   createAngelModalOnMessage,
+  createAskPromotionMessage,
   createCalcShowingMessage,
   createClockTimeoutMessage,
   createThankJanMessage,
@@ -522,6 +523,7 @@ export default function App() {
   musicEnabledRef.current = musicEnabled;
   const [musicTracks, setMusicTracks] = useState<MusicTrack[]>([...DEFAULT_MUSIC_TRACKS]);
   const [activeMusicTrackIndex, setActiveMusicTrackIndex] = useState<number>(0);
+  const [unavailableMusicIndices, setUnavailableMusicIndices] = useState<number[]>([]);
   const [angelVoice, setAngelVoice] = useState<AngelVoiceMode>('on');
   const [angelModalEnabled, setAngelModalEnabled] = useState<boolean>(true);
   const [angelVisible, setAngelVisible] = useState<boolean>(true);
@@ -646,11 +648,9 @@ export default function App() {
   const dogEventActiveRef = useRef<boolean>(false);
   const puppyIdleAccumMsRef = useRef<number>(0);
   const lastPuppyAutoAtRef = useRef<number>(0);
-  const lastIdleCritterRef = useRef<'puppy' | 'hamsters' | 'dance_stars'>(
-    (['puppy', 'hamsters', 'dance_stars'] as const)[Math.floor(Math.random() * 3)],
-  );
+  const lastIdleCritterRef = useRef<'puppy' | 'hamsters' | 'dance_stars'>('hamsters');
   const matchSpecialEventFiredRef = useRef<boolean>(false);
-  const matchSpecialTargetPlyRef = useRef<number>(6 + Math.floor(Math.random() * 5));
+  const matchSpecialTargetPlyRef = useRef<number>(4 + Math.floor(Math.random() * 4));
   const matchActiveElapsedMsRef = useRef<number>(0);
   const prevMatchScopeRef = useRef<string>('');
   const lastSpeechEndedAtRef = useRef<number>(0);
@@ -815,7 +815,26 @@ export default function App() {
     from: string;
     to: string;
     color: PieceColor;
+    isPreview?: boolean;
   } | null>(null);
+  const pendingPromotionRef = useRef(pendingPromotion);
+  pendingPromotionRef.current = pendingPromotion;
+  const promoMatchSimActiveRef = useRef(false);
+  const promoMatchSimTimersRef = useRef<number[]>([]);
+
+  const clearPromoMatchSim = useCallback(() => {
+    promoMatchSimTimersRef.current.forEach((id) => window.clearTimeout(id));
+    promoMatchSimTimersRef.current = [];
+    promoMatchSimActiveRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      promoMatchSimTimersRef.current.forEach((id) => window.clearTimeout(id));
+      promoMatchSimTimersRef.current = [];
+      promoMatchSimActiveRef.current = false;
+    };
+  }, []);
 
   // === Timeline / View Ply & Replay Theatre ===
   const [viewPly, setViewPly] = useState<number>(0);
@@ -909,6 +928,7 @@ export default function App() {
     const unsub = opponentSpeech.subscribeMusicState((snap) => {
       setMusicTracks(snap.tracks);
       setActiveMusicTrackIndex(snap.trackIndex);
+      setUnavailableMusicIndices(snap.unavailableTrackIndices);
     });
     if (musicEnabledRef.current && soundEnabledRef.current) {
       opponentSpeech.setBackgroundMusicEnabled(true, true);
@@ -955,6 +975,43 @@ export default function App() {
     }
     opponentSpeech.unlock();
     opponentSpeech.selectBackgroundMusicTrack(index, true);
+  }, []);
+
+  const handleUploadMusicTrack = useCallback(async (trackId: string, file: File): Promise<boolean> => {
+    try {
+      const buf = await file.arrayBuffer();
+      const res = await fetch(`/api/music-track/${encodeURIComponent(trackId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': file.type || 'audio/mpeg' },
+        body: buf,
+      });
+      if (!res.ok) return false;
+      const data = (await res.json()) as { ok?: boolean; url?: string };
+      if (!data.url) return false;
+      if (!soundEnabledRef.current) {
+        soundEnabledRef.current = true;
+        setSoundEnabled(true);
+        soundEngine.enabled = true;
+      }
+      if (!musicEnabledRef.current) {
+        musicEnabledRef.current = true;
+        setMusicEnabled(true);
+        try {
+          window.localStorage.setItem('chess_angel_music_enabled_v1', '1');
+        } catch {
+          // ignore storage errors
+        }
+      }
+      opponentSpeech.unlock();
+      const tracks = opponentSpeech.getMusicTracks();
+      const slotIdx = tracks.findIndex((t) => t.id === trackId);
+      if (slotIdx >= 0) {
+        opponentSpeech.updateMusicTrackSlotUrl(slotIdx, data.url, true, true);
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }, []);
   const opponentMessageRef = useRef<OpponentMessage | null>(opponentMessage);
   opponentMessageRef.current = opponentMessage;
@@ -1276,6 +1333,33 @@ export default function App() {
     saveCurrentGameToArchive();
     exportSavedGameJson(entry);
   }, [isReplayMode, gameMode, buildCurrentSavedGameSnapshot, saveCurrentGameToArchive]);
+
+  const handleExportAngelUdoVideo = useCallback(async () => {
+    const downloadName = 'chess_angel_udo_magic.mp4';
+    const candidateUrls = ['/api/udo-dog-video.mp4', '/assets/aistudio/builtin_dog_run.mp4'];
+    for (const srcUrl of candidateUrls) {
+      try {
+        const res = await fetch(srcUrl, { cache: 'no-store' });
+        if (!res.ok) continue;
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (ct.includes('text/html')) continue;
+        const buf = await res.arrayBuffer();
+        if (buf.byteLength < 1024) continue;
+        const blob = new Blob([buf], { type: 'video/mp4' });
+        const blobUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = downloadName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
+        return;
+      } catch {
+        // try next fallback URL
+      }
+    }
+  }, []);
 
   // Auto-save completed games to archive
   useEffect(() => {
@@ -1777,10 +1861,31 @@ export default function App() {
     [gameMode, activeRoom, submitTacticalMove, commitLocalMove],
   );
 
+  const promptPlayerPawnPromotion = useCallback(
+    (from: string, to: string, color: PieceColor) => {
+      lastMoveAnimHintRef.current = { from, to };
+      setSelectedSquare(null);
+      setPendingPromotion({ from, to, color });
+      if (angelVoiceRef.current === 'on') {
+        const askMsg = createAskPromotionMessage(to, color);
+        prepareHumanCommentaryPlayback(askMsg.clipId, `msg:${askMsg.id}`);
+        if (angelVisibleRef.current) {
+          setOpponentMessage(askMsg);
+        }
+        opponentSpeech.unlock();
+        opponentSpeech.playClip(askMsg.clipId, angelVoiceRef.current, soundEnabledRef.current);
+      }
+    },
+    [],
+  );
+
   // === Click Handler from 3D Raycaster ===
   const handleSquareClick = useCallback(
     (square: string) => {
       if (!canInteractWithBoard) return;
+      if (promoMatchSimActiveRef.current) {
+        clearPromoMatchSim();
+      }
 
       if (selectedSquare) {
         if (selectedSquare === square) {
@@ -1791,7 +1896,7 @@ export default function App() {
         if (matchingMoves.length > 0) {
           const isPromo = matchingMoves.some((m) => Boolean(m.promotion));
           if (isPromo) {
-            setPendingPromotion({ from: selectedSquare, to: square, color: displayedTurn });
+            promptPlayerPawnPromotion(selectedSquare, square, displayedTurn);
             return;
           }
           submitMove(selectedSquare, square);
@@ -1812,25 +1917,27 @@ export default function App() {
       legalMovesForSelected,
       displayedTurn,
       displayedChess,
+      promptPlayerPawnPromotion,
       submitMove,
+      clearPromoMatchSim,
     ],
   );
 
   const squareClickRef = useRef(handleSquareClick);
   squareClickRef.current = handleSquareClick;
 
-  // Subscribe to Chess Angel voice state and trigger warm startup greeting
+  // Subscribe to Chess Angel voice state and play standard welcome greeting on startup
   useEffect(() => {
     const unsubState = opponentSpeech.subscribe(setVoiceState);
     if (!hasPlayedWelcomeRef.current) {
       hasPlayedWelcomeRef.current = true;
       if (opponentMessage) {
-        opponentSpeech.playClip(opponentMessage.clipId, 'on', true);
+        opponentSpeech.playClip(opponentMessage.clipId, angelVoice, soundEnabled);
       } else {
         const intro = createIntroMessage();
         if (intro) {
           setOpponentMessage(intro);
-          opponentSpeech.playClip(intro.clipId, 'on', true);
+          opponentSpeech.playClip(intro.clipId, angelVoice, soundEnabled);
         }
       }
     }
@@ -1980,17 +2087,29 @@ export default function App() {
     const hint = lastMoveAnimHintRef.current;
     lastMoveAnimHintRef.current = null;
 
+    const activePromoStep =
+      pendingPromotion && !pendingPromotion.isPreview && isViewingLatest
+        ? {
+            from: pendingPromotion.from,
+            to: pendingPromotion.to,
+            color: pendingPromotion.color,
+          }
+        : null;
+
     scene.syncState(
       {
         fen: displayedFen,
         selectedSquare,
         legalTargets,
-        lastMove: lastDisplayedMove,
+        lastMove: activePromoStep
+          ? { from: activePromoStep.from, to: activePromoStep.to }
+          : lastDisplayedMove,
         checkSquare: checkedKingSquare,
         bestMoveArrow,
         suggestionArrows: coachArrows,
         speechHighlights: activeSpeechHighlights,
         showCoordinates,
+        pendingPromotionStep: activePromoStep,
       },
       hint,
     );
@@ -2006,6 +2125,8 @@ export default function App() {
     coachArrows,
     activeSpeechHighlights,
     showCoordinates,
+    pendingPromotion,
+    isViewingLatest,
   ]);
 
   const handleForcedIdleCueReached = useCallback(() => {
@@ -2062,8 +2183,10 @@ export default function App() {
       puppyIdleAccumMsRef.current = 0;
 
       const launch3DPuppy = () => {
-        const modalEl = document.querySelector('[data-angel-portrait-modal="true"]');
-        const rect = modalEl ? modalEl.getBoundingClientRect() : null;
+        const portraitEl =
+          document.querySelector('[data-angel-portrait-canvas="true"]') ??
+          document.querySelector('[data-angel-portrait-modal="true"]');
+        const rect = portraitEl ? portraitEl.getBoundingClientRect() : null;
         sceneRef.current?.triggerWildDogRun(rect, soundEnabledRef.current);
       };
 
@@ -2212,8 +2335,10 @@ export default function App() {
       setCoachArrows([]);
       setAngelModalEnabled(true);
       setAngelVisible(true);
-      opponentSpeech.stop();
     }
+
+    // Always silence any active speech clip first so voiceState cannot immediately cancel Dance with Stars
+    opponentSpeech.stop();
 
     const snap = getAngelVideoOverridesSnapshot();
     const danceUrl =
@@ -2305,6 +2430,8 @@ export default function App() {
         calcPreviewActiveRef.current ||
         awaitingDistractionModalRef.current ||
         treeActiveOnScreenRef.current ||
+        promoMatchSimActiveRef.current ||
+        pendingPromotionRef.current !== null ||
         holdBotUntilRef.current > now;
 
       // 2. Local / Engine Chess Clock Simulation (only triggers React state on whole-second changes)
@@ -2446,7 +2573,7 @@ export default function App() {
         prevMatchScopeRef.current = matchScopeKey;
         matchSpecialEventFiredRef.current = false;
         matchActiveElapsedMsRef.current = 0;
-        matchSpecialTargetPlyRef.current = 6 + Math.floor(Math.random() * 5);
+        matchSpecialTargetPlyRef.current = 4 + Math.floor(Math.random() * 4);
       } else if (!prevMatchScopeRef.current) {
         prevMatchScopeRef.current = matchScopeKey;
       }
@@ -2473,6 +2600,7 @@ export default function App() {
             dogVideoClearTimerRef.current = null;
           }
           dogEventActiveRef.current = false;
+          setDanceStarsActive(false);
           setPreviewIdleUrl(null);
         }
       }
@@ -2530,19 +2658,22 @@ export default function App() {
               snap.angelVisible &&
               Boolean(getAngelDanceStarsVideoUrl());
 
-            // Guaranteed per-match special event trigger (fires once per active match around ply 6–10 or 36s of play)
+            // Guaranteed active-match special event trigger (fires around ply 4–7 / 28s, then every ~9 plies)
+            const cooldownOk =
+              lastPuppyAutoAtRef.current === 0 || now - lastPuppyAutoAtRef.current >= 34_000;
             const guaranteedMatchDue =
               isWaitingLongInMatch &&
-              !matchSpecialEventFiredRef.current &&
-              (currentMovesLen >= matchSpecialTargetPlyRef.current ||
-                matchActiveElapsedMsRef.current >= 36_000) &&
+              cooldownOk &&
+              ((!matchSpecialEventFiredRef.current &&
+                (currentMovesLen >= matchSpecialTargetPlyRef.current ||
+                  matchActiveElapsedMsRef.current >= 28_000)) ||
+                (matchSpecialEventFiredRef.current &&
+                  currentMovesLen >= matchSpecialTargetPlyRef.current)) &&
               now - lastSpeechEndedAtRef.current >= 1_600;
 
             // Standard idle trigger (waiting before match or thinking long during a match)
-            const thresholdMs = isWaitingForMatch ? 18_000 : 38_000;
-            const cooldownOk =
-              lastPuppyAutoAtRef.current === 0 || now - lastPuppyAutoAtRef.current >= 55_000;
-            const quietSinceSpeechOk = now - lastSpeechEndedAtRef.current >= 3_500;
+            const thresholdMs = isWaitingForMatch ? 16_000 : 30_000;
+            const quietSinceSpeechOk = now - lastSpeechEndedAtRef.current >= 3_200;
             const idleTriggerDue =
               cooldownOk && quietSinceSpeechOk && puppyIdleAccumMsRef.current >= thresholdMs;
 
@@ -2551,16 +2682,38 @@ export default function App() {
               puppyIdleAccumMsRef.current = 0;
               if (isWaitingLongInMatch) {
                 matchSpecialEventFiredRef.current = true;
+                matchSpecialTargetPlyRef.current =
+                  currentMovesLen + 8 + Math.floor(Math.random() * 5);
               }
-              // Rotate playfully through Fluffy White Puppy, 3D Campbell's Mini Hamsters Chase, and Dance with Stars
-              if (canPlayDanceStars && lastIdleCritterRef.current === 'hamsters') {
-                lastIdleCritterRef.current = 'dance_stars';
+              // Equal 3-way rotation: Dance with Stars -> Fluffy White Puppy -> 3D Mini Hamsters -> Dance with Stars
+              const order: Array<'dance_stars' | 'puppy' | 'hamsters'> = [
+                'dance_stars',
+                'puppy',
+                'hamsters',
+              ];
+              const lastIdx = order.indexOf(lastIdleCritterRef.current);
+              let chosen: 'dance_stars' | 'puppy' | 'hamsters' = 'hamsters';
+              for (let step = 1; step <= 3; step++) {
+                const candidate = order[(lastIdx + step) % 3];
+                if (candidate === 'dance_stars' && canPlayDanceStars) {
+                  chosen = 'dance_stars';
+                  break;
+                }
+                if (candidate === 'puppy' && canPlayPuppy) {
+                  chosen = 'puppy';
+                  break;
+                }
+                if (candidate === 'hamsters') {
+                  chosen = 'hamsters';
+                  break;
+                }
+              }
+              lastIdleCritterRef.current = chosen;
+              if (chosen === 'dance_stars') {
                 triggerDanceWithStarsEventRef.current({ fromStudio: false });
-              } else if (canPlayPuppy && lastIdleCritterRef.current !== 'puppy') {
-                lastIdleCritterRef.current = 'puppy';
+              } else if (chosen === 'puppy') {
                 triggerFluffyPuppyEventRef.current({ playVideo: true, fromStudio: false });
               } else {
-                lastIdleCritterRef.current = 'hamsters';
                 triggerHamsterChaseEventRef.current({ fromStudio: false });
               }
             }
@@ -2701,7 +2854,7 @@ export default function App() {
         if (msg.requestId !== botReqIdRef.current) return;
         if (msg.treeEdges.length > 0) {
           latestTreeEdgesRef.current = msg.treeEdges;
-          if (showSearchTreeRef.current) {
+          if (showSearchTreeRef.current && simSnapshotRef.current.localMovesLen > 0) {
             treeActiveOnScreenRef.current = true;
             setTreeStatusMode('developing');
             sceneRef.current?.updateDevelopingSearchTree(msg.treeEdges);
@@ -2736,6 +2889,7 @@ export default function App() {
               : { isFork: false, shouldWarn: false };
 
           if (
+            snap.localMovesLen > 0 &&
             !forkPreview.isFork &&
             showSearchTreeRef.current &&
             msg.report?.treeEdges &&
@@ -2851,7 +3005,16 @@ export default function App() {
 
   // Trigger Chess Angel's mathematical routine move when it's her turn (respecting undo-offer window)
   useEffect(() => {
-    if (gameMode !== 'engine' || localResult || !isViewingLatest || calcPreview !== null) return;
+    if (
+      gameMode !== 'engine' ||
+      localResult ||
+      !isViewingLatest ||
+      calcPreview !== null ||
+      pendingPromotion !== null ||
+      promoMatchSimActiveRef.current
+    ) {
+      return;
+    }
     const chess = new Chess(localFen);
     const turn = chess.turn() as PieceColor;
     const aiColor: PieceColor = humanColorActual === 'w' ? 'b' : 'w';
@@ -2869,7 +3032,7 @@ export default function App() {
     if (!worker) return;
 
     setIsThinkingAi(true);
-    if (showSearchTreeRef.current) {
+    if (showSearchTreeRef.current && localMoves.length > 0) {
       setTreeStatusMode('developing');
     }
     const reqId = ++botReqIdRef.current;
@@ -2894,6 +3057,7 @@ export default function App() {
     engineLevel,
     isViewingLatest,
     calcPreview,
+    pendingPromotion,
     botHoldEpoch,
   ]);
 
@@ -3291,6 +3455,7 @@ export default function App() {
       autoSavedSessionRef.current = null;
       clockTimeoutAnnouncedForIdRef.current = null;
       currentMatchIdRef.current = `game_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      clearPromoMatchSim();
       const ms = TIME_CONTROLS[tc].initialMs;
       localClockMsRef.current = { w: ms, b: ms };
       lastRenderedLocalSecRef.current = {
@@ -3298,8 +3463,9 @@ export default function App() {
         b: Math.ceil(ms / 1000),
       };
       setLocalClocks({ w: ms, b: ms });
+      setBotHoldEpoch((n) => n + 1);
     },
-    [clearTacticalTimers, clearForkArrowsTimer, flushPendingBotMove],
+    [clearTacticalTimers, clearForkArrowsTimer, flushPendingBotMove, clearPromoMatchSim],
   );
 
   const handleStartEngineGame = useCallback(
@@ -3377,7 +3543,102 @@ export default function App() {
     resetLocalState(timeControl);
   }, [resetLocalState, timeControl]);
 
+  const handleSimulatePawnToEighthRank = useCallback(() => {
+    if (activeRoom) {
+      mpClientRef.current?.leaveRoom();
+      setActiveRoom(null);
+      setMyRoomRole(null);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('room');
+      window.history.replaceState({}, '', url.toString());
+    }
+
+    clearPromoMatchSim();
+    opponentSpeech.unlock();
+    setHumanColorPref('w');
+    setHumanColorActual('w');
+    setGameMode('engine');
+    resetLocalState(timeControl);
+    setAngelModalEnabled(true);
+    setAngelVisible(true);
+    setActiveTab('play');
+    setDockCollapsed(true);
+    setCameraPreset('white');
+    sceneRef.current?.setCameraPreset('white');
+
+    // Legal 8-ply Scandinavian-gambit breakthrough culminating with White's pawn marching onto a8 (8th rank!)
+    const scriptedPlies: ReadonlyArray<{ from: string; to: string }> = [
+      { from: 'e2', to: 'e4' }, // 1. e4
+      { from: 'd7', to: 'd5' }, // 1... d5
+      { from: 'e4', to: 'd5' }, // 2. exd5
+      { from: 'c7', to: 'c6' }, // 2... c6
+      { from: 'd5', to: 'c6' }, // 3. dxc6
+      { from: 'g8', to: 'f6' }, // 3... Nf6
+      { from: 'c6', to: 'b7' }, // 4. cxb7 (White pawn reaches 7th rank)
+      { from: 'b8', to: 'c6' }, // 4... Nc6
+    ];
+
+    promoMatchSimActiveRef.current = true;
+    const simChess = new Chess(INITIAL_FEN);
+    const builtMoves: MoveRecord[] = [];
+    const stepMs = 560;
+    const initialDelayMs = 380;
+
+    scriptedPlies.forEach((step, idx) => {
+      const tid = window.setTimeout(() => {
+        if (!promoMatchSimActiveRef.current) return;
+        const res = simChess.move({ from: step.from, to: step.to });
+        if (!res) return;
+        const nextFen = simChess.fen();
+        const rec: MoveRecord = {
+          ply: builtMoves.length + 1,
+          san: res.san,
+          uci: `${res.from}${res.to}`,
+          from: res.from,
+          to: res.to,
+          color: res.color as PieceColor,
+          piece: res.piece as PieceType,
+          captured: res.captured as PieceType | undefined,
+          fen: nextFen,
+          timestamp: Date.now(),
+        };
+        builtMoves.push(rec);
+        lastMoveAnimHintRef.current = { from: res.from, to: res.to };
+        setLocalMoves([...builtMoves]);
+        setLocalFen(nextFen);
+        setViewPly(builtMoves.length);
+        setSelectedSquare(null);
+        turnStartedAtRef.current = performance.now();
+        if (soundEnabledRef.current) {
+          if (res.captured) soundEngine.playCapture();
+          else soundEngine.playMove();
+        }
+      }, initialDelayMs + idx * stepMs);
+      promoMatchSimTimersRef.current.push(tid);
+    });
+
+    // Final arrival step: White's pawn on b7 advances onto a8 (the 8th rank!) and opens the Pawn Promotion prompt
+    const finalTid = window.setTimeout(() => {
+      if (!promoMatchSimActiveRef.current) return;
+      promoMatchSimActiveRef.current = false;
+      promoMatchSimTimersRef.current = [];
+      turnStartedAtRef.current = performance.now();
+      if (soundEnabledRef.current) {
+        soundEngine.playCapture();
+      }
+      promptPlayerPawnPromotion('b7', 'a8', 'w');
+    }, initialDelayMs + scriptedPlies.length * stepMs + 60);
+    promoMatchSimTimersRef.current.push(finalTid);
+  }, [
+    activeRoom,
+    clearPromoMatchSim,
+    resetLocalState,
+    timeControl,
+    promptPlayerPawnPromotion,
+  ]);
+
   const handleUndoLocal = useCallback(() => {
+    clearPromoMatchSim();
     if (gameMode === 'multiplayer' || isReplayMode || localMoves.length === 0) {
       return;
     }
@@ -4259,6 +4520,7 @@ export default function App() {
         window.history.replaceState({}, '', url.toString());
       }
 
+      clearPromoMatchSim();
       clearTacticalTimers();
       casualSessionSnapshotRef.current = null;
       botReqIdRef.current++;
@@ -4450,6 +4712,7 @@ export default function App() {
   // === Tactical Training Mode & Casual Play Session Switchers ===
   const loadPuzzleOntoBoard = useCallback(
     (puzzle: TacticalPuzzle) => {
+      clearPromoMatchSim();
       clearTacticalTimers();
       clearForkArrowsTimer();
       botReqIdRef.current++;
@@ -4946,7 +5209,6 @@ export default function App() {
           onOpenReplayCurrent={handleOpenReplayCurrent}
           canSaveCurrent={activeMoves.length > 0 && !isReplayMode}
           alreadySaved={Boolean(currentFingerprint && savedGameFingerprints.has(currentFingerprint))}
-          onEnterTacticalTraining={() => handleStartTacticalTraining()}
         />
       )}
 
@@ -5045,6 +5307,7 @@ export default function App() {
         onToggleMusic={handleToggleMusic}
         musicTracks={musicTracks}
         activeMusicTrackIndex={activeMusicTrackIndex}
+        unavailableMusicIndices={unavailableMusicIndices}
         onSelectMusicTrack={handleSelectMusicTrack}
         onResetAngelMessages={handleResetAngelMessages}
         angelVoice={angelVoice}
@@ -5129,7 +5392,16 @@ export default function App() {
         currentPgn={currentPgn}
         onPlayEngineMove={(uci) => {
           if (uci.length < 4 || !canInteractWithBoard) return;
-          submitMove(uci.slice(0, 2), uci.slice(2, 4), (uci.slice(4, 5) || 'q') as PieceType);
+          const from = uci.slice(0, 2);
+          const to = uci.slice(2, 4);
+          if (uci.length === 4) {
+            const p = displayedChess.get(from as Square);
+            if (p && p.type === 'p' && (to[1] === '8' || to[1] === '1')) {
+              promptPlayerPawnPromotion(from, to, displayedTurn);
+              return;
+            }
+          }
+          submitMove(from, to, (uci.slice(4, 5) || 'q') as PieceType);
         }}
         isReplayMode={isReplayMode}
         activeReplayGame={activeReplayGame}
@@ -5168,14 +5440,16 @@ export default function App() {
         justSaved={justSaved}
         onOpenLoadDrawer={() => announceControlEvent(createLoadGameMessage())}
         onTitleTribute={handleTriggerCreatorTribute}
+        onSimulatePawnPromotion={handleSimulatePawnToEighthRank}
+        onExportAngelUdoVideo={handleExportAngelUdoVideo}
         onStartTacticalTraining={handleStartTacticalTraining}
         onReturnToCasualPlay={handleReturnToCasualPlay}
         activePuzzle={activePuzzle}
         tacticalStats={tacticalStats}
         tacticalThemeFilter={tacticalThemeFilter}
         onChangeTacticalThemeFilter={setTacticalThemeFilter}
-        tacticalDifficultyFilter={tacticalDifficultyFilter}
         onChangeTacticalDifficultyFilter={setTacticalDifficultyFilter}
+        tacticalDifficultyFilter={tacticalDifficultyFilter}
         onResetTacticalStats={() => setTacticalStats(resetTacticalStats())}
         onTacticalHint={handleTacticalHint}
         onTacticalRetry={handleTacticalRetry}
@@ -5183,16 +5457,34 @@ export default function App() {
         onTacticalNextPuzzle={handleTacticalNextPuzzle}
       />
 
-      {/* Pawn Promotion Chooser Modal */}
-      {pendingPromotion && (
+      {/* Fallback Pawn Promotion Chooser Modal (only when Chess Angel modal is hidden) */}
+      {pendingPromotion && !angelVisible && (
         <PromotionModal
           color={pendingPromotion.color}
           onSelect={(piece) => {
-            const { from, to } = pendingPromotion;
+            const { from, to, isPreview } = pendingPromotion;
             setPendingPromotion(null);
-            submitMove(from, to, piece);
+            opponentSpeech.stop();
+            setOpponentMessage((prev) =>
+              prev?.clipId.startsWith('ask_promotion_') ? null : prev,
+            );
+            if (!isPreview) {
+              submitMove(from, to, piece);
+            }
           }}
-          onCancel={() => setPendingPromotion(null)}
+          onCancel={() => {
+            if (!pendingPromotion.isPreview) {
+              lastMoveAnimHintRef.current = {
+                from: pendingPromotion.to,
+                to: pendingPromotion.from,
+              };
+            }
+            setPendingPromotion(null);
+            opponentSpeech.stop();
+            setOpponentMessage((prev) =>
+              prev?.clipId.startsWith('ask_promotion_') ? null : prev,
+            );
+          }}
         />
       )}
 
@@ -5207,6 +5499,33 @@ export default function App() {
         powerSaveMode={powerSaveMode}
         inTacticalTraining={gameMode === 'tactical'}
         onExitTacticalTraining={handleReturnToCasualPlay}
+        pendingPromotion={pendingPromotion}
+        onSelectPromotion={(piece) => {
+          if (!pendingPromotion) return;
+          const { from, to, isPreview } = pendingPromotion;
+          setPendingPromotion(null);
+          opponentSpeech.stop();
+          setOpponentMessage((prev) =>
+            prev?.clipId.startsWith('ask_promotion_') ? null : prev,
+          );
+          if (!isPreview) {
+            submitMove(from, to, piece);
+          }
+        }}
+        onCancelPromotion={() => {
+          if (pendingPromotion && !pendingPromotion.isPreview) {
+            lastMoveAnimHintRef.current = {
+              from: pendingPromotion.to,
+              to: pendingPromotion.from,
+            };
+          }
+          setPendingPromotion(null);
+          opponentSpeech.stop();
+          setOpponentMessage((prev) =>
+            prev?.clipId.startsWith('ask_promotion_') ? null : prev,
+          );
+        }}
+        onNewMatch={handlePrimaryHeaderAction}
         calcPreview={calcPreview}
         treeBrowser={treeBrowser}
         idlePreviewNonce={idlePreviewNonce}
@@ -5500,6 +5819,14 @@ export default function App() {
                   nodes:
                     validReport?.nodes ?? analysis?.nodes ?? Math.max(64, sims.length * 32),
                 });
+              } else if (caseId === 'ask_promotion') {
+                setPendingPromotion({
+                  from: humanColorActual === 'w' ? 'e7' : 'e2',
+                  to: humanColorActual === 'w' ? 'e8' : 'e1',
+                  color: humanColorActual,
+                  isPreview: true,
+                });
+                previewMathSummary = 'Pawn reached 8th Rank · Choose Queen, Rook, Bishop, or Knight';
               } else if (caseId?.startsWith('wrong_')) {
                 const alts = resolveCandidateMovesForFen(previewFen, analysis, 2);
                 previewAction = {
@@ -5516,6 +5843,7 @@ export default function App() {
                 text,
                 tag,
                 tone:
+                  caseId === 'ask_promotion' ||
                   caseId === 'hint_shown' ||
                   caseId === 'hesitate_hint' ||
                   caseId === 'undo_done' ||
@@ -5571,6 +5899,11 @@ export default function App() {
             onTriggerDanceStarsEvent={() => {
               triggerDanceWithStarsEvent({ fromStudio: true });
             }}
+            onSimulateEighthRow={handleSimulatePawnToEighthRank}
+            musicTracks={musicTracks}
+            unavailableMusicIndices={unavailableMusicIndices}
+            onSelectMusicTrack={handleSelectMusicTrack}
+            onUploadMusicTrack={handleUploadMusicTrack}
           />
         </Suspense>
       )}

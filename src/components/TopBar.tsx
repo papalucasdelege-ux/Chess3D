@@ -25,7 +25,6 @@ interface TopBarProps {
   onOpenReplayCurrent: () => void;
   canSaveCurrent: boolean;
   alreadySaved: boolean;
-  onEnterTacticalTraining?: () => void;
 }
 
 export function formatClock(ms: number): string {
@@ -73,8 +72,8 @@ export function TopBar({
   onOpenReplayCurrent,
   canSaveCurrent,
   alreadySaved,
-  onEnterTacticalTraining,
 }: TopBarProps) {
+
   return (
     <div className="fixed top-1 sm:top-2.5 left-0 right-0 z-30 pointer-events-none flex flex-col items-center px-1.5 sm:px-3">
       {/* Unboxed Transparent Chess Clock, Player Names & Chess Angel Candidate Readout */}
@@ -202,22 +201,6 @@ export function TopBar({
             aria-hidden="true"
           />
         </div>
-
-        {onEnterTacticalTraining && !isReplayMode && (
-          <>
-            <span className="text-white/30" aria-hidden="true">
-              ·
-            </span>
-            <button
-              type="button"
-              onClick={onEnterTacticalTraining}
-              title="Switch from Casual Play to Tactical Training puzzles"
-              className="pointer-events-auto px-2 py-0.5 rounded bg-[#141923]/90 hover:bg-[#1e2636] border border-[#d6ae63]/40 text-[11px] font-medium text-[#ebd096] hover:text-[#fff3d6] transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-[#e3be78]"
-            >
-              Tactical Training
-            </button>
-          </>
-        )}
       </div>
 
       {/* Compact Game Over Action Strip */}
@@ -261,3 +244,4 @@ export function TopBar({
     </div>
   );
 }
+

@@ -137,6 +137,7 @@ export const MULTI_SLOT_CASE_IDS: ReadonlySet<CommentaryCaseId> = new Set<Commen
   'warn_fork_2step',
   'warn_double',
   'undo_done',
+  'ask_promotion',
 ]);
 
 export const DEFAULT_VIDEO_MAX_PLAYS: Readonly<Record<string, number>> = {
@@ -151,6 +152,7 @@ export const DEFAULT_VIDEO_PLAY_TO_END: Readonly<Record<string, boolean>> = {
   'case:angel_modal_on': true,
   'case:angel_modal_off': true,
   'case:thank_jan': true,
+  'case:ask_promotion': true,
   'special:dog_run': true,
   'special:dance_stars': true,
   'case:tree_browse': false,
@@ -362,45 +364,48 @@ export const VOICE_CLIP_DURATION_SEC: Record<VoiceClipId, number> = {
   wrong_walk_mate_v1: 7.6,
   wrong_walk_mate_v2: 5.9,
   wrong_walk_mate_v3: 6.1,
-  new_match_v1: 7.7,
-  new_match_v2: 6.4,
-  new_match_v3: 4.0,
-  resign_v1: 8.4,
-  resign_v2: 6.7,
-  resign_v3: 6.0,
+  new_match_v1: 6.7,
+  new_match_v2: 7.1,
+  new_match_v3: 3.7,
+  resign_v1: 7.5,
+  resign_v2: 6.3,
+  resign_v3: 6.8,
   save_game_v1: 9.0,
-  save_game_v2: 6.4,
-  save_game_v3: 5.5,
-  load_game_v1: 8.3,
-  load_game_v2: 6.3,
-  load_game_v3: 5.9,
-  level_beginner_v1: 8.2,
+  save_game_v2: 6.1,
+  save_game_v3: 4.7,
+  load_game_v1: 7.0,
+  load_game_v2: 5.3,
+  load_game_v3: 5.1,
+  level_beginner_v1: 7.5,
   level_beginner_v2: 6.3,
-  level_beginner_v3: 4.0,
-  level_intermediate_v1: 7.2,
-  level_intermediate_v2: 6.1,
-  level_intermediate_v3: 5.0,
-  level_advanced_v1: 8.7,
-  level_advanced_v2: 7.3,
-  level_advanced_v3: 4.9,
-  level_master_v1: 8.4,
-  level_master_v2: 6.0,
-  level_master_v3: 4.9,
-  level_grandmaster_v1: 9.2,
-  level_grandmaster_v2: 7.1,
-  level_grandmaster_v3: 4.1,
-  clock_timeout_v1: 9.7,
-  clock_timeout_v2: 9.5,
+  level_beginner_v3: 3.7,
+  level_intermediate_v1: 6.9,
+  level_intermediate_v2: 5.2,
+  level_intermediate_v3: 4.2,
+  level_advanced_v1: 7.8,
+  level_advanced_v2: 6.0,
+  level_advanced_v3: 4.4,
+  level_master_v1: 7.7,
+  level_master_v2: 6.1,
+  level_master_v3: 4.5,
+  level_grandmaster_v1: 8.2,
+  level_grandmaster_v2: 7.6,
+  level_grandmaster_v3: 3.8,
+  clock_timeout_v1: 8.5,
+  clock_timeout_v2: 8.0,
   clock_timeout_v3: 6.1,
-  angel_modal_on_v1: 5.7,
-  angel_modal_on_v2: 5.7,
-  angel_modal_on_v3: 3.6,
-  angel_modal_off_v1: 4.6,
-  angel_modal_off_v2: 4.6,
-  angel_modal_off_v3: 3.1,
+  angel_modal_on_v1: 5.9,
+  angel_modal_on_v2: 5.3,
+  angel_modal_on_v3: 3.8,
+  angel_modal_off_v1: 6.7,
+  angel_modal_off_v2: 6.4,
+  angel_modal_off_v3: 4.8,
   thank_jan_v1: 8.9,
   thank_jan_v2: 8.9,
   thank_jan_v3: 8.9,
+  ask_promotion_v1: 8.9,
+  ask_promotion_v2: 8.0,
+  ask_promotion_v3: 6.3,
 };
 
 /**
@@ -520,6 +525,9 @@ export const ACOUSTIC_CLIP_CUE_WORDS: Partial<
   angel_modal_off_v1: { point_me: 0.3, point_you: 2.95 },
   angel_modal_off_v2: { point_me: 0.2, point_you: 1.7 },
   angel_modal_off_v3: { point_you: 2.12 },
+  ask_promotion_v1: { point_me: 4.5, point_you: 5.9 },
+  ask_promotion_v2: { point_me: 4.1 },
+  ask_promotion_v3: { point_me: 2.3, point_you: 3.3 },
 };
 
 /**
@@ -562,6 +570,7 @@ export const ANGEL_CASE_VIDEO_MAP: Partial<Record<CommentaryCaseId, string>> = {
   level_grandmaster: '/assets/aistudio/builtin_level_grandmaster.mp4',
   clock_timeout: '/assets/aistudio/builtin_clock_timeout.mp4',
   promotion: '/assets/aistudio/builtin_promotion.mp4',
+  ask_promotion: '/assets/aistudio/builtin_promotion.mp4',
   angel_modal_on: '/assets/aistudio/angel_case_angel_modal_on.mp4',
   angel_modal_off: '/assets/aistudio/angel_case_angel_modal_off.mp4',
   hesitate_hint: '/assets/aistudio/builtin_hesitate_hint.mp4',
@@ -582,8 +591,10 @@ export const ANGEL_LOCKED_IDLE_VARIANTS: Readonly<Record<string, string>> = {
   idle_8: '/assets/aistudio/builtin_idle_8.mp4',
 };
 
+const { ask_promotion: _unlockedAskPromotionFallback, ...LOCKED_BASE_CASES } = ANGEL_CASE_VIDEO_MAP;
+
 export const ANGEL_LOCKED_CASES: Readonly<Partial<Record<AnyCaseSlotKey, string>>> = {
-  ...ANGEL_CASE_VIDEO_MAP,
+  ...LOCKED_BASE_CASES,
   seduction_2: '/assets/aistudio/angel_case_seduction_2.mp4',
   seduction_3: '/assets/aistudio/angel_case_seduction_3.mp4',
   seduction_4: '/assets/aistudio/builtin_seduction_4.mp4',
@@ -591,6 +602,7 @@ export const ANGEL_LOCKED_CASES: Readonly<Partial<Record<AnyCaseSlotKey, string>
   seduction_6: '/assets/aistudio/builtin_seduction_6.mp4',
   warn_fork_2step_2: '/assets/aistudio/angel_case_warn_fork_2step_2.mp4',
   undo_done_2: '/assets/aistudio/builtin_undo_done_2.mp4',
+  ask_promotion_2: '/assets/aistudio/angel_case_ask_promotion_2.mp4',
 };
 
 export const ANGEL_LOCKED_ESCAPES: Readonly<Partial<Record<AngelEscapeSlotKey, string>>> = {
@@ -630,7 +642,8 @@ const CASE_TO_GROUP: Record<CommentaryCaseId, AngelExpressionGroup> = {
   wrong_positional: 'distracted',
   wrong_better_alt: 'distracted',
 
-  // 4. Encouraging Hints & Rewind Guidance
+  // 4. Encouraging Hints, Pawn Promotion Choice & Rewind Guidance
+  ask_promotion: 'helpful',
   hesitate_hint: 'helpful',
   hint_shown: 'helpful',
   undo_done: 'helpful',
@@ -765,7 +778,8 @@ export const ANGEL_VIDEO_STUDIO_GROUPS: AngelStudioGroupSpec[] = [
     'wrong_positional',
     'wrong_better_alt',
   ]),
-  makeGroupSpec('helpful', 4, 'Encouraging Hints & Rewind Guidance', [
+  makeGroupSpec('helpful', 4, 'Encouraging Hints, Pawn Promotion Choice & Rewind Guidance', [
+    'ask_promotion',
     'hesitate_hint',
     'hint_shown',
     'undo_done',
@@ -823,7 +837,7 @@ const LIP_SYNC_STORAGE_KEY = 'chess_angel_lipsync_rules_v1';
 const CASE_CUE_STORAGE_KEY = 'chess_angel_case_cues_v1';
 const VIDEO_MAX_PLAYS_STORAGE_KEY = 'chess_angel_video_max_plays_v2';
 const VIDEO_PLAY_TO_END_STORAGE_KEY = 'chess_angel_video_play_to_end_v2';
-const DOG_RUN_JUMP_SEC_STORAGE_KEY = 'chess_angel_dog_run_jump_sec_v1';
+const DOG_RUN_JUMP_SEC_STORAGE_KEY = 'chess_angel_dog_run_jump_sec_v3';
 
 // In-memory Video Studio unlock flag (unlocked by 5-click gesture on game title — hidden from regular players)
 let studioSessionUnlocked = false;
@@ -1128,12 +1142,13 @@ let runtimeOverrides: AngelVideoMapPayload = {
     'case:hesitate_hint': true,
     'case:resign': true,
     'case:thank_jan': true,
+    'case:ask_promotion': true,
     'special:dog_run': true,
     'special:dance_stars': true,
     ...readStoredVideoPlayToEndFallback(),
   },
   dogRunVideo: ANGEL_DOG_RUN_VIDEO_SRC,
-  dogRunJumpSec: 4.2,
+  dogRunJumpSec: 6.2,
   danceStarsVideo: ANGEL_DANCE_STARS_VIDEO_SRC,
   lipSync: {
     defaultEnabled: true,
@@ -1175,7 +1190,7 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/angel_case_warn_pawn_promo.mp4': 5.1,
     '/assets/aistudio/angel_case_watch_bishop.mp4': 5.1,
     '/assets/aistudio/angel_default_speaking_default.mp4': 5.3,
-    '/assets/aistudio/builtin_dog_run.mp4': 7.1,
+    '/assets/aistudio/builtin_dog_run.mp4': 8.9,
     '/assets/aistudio/angel_escape_point_you.mp4': 5.1,
     '/assets/aistudio/angel_escape_point_you_2.mp4': 5.1,
     '/assets/aistudio/angel_escape_point_you_3.mp4': 3.1,
@@ -1470,16 +1485,31 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
         )
         .map((t) => ({ ...t, url: withAssetBuildVersion(t.url) }))
     : (runtimeOverrides.musicTracks || []).map((t) => ({ ...t, url: withAssetBuildVersion(t.url) }));
-  // Always keep both locked soundtrack MP3s present even if a cached JSON registry is older
+  // Always keep all locked soundtrack slots present while allowing updated URLs (e.g. Chess_Angel_Theme.mp3) to replace a slot in place
   const mergedMusicTracks: MusicTrack[] = DEFAULT_MUSIC_TRACKS.map((t) => ({
     ...t,
     url: withAssetBuildVersion(t.url),
   }));
-  const seenMusicUrls = new Set<string>(mergedMusicTracks.map((t) => stripAssetQuery(t.url)));
   for (const track of rawMusicTracks) {
     const cleanUrl = stripAssetQuery(track.url);
-    if (!seenMusicUrls.has(cleanUrl)) {
-      seenMusicUrls.add(cleanUrl);
+    if (
+      cleanUrl === '/assets/aistudio/Chess_Angle_RAP.mp3' ||
+      cleanUrl === '/assets/aistudio/Angle_45923f8a.mp3'
+    ) {
+      continue;
+    }
+    const slotIdx = mergedMusicTracks.findIndex(
+      (m) =>
+        m.id === track.id ||
+        m.title.toLowerCase() === track.title.toLowerCase() ||
+        stripAssetQuery(m.url) === cleanUrl,
+    );
+    if (slotIdx >= 0) {
+      mergedMusicTracks[slotIdx] = {
+        ...mergedMusicTracks[slotIdx],
+        url: track.url,
+      };
+    } else {
       mergedMusicTracks.push(track);
     }
   }
@@ -1542,7 +1572,7 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
             data.dogRunJumpSec >= 0 &&
             data.dogRunJumpSec <= 30
           ? Math.round(data.dogRunJumpSec * 10) / 10
-          : runtimeOverrides.dogRunJumpSec ?? 4.2,
+          : runtimeOverrides.dogRunJumpSec ?? 6.2,
     danceStarsVideo: withAssetBuildVersion(
       typeof data?.danceStarsVideo === 'string' && data.danceStarsVideo.length > 0
         ? data.danceStarsVideo
@@ -2265,7 +2295,7 @@ export function getAngelDogRunJumpSec(
 ): number {
   if (pendingDogRunJumpSec !== null) return pendingDogRunJumpSec;
   const raw = map.dogRunJumpSec;
-  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 && raw <= 30 ? raw : 4.2;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 && raw <= 30 ? raw : 6.2;
 }
 
 export function getAngelDanceStarsVideoUrl(
@@ -3341,6 +3371,32 @@ export function resolveAngelSpeakingVideo(
  * runs, ensuring multi-slot seduction audio is armed and the AI engine holds its reply turn
  * until the full reaction video/audio completes (unless developer explicitly unlocked No-Cut).
  */
+/**
+ * Returns the next seduction portrait video URL in smooth round-robin order across all configured
+ * seduction slots (`seduction`, `seduction_2`..`seduction_N`), wrapping seamlessly back to `#1`
+ * so Chess Angel's seduction animation continuously flows and never freezes onto a still frame.
+ */
+export function pickNextSeductionCaseVideo(currentUrl?: string | null): string {
+  const entries = getSeductionCaseEntries(runtimeOverrides);
+  const pool: string[] = [];
+  for (const s of entries) {
+    if (s.url && !pool.some((u) => stripAssetQuery(u) === stripAssetQuery(s.url))) {
+      pool.push(s.url);
+    }
+  }
+  if (pool.length === 0) {
+    return withAssetBuildVersion(ANGEL_CASE_VIDEO_MAP.seduction || resolveAngelIdleVideo());
+  }
+  if (pool.length === 1) {
+    return pool[0];
+  }
+  const cleanCur = currentUrl ? stripAssetQuery(currentUrl) : '';
+  const curIdx = cleanCur ? pool.findIndex((u) => stripAssetQuery(u) === cleanCur) : -1;
+  const nextIdx = curIdx >= 0 ? (curIdx + 1) % pool.length : (caseRotationCursor.seduction ?? 0) % pool.length;
+  caseRotationCursor.seduction = (nextIdx + 1) % pool.length;
+  return pool[nextIdx];
+}
+
 export function prepareHumanCommentaryPlayback(
   clipId: VoiceClipId,
   triggerKey: string,
@@ -3352,7 +3408,7 @@ export function prepareHumanCommentaryPlayback(
 } {
   const videoUrl = resolveAngelSpeakingVideo(clipId, triggerKey);
   const videoSec = videoUrl ? getVideoFileDurationSec(videoUrl, runtimeOverrides) ?? 0 : 0;
-  const audioSec = VOICE_CLIP_DURATION_SEC[clipId] ?? 0;
+  const audioSec = clipId.startsWith('seduction_') ? 0 : VOICE_CLIP_DURATION_SEC[clipId] ?? 0;
   const playToEnd = isUtterancePlayToEnd(
     videoUrl,
     clipId,

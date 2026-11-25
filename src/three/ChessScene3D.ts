@@ -53,6 +53,7 @@ export interface SceneVisualState {
   suggestionArrows?: SuggestionArrow[];
   speechHighlights?: SpeechPieceHighlight[];
   showCoordinates: boolean;
+  pendingPromotionStep?: { from: string; to: string; color: PieceColor } | null;
 }
 
 interface ActivePieceAnim {
@@ -162,6 +163,7 @@ const _dogProj = new THREE.Vector3();
 const _dogUp = new THREE.Vector3(0, 1, 0);
 const _dogPush = new THREE.Vector3();
 const _dogAxis = new THREE.Vector3();
+const _dogCamForward = new THREE.Vector3();
 const _dogTiltQuat = new THREE.Quaternion();
 const _dogSpinQuat = new THREE.Quaternion();
 const _hamPosA = new THREE.Vector3();
@@ -366,6 +368,8 @@ export class ChessScene3D {
   private wildDogLastToppleAudioMs = 0;
   private wildDogTippedPieces = new Map<THREE.Group, TippedPieceAnim>();
   private wildDogSoundMuted = false;
+  private wildDogScale = 1.62;
+  private wildDogLaunchLiftY = 2.15;
 
   // Special 3D Event: Dark Grey Russian Mini Hamster (black dorsal stripe) &
   // White Mini Hamster (pink nose & pink claws) chasing each other wildly across the board
@@ -1695,7 +1699,7 @@ export class ChessScene3D {
     animateFromMove: { from: string; to: string } | null,
   ): void {
     this.coordGroup.visible = state.showCoordinates;
-    this.syncPieces(state.fen, animateFromMove);
+    this.syncPieces(state.fen, animateFromMove, undefined, state.pendingPromotionStep ?? null);
     this.syncOverlays(state);
     this.syncSpeechHighlights(state.speechHighlights || []);
 
@@ -2440,29 +2444,7 @@ export class ChessScene3D {
       return fallback.clone();
     };
 
-    // 1. Start right at the lower-left edge of Chess Angel's modal so the puppy leaps out of her modal
-    const startClientX = modalRect
-      ? modalRect.left + Math.min(28, modalRect.width * 0.1)
-      : canvasRect.left + canvasRect.width * 0.78;
-    const startClientY = modalRect
-      ? modalRect.top + modalRect.height * 0.76
-      : canvasRect.top + canvasRect.height * 0.44;
-    const startWorld = raycastClientToBoardPlane(
-      startClientX,
-      startClientY,
-      new THREE.Vector3(6.8, BOARD_TOP_Y, -0.6),
-    );
-
-    // 2. Exit well past the left edge of the viewport until completely out of sight
-    const exitClientX = canvasRect.left - Math.max(140, canvasRect.width * 0.14);
-    const exitClientY = canvasRect.top + canvasRect.height * 0.56;
-    const exitWorld = raycastClientToBoardPlane(
-      exitClientX,
-      exitClientY,
-      new THREE.Vector3(-9.5, BOARD_TOP_Y, 0.8),
-    );
-
-    // 3. Sample live pieces across right / center / left screen bands so the puppy reliably
+    // 1. Sample live pieces across right / center / left screen bands so Udo reliably
     //    barrels through real chess pieces regardless of camera orientation
     const piecePoints: Array<{ pos: THREE.Vector3; ndcX: number }> = [];
     for (const entry of this.pieceMap.values()) {
@@ -2505,6 +2487,69 @@ export class ChessScene3D {
       wpLeft.z = THREE.MathUtils.clamp(wpLeft.z + (wpCenter.z >= 0 ? -1.35 : 1.35), -3.2, 3.2);
     }
 
+    // 2. Compute exact camera-projected world scale & elevated 3D launch position so 3D Udo
+    //    matches the exact pixel size and jump height of Udo leaping out of Chess Angel's arms!
+    this.camera.getWorldDirection(_dogCamForward);
+    const zEyeCenter = Math.max(
+      4.5,
+      _tmpVec.set(0, BOARD_TOP_Y, 0).sub(this.camera.position).dot(_dogCamForward),
+    );
+    const zEyeRight = Math.max(
+      4.5,
+      _tmpVec.copy(wpRight).sub(this.camera.position).dot(_dogCamForward),
+    );
+    const zEyeLaunch = THREE.MathUtils.lerp(zEyeRight, zEyeCenter, 0.35);
+    const halfFovTan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5));
+    const pxPerWorldUnit = canvasRect.height / Math.max(0.001, 2 * zEyeLaunch * halfFovTan);
+
+    let startWorld: THREE.Vector3;
+    if (modalRect && modalRect.width > 8 && modalRect.height > 8) {
+      const portraitW = modalRect.width;
+      const portraitH = Math.min(modalRect.height, modalRect.width * (752 / 560));
+
+      // In the 560x752 video, leaping Udo spans ~36.5% of portraitH crown-to-paw (~63.5% of portraitW nose-to-paw)
+      const computedScale = (0.365 * portraitH) / pxPerWorldUnit;
+      this.wildDogScale = THREE.MathUtils.clamp(computedScale, 0.95, 2.35);
+
+      // Start slightly higher at Chess Angel's upper chest/shoulder height (38% down portrait) so Udo and his sparkles leap cleanly from her elevated arms
+      const startClientX = modalRect.left + portraitW * 0.22;
+      const startClientY = modalRect.top + portraitH * 0.38;
+      _rayMouse.x = ((startClientX - canvasRect.left) / canvasRect.width) * 2 - 1;
+      _rayMouse.y = -((startClientY - canvasRect.top) / canvasRect.height) * 2 + 1;
+      _dogRaycaster.setFromCamera(_rayMouse, this.camera);
+      const rayCos = Math.max(0.35, _dogRaycaster.ray.direction.dot(_dogCamForward));
+      const launchAirPos = _dogRaycaster.ray.origin
+        .clone()
+        .addScaledVector(_dogRaycaster.ray.direction, zEyeLaunch / rayCos);
+
+      startWorld = new THREE.Vector3(launchAirPos.x, BOARD_TOP_Y, launchAirPos.z);
+      this.wildDogLaunchLiftY = THREE.MathUtils.clamp(
+        launchAirPos.y - BOARD_TOP_Y + 0.36,
+        0.95,
+        5.4,
+      );
+    } else {
+      this.wildDogScale = 1.62;
+      this.wildDogLaunchLiftY = 2.15;
+      const startClientX = canvasRect.left + canvasRect.width * 0.78;
+      const startClientY = canvasRect.top + canvasRect.height * 0.34;
+      startWorld = raycastClientToBoardPlane(
+        startClientX,
+        startClientY,
+        new THREE.Vector3(6.8, BOARD_TOP_Y, -0.6),
+      );
+    }
+    this.wildDog.root.scale.setScalar(this.wildDogScale);
+
+    // 3. Exit well past the left edge of the viewport until even full-sized Udo is completely out of sight
+    const exitClientX = canvasRect.left - Math.max(210, canvasRect.width * 0.18);
+    const exitClientY = canvasRect.top + canvasRect.height * 0.56;
+    const exitWorld = raycastClientToBoardPlane(
+      exitClientX,
+      exitClientY,
+      new THREE.Vector3(-10.8, BOARD_TOP_Y, 0.8),
+    );
+
     const leftRim = new THREE.Vector3().lerpVectors(wpLeft, exitWorld, 0.42);
     leftRim.y = BOARD_TOP_Y;
 
@@ -2517,15 +2562,24 @@ export class ChessScene3D {
 
     this.wildDogPhase = 'running';
     this.wildDogElapsed = 0;
-    this.wildDogDuration = 3.55;
+    this.wildDogDuration = 3.65;
     this.wildDogPhaseTimer = 0;
     this.wildDogNextBarkAt = 0.04;
     this.wildDogBarkEnv = 0;
     this.wildDogLastToppleAudioMs = 0;
     this.wildDog.resetDust();
-    this.wildDog.root.position.copy(startWorld);
+    this.wildDog.root.position.set(
+      startWorld.x,
+      BOARD_TOP_Y + this.wildDogLaunchLiftY,
+      startWorld.z,
+    );
     this.wildDogCurve.getTangent(0.01, _dogTan);
     this.wildDog.root.rotation.set(0, Math.atan2(_dogTan.x, _dogTan.z), 0);
+    this.wildDog.triggerLaunchSparkles(
+      this.wildDog.root.position,
+      _dogTan,
+      this.wildDogScale,
+    );
     this.wildDog.root.visible = true;
     this.requestRender();
   }
@@ -2631,14 +2685,16 @@ export class ChessScene3D {
       this.wildDogCurve.getPoint(u, _dogPos);
       this.wildDogCurve.getTangent(u, _dogTan);
 
-      // Dramatic joyful leap arc as the fluffy white puppy bursts out of the side of Chess Angel's modal
+      // Ballistic jump-down arc from Chess Angel's elevated arms onto the chessboard, plus playful exit hop
       let jumpArcY = 0;
-      if (u < 0.22) {
-        const leapT = u / 0.22;
-        jumpArcY = Math.sin(leapT * Math.PI) * 1.15;
+      if (u < 0.27) {
+        const leapT = u / 0.27;
+        const fallFactor = (1 - leapT) * (1 + 0.42 * leapT);
+        const hopBoost = Math.sin(leapT * Math.PI) * 0.48;
+        jumpArcY = this.wildDogLaunchLiftY * fallFactor + hopBoost;
       } else if (u > 0.78 && u < 0.94) {
         const exitHopT = (u - 0.78) / 0.16;
-        jumpArcY = Math.sin(exitHopT * Math.PI) * 0.52;
+        jumpArcY = Math.sin(exitHopT * Math.PI) * (0.48 * Math.min(1.4, this.wildDogScale));
       }
       _dogPos.y = BOARD_TOP_Y + jumpArcY;
 
@@ -2651,11 +2707,11 @@ export class ChessScene3D {
       while (deltaYaw < -Math.PI) deltaYaw += Math.PI * 2;
       this.wildDog.root.rotation.y += deltaYaw * Math.min(1, dt * 14);
 
-      // Stereo-panned excited puppy barks synced to snapping jaw
-      this.wildDogBarkEnv = Math.max(0, this.wildDogBarkEnv - dt * 5.2);
+      // Stereo-panned raspy terrier barks synced to Udo's snapping jaw
+      this.wildDogBarkEnv = Math.max(0, this.wildDogBarkEnv - dt * 4.6);
       if (this.wildDogElapsed >= this.wildDogNextBarkAt && u < 0.95) {
         this.wildDogBarkEnv = 1.0;
-        this.wildDogNextBarkAt = this.wildDogElapsed + 0.24 + Math.random() * 0.15;
+        this.wildDogNextBarkAt = this.wildDogElapsed + 0.3 + Math.random() * 0.17;
         if (!this.wildDogSoundMuted) {
           _dogProj.copy(_dogPos).project(this.camera);
           const stereoPan = THREE.MathUtils.clamp(_dogProj.x, -0.92, 0.92);
@@ -2669,12 +2725,16 @@ export class ChessScene3D {
         _dogPos,
         BOARD_TOP_Y,
         this.wildDogBarkEnv,
-        u > 0.14 && u < 0.88,
+        u > 0.18 && u < 0.88,
+        this.camera.quaternion,
+        _dogTan,
       );
 
-      // Detect collision with chess pieces and tip over every piece the puppy touches
-      if (jumpArcY < 0.88) {
-        const hitRadiusSq = 0.98 * 0.98;
+      // Detect collision with chess pieces scaled to Udo's body footprint and tip over every piece he touches
+      const touchClearanceY = 0.88 * Math.max(1, this.wildDogScale * 0.72);
+      if (jumpArcY < touchClearanceY) {
+        const hitRadius = THREE.MathUtils.clamp(0.68 + this.wildDogScale * 0.36, 0.98, 1.48);
+        const hitRadiusSq = hitRadius * hitRadius;
         const nowMs = performance.now();
         for (const entry of this.pieceMap.values()) {
           if (this.wildDogTippedPieces.has(entry.group)) continue;
@@ -2748,7 +2808,16 @@ export class ChessScene3D {
     if (this.wildDogPhase === 'hold') {
       this.wildDogPhaseTimer += dt;
       // Keep fading remaining paw puffs while tipped pieces finish settling
-      this.wildDog.update(dt, this.wildDogElapsed + this.wildDogPhaseTimer, _dogPos, BOARD_TOP_Y, 0, false);
+      this.wildDog.update(
+        dt,
+        this.wildDogElapsed + this.wildDogPhaseTimer,
+        _dogPos,
+        BOARD_TOP_Y,
+        0,
+        false,
+        this.camera.quaternion,
+        _dogTan,
+      );
       stepTippedPiecesFall(dt);
 
       if (this.wildDogPhaseTimer >= 1.65) {
@@ -3105,8 +3174,12 @@ export class ChessScene3D {
     fen: string,
     movedHint: { from: string; to: string } | null,
     durationOverrideSec?: number,
+    pendingPromotionStep: { from: string; to: string; color: PieceColor } | null = null,
   ): void {
-    const boardKey = fen.split(' ')[0];
+    const promoKey = pendingPromotionStep
+      ? `|promo:${pendingPromotionStep.from}-${pendingPromotionStep.to}:${pendingPromotionStep.color}`
+      : '';
+    const boardKey = fen.split(' ')[0] + promoKey;
     if (boardKey === this.lastPiecesBoardKey && !movedHint && this.pieceMap.size > 0) {
       // Board piece positions did not change (only overlays/arrows/highlights updated) —
       // keep any active puppy or mini-hamster board animations running smoothly!
@@ -3138,6 +3211,29 @@ export class ChessScene3D {
         const col = cell.color as PieceColor;
         desired.set(sq, { type: t, color: col });
         counts[col][t]++;
+      }
+    }
+
+    // Visually place the 7th-rank pawn onto its 8th-rank destination square while awaiting promotion choice
+    if (pendingPromotionStep) {
+      const movingPawn = desired.get(pendingPromotionStep.from);
+      if (
+        movingPawn &&
+        movingPawn.type === 'p' &&
+        movingPawn.color === pendingPromotionStep.color
+      ) {
+        const capturedAtDest = desired.get(pendingPromotionStep.to);
+        if (capturedAtDest && capturedAtDest.color !== pendingPromotionStep.color) {
+          counts[capturedAtDest.color][capturedAtDest.type] = Math.max(
+            0,
+            counts[capturedAtDest.color][capturedAtDest.type] - 1,
+          );
+        }
+        desired.delete(pendingPromotionStep.from);
+        desired.set(pendingPromotionStep.to, {
+          type: 'p',
+          color: pendingPromotionStep.color,
+        });
       }
     }
 

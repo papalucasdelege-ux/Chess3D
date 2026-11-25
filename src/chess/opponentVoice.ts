@@ -81,7 +81,8 @@ export type CommentaryCaseId =
   | 'clock_timeout'
   | 'angel_modal_on'
   | 'angel_modal_off'
-  | 'thank_jan';
+  | 'thank_jan'
+  | 'ask_promotion';
 
 export type ExtendedSequentialClipId =
   | `hesitate_hint_${'v4' | 'v5' | 'v6'}`
@@ -601,6 +602,14 @@ export const CLIP_TEXT: Record<VoiceClipId, string> = {
     'Again, thank you, Jan... every piece, board light, and line of code here carries your care. Let us play another fine game together.',
   thank_jan_v3:
     'Always grateful to you, Jan... thank you for bringing me to life. Now sit back and enjoy our match.',
+
+  // 58. Pawn Promotion Choice Prompt (Player Pawn Reaches Eighth Rank)
+  ask_promotion_v1:
+    'Ooh, your brave pawn has reached the eighth rank! Tell me—which piece do you choose: a Queen, a Rook, a Bishop, or a Knight?',
+  ask_promotion_v2:
+    'Another pawn arrives at the eighth rank! Shall I crown her a Queen, or transform her into a Rook, a Bishop, or a Knight?',
+  ask_promotion_v3:
+    'Eighth rank reached! Tell me whether you choose a Queen, a Rook, a Bishop, or a Knight.',
 };
 
 const PIECE_VALUES: Record<PieceSymbol, number> = {
@@ -1023,6 +1032,27 @@ export function createThankJanMessage(): OpponentMessage {
     tag: 'FOR JAN · CHESS ANGEL',
     tone: 'opening',
     speaker: SPEAKER_NAME,
+  };
+}
+
+export function createAskPromotionMessage(
+  toSquare: string,
+  color: PieceColor,
+): OpponentMessage {
+  const entry = tryPickCaseClip('ask_promotion') || {
+    clipId: 'ask_promotion_v1' as VoiceClipId,
+    text: CLIP_TEXT.ask_promotion_v1,
+  };
+  const rankLabel = color === 'w' ? '8th Rank' : '1st Rank';
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: `PAWN PROMOTION · ${toSquare.toUpperCase()}`,
+    tone: 'hint',
+    speaker: SPEAKER_NAME,
+    mathSummary: `Pawn reached ${toSquare.toUpperCase()} (${rankLabel}) · Choose Queen, Rook, Bishop, or Knight`,
+    concernedFigures: [{ square: toSquare, role: 'attacker' }],
   };
 }
 
@@ -2346,6 +2376,7 @@ export interface MusicPlaybackSnapshot {
   trackIndex: number;
   track: MusicTrack | null;
   tracks: MusicTrack[];
+  unavailableTrackIndices: number[];
 }
 
 type MusicStateListener = (snapshot: MusicPlaybackSnapshot) => void;
@@ -2355,11 +2386,15 @@ export const QUEEN_THEME_MUSIC_URL = withAssetBuildVersion(
 );
 
 export const CHESS_ANGEL_RAP_MUSIC_URL = withAssetBuildVersion(
-  '/assets/aistudio/Chess_Angle_RAP.mp3',
+  '/assets/aistudio/Chess_Angel_Rap_d8f30f60.mp3',
 );
 
 export const CHESS_ANGEL_THEME_MUSIC_URL = withAssetBuildVersion(
-  '/assets/aistudio/Angle_45923f8a.mp3',
+  '/assets/aistudio/Chess_Angle_2f568dfd.mp3',
+);
+
+export const MEDITATIONAL_MUSIC_URL = withAssetBuildVersion(
+  '/assets/aistudio/meditational.mp3',
 );
 
 export const DEFAULT_MUSIC_TRACKS: readonly MusicTrack[] = [
@@ -2377,6 +2412,11 @@ export const DEFAULT_MUSIC_TRACKS: readonly MusicTrack[] = [
     id: 'chess_angel_theme',
     title: 'Chess Angel',
     url: CHESS_ANGEL_THEME_MUSIC_URL,
+  },
+  {
+    id: 'meditational',
+    title: 'Meditational',
+    url: MEDITATIONAL_MUSIC_URL,
   },
 ];
 
@@ -2409,6 +2449,8 @@ class OpponentSpeechController {
   private masterInput: AudioNode | null = null;
   private activeSource: AudioBufferSourceNode | null = null;
   private activeHtmlAudio: HTMLAudioElement | null = null;
+  private activeUtterance: SpeechSynthesisUtterance | null = null;
+  private activeUtteranceTimer: number | null = null;
   private activeAbort: AbortController | null = null;
   private bgMusicElement: HTMLAudioElement | null = null;
   private bgMusicAudio: HTMLAudioElement | null = null;
@@ -2417,6 +2459,7 @@ class OpponentSpeechController {
   private bgMusicFadeRaf: number | null = null;
   private bgMusicStallTimer: number | null = null;
   private musicTracks: MusicTrack[] = [...DEFAULT_MUSIC_TRACKS];
+  private unavailableMusicUrls = new Set<string>();
   private musicTrackIndex = 0;
   private musicPlaylistEnabled = false;
   private musicSoundAllowed = true;
@@ -2444,6 +2487,7 @@ class OpponentSpeechController {
       this.attachGlobalGestureUnlock();
       window.setTimeout(() => {
         this.preloadCoreClips();
+        this.preloadBackgroundMusicTracks();
       }, 60);
     }
   }
@@ -2486,8 +2530,27 @@ class OpponentSpeechController {
   }
 
   public preloadBackgroundMusicTracks(): void {
-    // Untouched soundtrack MP3s stream immediately via native HTTP 206 Range requests
-    // without downloading 9.5MB up front and saturating the browser connection pool.
+    if (typeof window === 'undefined') return;
+    // Lightweight HEAD check to detect any missing MP3 files up front without downloading megabytes
+    for (const track of this.musicTracks) {
+      const cleanKey = stripAssetQuery(track.url);
+      void fetch(track.url, { method: 'HEAD', credentials: 'same-origin' })
+        .then((res) => {
+          const ct = (res.headers.get('content-type') || '').toLowerCase();
+          const len = Number(res.headers.get('content-length') || '0');
+          if (!res.ok || ct.includes('text/html') || (len > 0 && len < 65_536)) {
+            if (!this.unavailableMusicUrls.has(cleanKey)) {
+              this.unavailableMusicUrls.add(cleanKey);
+              this.emitMusicState();
+            }
+          } else if (this.unavailableMusicUrls.delete(cleanKey)) {
+            this.emitMusicState();
+          }
+        })
+        .catch(() => {
+          // Keep optimistic if offline/blocked
+        });
+    }
   }
 
   public subscribe(listener: StateListener): () => void {
@@ -2553,12 +2616,19 @@ class OpponentSpeechController {
     const playing = Boolean(
       this.bgMusicAudio && !this.bgMusicAudio.paused && !this.bgMusicAudio.ended,
     );
+    const unavailableTrackIndices: number[] = [];
+    for (let i = 0; i < this.musicTracks.length; i++) {
+      if (this.unavailableMusicUrls.has(stripAssetQuery(this.musicTracks[i].url))) {
+        unavailableTrackIndices.push(i);
+      }
+    }
     return {
       enabled: this.musicPlaylistEnabled,
       playing,
       trackIndex: safeIdx,
       track: this.musicTracks[safeIdx] ?? null,
       tracks: [...this.musicTracks],
+      unavailableTrackIndices,
     };
   }
 
@@ -2592,13 +2662,29 @@ class OpponentSpeechController {
           t.title.trim().length > 0,
       )
       .map((t) => ({ ...t, url: withAssetBuildVersion(t.url) }));
-    // Always preserve all locked DEFAULT_MUSIC_TRACKS so neither song can ever disappear
+    // Always preserve all locked DEFAULT_MUSIC_TRACKS while allowing updated URLs for the same id/title to replace a slot in place
     const merged: MusicTrack[] = [...DEFAULT_MUSIC_TRACKS];
-    const seen = new Set<string>(merged.map((t) => stripAssetQuery(t.url)));
     for (const t of cleaned) {
       const cleanUrl = stripAssetQuery(t.url);
-      if (!seen.has(cleanUrl)) {
-        seen.add(cleanUrl);
+      if (
+        cleanUrl === '/assets/aistudio/Chess_Angle_RAP.mp3' ||
+        cleanUrl === '/assets/aistudio/Angle_45923f8a.mp3'
+      ) {
+        continue;
+      }
+      const slotIdx = merged.findIndex(
+        (m) =>
+          m.id === t.id ||
+          m.title.toLowerCase() === t.title.toLowerCase() ||
+          stripAssetQuery(m.url) === cleanUrl,
+      );
+      if (slotIdx >= 0) {
+        const prevClean = stripAssetQuery(merged[slotIdx].url);
+        if (prevClean !== cleanUrl) {
+          this.evictBrokenMusicBlob(prevClean);
+        }
+        merged[slotIdx] = { ...merged[slotIdx], url: t.url };
+      } else {
         merged.push(t);
       }
     }
@@ -2611,11 +2697,42 @@ class OpponentSpeechController {
     this.musicTracks = nextTracks;
     if (currentClean) {
       const matchedIdx = nextTracks.findIndex((t) => stripAssetQuery(t.url) === currentClean);
-      this.musicTrackIndex = matchedIdx >= 0 ? matchedIdx : 0;
+      if (matchedIdx >= 0) {
+        this.musicTrackIndex = matchedIdx;
+      }
     } else {
       this.musicTrackIndex = 0;
     }
     this.preloadBackgroundMusicTracks();
+    this.emitMusicState();
+  }
+
+  public updateMusicTrackSlotUrl(
+    slotIndex: number,
+    freshUrl: string,
+    autoPlay: boolean,
+    soundEnabled: boolean,
+  ): void {
+    if (slotIndex < 0 || slotIndex >= this.musicTracks.length) return;
+    const prevClean = stripAssetQuery(this.musicTracks[slotIndex].url);
+    const nextClean = stripAssetQuery(freshUrl);
+    this.evictBrokenMusicBlob(prevClean);
+    this.evictBrokenMusicBlob(nextClean);
+    this.unavailableMusicUrls.delete(prevClean);
+    this.unavailableMusicUrls.delete(nextClean);
+    this.musicTracks[slotIndex] = {
+      ...this.musicTracks[slotIndex],
+      url: freshUrl,
+    };
+    if (autoPlay) {
+      this.musicTrackIndex = slotIndex;
+      this.musicPlaylistEnabled = true;
+      this.musicSoundAllowed = soundEnabled;
+      this.stopBackgroundMusicInternal(false);
+      if (soundEnabled) {
+        this.startBackgroundMusicUrl(freshUrl, 'direct-bust');
+      }
+    }
     this.emitMusicState();
   }
 
@@ -2830,6 +2947,7 @@ class OpponentSpeechController {
         this.startBackgroundMusicUrl(url, 'blob');
         return;
       }
+      this.unavailableMusicUrls.add(cleanTarget);
       this.bgMusicAudio = null;
       this.bgMusicUrl = null;
       this.emitMusicState();
@@ -2838,6 +2956,7 @@ class OpponentSpeechController {
     audio.onplaying = () => {
       if (this.bgMusicSeq !== seq || this.bgMusicAudio !== audio) return;
       this.clearBgMusicStallTimer();
+      this.unavailableMusicUrls.delete(cleanTarget);
       this.pendingGestureBgMusicUrl = null;
       this.updateBgMusicDucking(this.playbackState === 'speaking');
       this.emitMusicState();
@@ -2866,11 +2985,15 @@ class OpponentSpeechController {
       this.bgMusicAudio = null;
       this.bgMusicUrl = null;
       if (this.musicPlaylistEnabled && this.musicSoundAllowed && this.musicTracks.length > 0) {
-        this.musicTrackIndex = (this.musicTrackIndex + 1) % this.musicTracks.length;
-        const nextTrack = this.musicTracks[this.musicTrackIndex];
-        if (nextTrack) {
-          this.startBackgroundMusicUrl(nextTrack.url, 'direct');
-          return;
+        let nextIdx = (this.musicTrackIndex + 1) % this.musicTracks.length;
+        for (let step = 0; step < this.musicTracks.length; step++) {
+          const cand = this.musicTracks[nextIdx];
+          if (cand && !this.unavailableMusicUrls.has(stripAssetQuery(cand.url))) {
+            this.musicTrackIndex = nextIdx;
+            this.startBackgroundMusicUrl(cand.url, 'direct');
+            return;
+          }
+          nextIdx = (nextIdx + 1) % this.musicTracks.length;
         }
       }
       this.emitMusicState();
@@ -3035,6 +3158,13 @@ class OpponentSpeechController {
     const coreCases: CommentaryCaseId[] = [
       'intro',
       'opening',
+      'resign',
+      'new_match',
+      'clock_timeout',
+      'save_game',
+      'load_game',
+      'ask_promotion',
+      'promotion',
       'calc_offer',
       'calc_pure',
       'wrong_distracted',
@@ -3187,6 +3317,71 @@ class OpponentSpeechController {
       }
       this.activeHtmlAudio = null;
     }
+    if (this.activeUtteranceTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(this.activeUtteranceTimer);
+      this.activeUtteranceTimer = null;
+    }
+    if (this.activeUtterance) {
+      this.activeUtterance.onend = null;
+      this.activeUtterance.onerror = null;
+      this.activeUtterance = null;
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  private speakViaSpeechSynthesis(clipId: VoiceClipId, seq: number): boolean {
+    if (seq !== this.speakSeq || typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      return false;
+    }
+    const text = CLIP_TEXT[clipId];
+    if (!text) return false;
+    try {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = 'en-US';
+      utter.rate = 0.98;
+      utter.pitch = 1.06;
+      const voices = window.speechSynthesis.getVoices?.() || [];
+      const femaleVoice =
+        voices.find(
+          (v) =>
+            v.lang.toLowerCase().startsWith('en') &&
+            /female|zira|aria|jenny|samantha|victoria|karen|moira|google uk english female|google us english/i.test(
+              v.name,
+            ),
+        ) || voices.find((v) => v.lang.toLowerCase().startsWith('en'));
+      if (femaleVoice) {
+        utter.voice = femaleVoice;
+      }
+      const finish = () => {
+        if (this.activeUtteranceTimer !== null) {
+          window.clearTimeout(this.activeUtteranceTimer);
+          this.activeUtteranceTimer = null;
+        }
+        if (this.activeUtterance === utter) {
+          this.activeUtterance = null;
+          if (seq === this.speakSeq) {
+            this.setPlaybackState('idle');
+          }
+        }
+      };
+      utter.onend = finish;
+      utter.onerror = finish;
+      this.activeUtterance = utter;
+      this.pendingGestureClip = null;
+      this.setPlaybackState('speaking');
+      window.speechSynthesis.speak(utter);
+      this.activeUtteranceTimer = window.setTimeout(finish, 8500);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async playDecodedBuffer(buffer: AudioBuffer, seq: number): Promise<boolean> {
@@ -3228,6 +3423,7 @@ class OpponentSpeechController {
     url: string,
     seq: number,
     clipInfo: { clipId: VoiceClipId; voiceMode: AngelVoiceMode; soundEnabled: boolean },
+    allowSpeechFallback = false,
   ): Promise<void> {
     if (seq !== this.speakSeq) return;
     const audio = new Audio(url);
@@ -3247,6 +3443,9 @@ class OpponentSpeechController {
       if (this.activeHtmlAudio === audio) {
         this.activeHtmlAudio = null;
         if (seq === this.speakSeq) {
+          if (allowSpeechFallback && this.speakViaSpeechSynthesis(clipInfo.clipId, seq)) {
+            return;
+          }
           this.setPlaybackState('idle');
         }
       }
@@ -3271,6 +3470,8 @@ class OpponentSpeechController {
         if (isAutoplayBlocked) {
           this.pendingGestureClip = clipInfo;
           this.setPlaybackState('awaiting-gesture');
+        } else if (allowSpeechFallback && this.speakViaSpeechSynthesis(clipInfo.clipId, seq)) {
+          return;
         } else {
           this.setPlaybackState('idle');
         }
@@ -3333,7 +3534,7 @@ class OpponentSpeechController {
           }
         }
 
-        await this.playViaHtmlAudio(url, seq, clipInfo);
+        await this.playViaHtmlAudio(url, seq, clipInfo, !mp3Bytes);
       } catch {
         if (!controller.signal.aborted && seq === this.speakSeq) {
           this.setPlaybackState('idle');

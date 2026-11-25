@@ -249,6 +249,7 @@ const CHECK_WOOD_VARIANTS: readonly CheckWoodVariant[] = [
 class ChessSoundEngine {
   private ctx: AudioContext | null = null;
   private noiseBuffer: AudioBuffer | null = null;
+  private barkRaspCurve: Float32Array<ArrayBuffer> | null = null;
   private lastMoveIdx = -1;
   private lastCaptureIdx = -1;
   private lastCheckIdx = -1;
@@ -286,6 +287,21 @@ class ChessSoundEngine {
 
   private jitter(spread = 0.025): number {
     return 1 + (Math.random() * 2 - 1) * spread;
+  }
+
+  private getBarkRaspCurve(): Float32Array<ArrayBuffer> {
+    if (this.barkRaspCurve) return this.barkRaspCurve;
+    const n = 512;
+    const curve = new Float32Array(new ArrayBuffer(n * 4));
+    for (let i = 0; i < n; i++) {
+      const x = (i * 2) / (n - 1) - 1;
+      // Asymmetric canine vocal-fold saturation + subtle harmonic grit for raspy terrier timbre
+      const asym = x >= 0 ? Math.tanh(x * 3.2) : Math.tanh(x * 2.55) * 0.94;
+      const grit = 0.11 * Math.sin(x * Math.PI * 5.0) * (1 - Math.abs(x) * 0.45);
+      curve[i] = Math.max(-1, Math.min(1, asym + grit));
+    }
+    this.barkRaspCurve = curve;
+    return curve;
   }
 
   private getNoiseBuffer(ctx: AudioContext): AudioBuffer {
@@ -522,9 +538,10 @@ class ChessSoundEngine {
   }
 
   /**
-   * Expressive procedural small fluffy puppy barking wildly ("YIP! ARF-YIP! YIP-YIP!")
-   * with bright high-pitched canine formants, excited vibrato, playful breath puff,
-   * and right-to-left stereo panning.
+   * Udo's deeper, raspy wirehaired terrier bark ("RRUFF! WUFF-RRUFF!"):
+   * chesty ~235-290 Hz terrier fundamental + ~120 Hz sub-chest warmth,
+   * rough glottal vocal-fry FM/AM modulation, asymmetric waveshaper grit,
+   * gravelly throat-chuff noise, and stereo panning across the board.
    */
   public playWildDogBark(pan = 0, intensity = 1): void {
     const ctx = this.ensureContext();
@@ -544,115 +561,161 @@ class ChessSoundEngine {
           })()
         : ctx.destination;
 
-    const triggerSingleYip = (startAt: number, basePitch: number, dur: number, gainScale: number) => {
-      // Bright sawtooth + warm triangle harmonic for lively small-puppy vocal cords
+    const triggerRaspyBark = (
+      startAt: number,
+      basePitch: number,
+      dur: number,
+      gainScale: number,
+      withGrowlLead: boolean,
+    ) => {
+      // Sawtooth glottal pulse + gritty sub-octave chest oscillator
       const osc = ctx.createOscillator();
       const subOsc = ctx.createOscillator();
-      const lfo = ctx.createOscillator();
-      const lfoGain = ctx.createGain();
+      const raspLfo = ctx.createOscillator();
+      const raspFmGain = ctx.createGain();
+      const raspAmGain = ctx.createGain();
+      const preDrive = ctx.createGain();
+      const shaper = ctx.createWaveShaper();
 
       osc.type = 'sawtooth';
-      subOsc.type = 'triangle';
+      subOsc.type = 'sawtooth';
+      shaper.curve = this.getBarkRaspCurve();
+      shaper.oversample = '2x';
 
-      // Excited upward puppy yip scoop -> cute quick downward fall
-      osc.frequency.setValueAtTime(basePitch * 0.84, startAt);
-      osc.frequency.exponentialRampToValueAtTime(basePitch * 1.56, startAt + dur * 0.28);
-      osc.frequency.exponentialRampToValueAtTime(basePitch * 0.78, startAt + dur);
+      // Deeper terrier bark contour: gravelly throat onset -> punchy chest peak -> firm downward drop
+      const leadStart = withGrowlLead ? basePitch * 0.72 : basePitch * 0.84;
+      osc.frequency.setValueAtTime(leadStart, startAt);
+      osc.frequency.exponentialRampToValueAtTime(basePitch * 1.22, startAt + dur * 0.24);
+      osc.frequency.exponentialRampToValueAtTime(basePitch * 0.62, startAt + dur);
 
-      subOsc.frequency.setValueAtTime(basePitch * 0.5, startAt);
-      subOsc.frequency.exponentialRampToValueAtTime(basePitch * 0.82, startAt + dur * 0.28);
-      subOsc.frequency.exponentialRampToValueAtTime(basePitch * 0.45, startAt + dur);
+      subOsc.frequency.setValueAtTime(leadStart * 0.5, startAt);
+      subOsc.frequency.exponentialRampToValueAtTime(basePitch * 0.61, startAt + dur * 0.24);
+      subOsc.frequency.exponentialRampToValueAtTime(basePitch * 0.31, startAt + dur);
 
-      // Lively high-energy puppy yip modulation (~44-58 Hz FM)
-      lfo.type = 'sine';
-      lfo.frequency.setValueAtTime(44 + Math.random() * 14, startAt);
-      lfoGain.gain.setValueAtTime(basePitch * 0.065, startAt);
-      lfo.connect(lfoGain);
-      lfoGain.connect(osc.frequency);
+      // Rough subharmonic terrier vocal-fry / growl rasp (~58-82 Hz sawtooth flutter on FM & AM)
+      const raspHz = 58 + Math.random() * 24;
+      raspLfo.type = 'triangle';
+      raspLfo.frequency.setValueAtTime(raspHz, startAt);
+      raspLfo.frequency.linearRampToValueAtTime(raspHz * 0.78, startAt + dur);
 
-      // Small-puppy vocal-tract formants (F1 ~ 1180Hz, F2 ~ 2450Hz)
+      raspFmGain.gain.setValueAtTime(basePitch * 0.115, startAt);
+      raspLfo.connect(raspFmGain);
+      raspFmGain.connect(osc.frequency);
+
+      preDrive.gain.setValueAtTime(1.35, startAt);
+      raspAmGain.gain.setValueAtTime(0.38, startAt);
+      raspLfo.connect(raspAmGain);
+      raspAmGain.connect(preDrive.gain);
+
+      // Deeper terrier vocal-tract formants (F1 ~ 580-860 Hz throat/jaw, F2 ~ 1280-1720 Hz bark projection)
       const f1 = ctx.createBiquadFilter();
       f1.type = 'bandpass';
-      f1.frequency.setValueAtTime(1020 * this.jitter(0.1), startAt);
-      f1.frequency.exponentialRampToValueAtTime(1480 * this.jitter(0.1), startAt + dur * 0.3);
-      f1.frequency.exponentialRampToValueAtTime(860, startAt + dur);
-      f1.Q.setValueAtTime(2.8, startAt);
+      f1.frequency.setValueAtTime(570 * this.jitter(0.09), startAt);
+      f1.frequency.exponentialRampToValueAtTime(860 * this.jitter(0.09), startAt + dur * 0.26);
+      f1.frequency.exponentialRampToValueAtTime(480, startAt + dur);
+      f1.Q.setValueAtTime(2.2, startAt);
 
       const f2 = ctx.createBiquadFilter();
       f2.type = 'bandpass';
-      f2.frequency.setValueAtTime(2250 * this.jitter(0.1), startAt);
-      f2.frequency.exponentialRampToValueAtTime(2880 * this.jitter(0.1), startAt + dur * 0.28);
-      f2.frequency.exponentialRampToValueAtTime(1840, startAt + dur);
-      f2.Q.setValueAtTime(3.3, startAt);
+      f2.frequency.setValueAtTime(1280 * this.jitter(0.09), startAt);
+      f2.frequency.exponentialRampToValueAtTime(1720 * this.jitter(0.09), startAt + dur * 0.25);
+      f2.frequency.exponentialRampToValueAtTime(1040, startAt + dur);
+      f2.Q.setValueAtTime(2.4, startAt);
+
+      // Warm chest resonance low-pass on the sub-octave
+      const chestFilter = ctx.createBiquadFilter();
+      chestFilter.type = 'lowpass';
+      chestFilter.frequency.setValueAtTime(360, startAt);
+      chestFilter.Q.setValueAtTime(1.1, startAt);
 
       const env = ctx.createGain();
-      const peak = 0.29 * vol * gainScale;
+      const peak = 0.31 * vol * gainScale;
       env.gain.setValueAtTime(0.001, startAt);
-      env.gain.linearRampToValueAtTime(peak, startAt + 0.011);
-      env.gain.exponentialRampToValueAtTime(peak * 0.62, startAt + dur * 0.52);
-      env.gain.exponentialRampToValueAtTime(0.001, startAt + dur + 0.02);
+      env.gain.linearRampToValueAtTime(peak, startAt + (withGrowlLead ? 0.018 : 0.012));
+      env.gain.exponentialRampToValueAtTime(peak * 0.66, startAt + dur * 0.54);
+      env.gain.exponentialRampToValueAtTime(0.001, startAt + dur + 0.026);
 
       const subEnv = ctx.createGain();
       subEnv.gain.setValueAtTime(0.001, startAt);
-      subEnv.gain.linearRampToValueAtTime(peak * 0.34, startAt + 0.012);
-      subEnv.gain.exponentialRampToValueAtTime(0.001, startAt + dur + 0.018);
+      subEnv.gain.linearRampToValueAtTime(peak * 0.56, startAt + 0.015);
+      subEnv.gain.exponentialRampToValueAtTime(0.001, startAt + dur + 0.024);
 
-      osc.connect(f1);
-      osc.connect(f2);
+      osc.connect(preDrive);
+      preDrive.connect(shaper);
+      shaper.connect(f1);
+      shaper.connect(f2);
       f1.connect(env);
       f2.connect(env);
       env.connect(outNode);
 
-      subOsc.connect(subEnv);
+      subOsc.connect(chestFilter);
+      chestFilter.connect(subEnv);
       subEnv.connect(outNode);
 
-      // Cute breathy puppy puff at yip onset
+      // Raspy gravelly throat-chuff & breath turbulence modulated by the vocal-fry LFO
       const noiseSrc = ctx.createBufferSource();
       noiseSrc.buffer = this.getNoiseBuffer(ctx);
-      const noiseFilter = ctx.createBiquadFilter();
-      noiseFilter.type = 'bandpass';
-      noiseFilter.frequency.setValueAtTime(2100 * this.jitter(0.12), startAt);
-      noiseFilter.Q.setValueAtTime(1.8, startAt);
+      noiseSrc.loop = true;
+
+      const raspNoiseFilter = ctx.createBiquadFilter();
+      raspNoiseFilter.type = 'bandpass';
+      raspNoiseFilter.frequency.setValueAtTime(820 * this.jitter(0.12), startAt);
+      raspNoiseFilter.frequency.exponentialRampToValueAtTime(1180, startAt + dur * 0.25);
+      raspNoiseFilter.frequency.exponentialRampToValueAtTime(640, startAt + dur);
+      raspNoiseFilter.Q.setValueAtTime(1.25, startAt);
+
       const noiseGain = ctx.createGain();
+      const noisePeak = 0.165 * vol * gainScale;
       noiseGain.gain.setValueAtTime(0.001, startAt);
-      noiseGain.gain.linearRampToValueAtTime(0.11 * vol * gainScale, startAt + 0.008);
-      noiseGain.gain.exponentialRampToValueAtTime(0.001, startAt + Math.min(0.075, dur * 0.68));
-      noiseSrc.connect(noiseFilter);
-      noiseFilter.connect(noiseGain);
+      noiseGain.gain.linearRampToValueAtTime(noisePeak, startAt + 0.01);
+      noiseGain.gain.exponentialRampToValueAtTime(noisePeak * 0.55, startAt + dur * 0.58);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, startAt + dur + 0.018);
+
+      const noiseRaspMod = ctx.createGain();
+      noiseRaspMod.gain.setValueAtTime(noisePeak * 0.36, startAt);
+      raspLfo.connect(noiseRaspMod);
+      noiseRaspMod.connect(noiseGain.gain);
+
+      noiseSrc.connect(raspNoiseFilter);
+      raspNoiseFilter.connect(noiseGain);
       noiseGain.connect(outNode);
 
+      const stopAt = startAt + dur + 0.032;
       osc.start(startAt);
       subOsc.start(startAt);
-      lfo.start(startAt);
-      noiseSrc.start(startAt, 0, Math.min(0.12, dur + 0.02));
+      raspLfo.start(startAt);
+      noiseSrc.start(startAt);
 
-      const stopAt = startAt + dur + 0.028;
       osc.stop(stopAt);
       subOsc.stop(stopAt);
-      lfo.stop(stopAt);
+      raspLfo.stop(stopAt);
+      noiseSrc.stop(stopAt);
     };
 
-    const basePitch = (440 + Math.random() * 145) * this.jitter(0.05);
-    const dur = 0.085 + Math.random() * 0.038;
-    triggerSingleYip(now, basePitch, dur, 1.0);
+    // Deeper, raspy terrier pitch (~235-290 Hz instead of high 440-585 Hz squeak)
+    const basePitch = (235 + Math.random() * 55) * this.jitter(0.05);
+    const dur = 0.118 + Math.random() * 0.042;
+    triggerRaspyBark(now, basePitch, dur, 1.0, true);
 
-    // Excited rapid puppy double-yip ("YIP-YIP!") ~62% of the time
-    if (Math.random() < 0.62) {
-      const secondAt = now + dur + 0.032 + Math.random() * 0.028;
-      const secondDur = dur * 0.86;
-      triggerSingleYip(
+    // Spirited terrier double-bark ("RRUFF-WUFF!") ~58% of the time
+    if (Math.random() < 0.58) {
+      const secondAt = now + dur + 0.042 + Math.random() * 0.032;
+      const secondDur = dur * 0.9;
+      triggerRaspyBark(
         secondAt,
-        basePitch * (1.08 + Math.random() * 0.16),
+        basePitch * (0.94 + Math.random() * 0.13),
         secondDur,
-        0.9,
+        0.92,
+        false,
       );
-      // Occasional ecstatic triple-yip!
-      if (Math.random() < 0.34) {
-        triggerSingleYip(
-          secondAt + secondDur + 0.03 + Math.random() * 0.024,
-          basePitch * (1.16 + Math.random() * 0.18),
+      // Occasional third gruff chuff-bark!
+      if (Math.random() < 0.24) {
+        triggerRaspyBark(
+          secondAt + secondDur + 0.038 + Math.random() * 0.028,
+          basePitch * (0.88 + Math.random() * 0.12),
           secondDur * 0.82,
           0.78,
+          false,
         );
       }
     }

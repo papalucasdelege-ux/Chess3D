@@ -1,10 +1,12 @@
 import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import { APP_BUILD_ID } from './chess/assetVersion';
+import { installGlobalKeepAwake } from './utils/keepAwake';
 import App from './App.tsx';
 import './index.css';
 
 if (typeof window !== 'undefined') {
+  installGlobalKeepAwake();
   const canonicalHref = window.location.origin + window.location.pathname;
   let canonicalLink = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
   if (!canonicalLink) {
@@ -50,10 +52,10 @@ if (typeof window !== 'undefined') {
 
   if ('caches' in window) {
     const activeRuntimeCaches = new Set([
-      'chessangel-voices-v4-5',
-      'chessangel-videos-v4-5',
-      'chessangel-registry-v4-5',
-      'chessangel-images-v4-5',
+      'chessangel-voices-v4-6',
+      'chessangel-videos-v4-6',
+      'chessangel-registry-v4-6',
+      'chessangel-images-v4-6',
     ]);
     void window.caches
       .keys()
@@ -62,7 +64,7 @@ if (typeof window !== 'undefined') {
           keys
             .filter((k) => {
               // Purge outdated Workbox precache buckets from prior versions
-              if (k.includes('precache') && !k.includes('chessangel-v4-5')) return true;
+              if (k.includes('precache') && !k.includes('chessangel-v4-6')) return true;
               // On every newly published build, wipe runtime media caches so updated MP4s/MP3s renew 100%
               if (k.startsWith('chessangel-')) {
                 return isNewPublishedBuild || !activeRuntimeCaches.has(k);
@@ -97,16 +99,19 @@ if (typeof window !== 'undefined') {
     immediate: true,
     onRegisteredSW(_swUrl, registration) {
       if (!registration) return;
-      // Check immediately for a newer published build and again whenever the user returns to the app
-      void registration.update().catch(() => {});
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
+      const safeSwUpdate = (): void => {
+        if (navigator.onLine !== false) {
           void registration.update().catch(() => {});
         }
+      };
+      // Check immediately when online for a newer published build and again on tab return
+      safeSwUpdate();
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          safeSwUpdate();
+        }
       });
-      window.setInterval(() => {
-        void registration.update().catch(() => {});
-      }, 5 * 60 * 1000);
+      window.setInterval(safeSwUpdate, 5 * 60 * 1000);
     },
     onRegisterError() {
       // Gracefully continue in standard browser mode if SW registration is unavailable

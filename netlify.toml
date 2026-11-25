@@ -52,11 +52,14 @@
     Cache-Control = "public, max-age=0, must-revalidate"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "no-referrer"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=(self)"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
     X-Robots-Tag = "index, follow, noarchive, noai, noimageai"
 
 [[headers]]
   for = "/*"
   [headers.values]
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=(self)"
     X-Robots-Tag = "index, follow, noarchive, noai, noimageai"
 
 [[headers]]
@@ -76,6 +79,15 @@
   for = "/assets/aistudio/*.mp4"
   [headers.values]
     Content-Type = "video/mp4"
+    Accept-Ranges = "bytes"
+    Cache-Control = "public, max-age=604800"
+    X-Content-Type-Options = "nosniff"
+    X-Robots-Tag = "noindex, nofollow, nosnippet, noarchive, noai, noimageai"
+
+[[headers]]
+  for = "/assets/aistudio/*.mp3"
+  [headers.values]
+    Content-Type = "audio/mpeg"
     Accept-Ranges = "bytes"
     Cache-Control = "public, max-age=604800"
     X-Content-Type-Options = "nosniff"

@@ -4,12 +4,12 @@
  * media assets (videos, MP3s, voice clips, and artwork).
  */
 export const APP_VERSION: string =
-  typeof __APP_VERSION__ === 'string' && __APP_VERSION__.length > 0 ? __APP_VERSION__ : '4.5';
+  typeof __APP_VERSION__ === 'string' && __APP_VERSION__.length > 0 ? __APP_VERSION__ : '4.6';
 
 export const APP_BUILD_ID: string =
   typeof __APP_BUILD_ID__ === 'string' && __APP_BUILD_ID__.length > 0
     ? __APP_BUILD_ID__
-    : '4.5.0-dev';
+    : '4.6.0-dev';
 
 /**
  * Appends (or replaces) the `?v=<APP_BUILD_ID>` query stamp on root-relative media URLs

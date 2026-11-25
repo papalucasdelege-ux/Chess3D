@@ -2,6 +2,16 @@ import * as THREE from 'three';
 
 export type MiniHamsterVariant = 'russian-grey' | 'snow-white';
 
+const cachedFurTexturesByVariant = new Map<
+  MiniHamsterVariant,
+  {
+    colorMap: THREE.CanvasTexture;
+    headColorMap: THREE.CanvasTexture | null;
+    bumpMap: THREE.CanvasTexture;
+  }
+>();
+let cachedHamsterShadowTexture: THREE.CanvasTexture | null = null;
+
 /**
  * Generates an anatomically UV-mapped 512x512 procedural fur texture + subtle micro-fur bump map
  * for a Campbell's Russian Dwarf Hamster (`Phodopus campbelli`).
@@ -16,6 +26,9 @@ function createCampbellFurTextures(variant: MiniHamsterVariant): {
   headColorMap: THREE.CanvasTexture | null;
   bumpMap: THREE.CanvasTexture;
 } {
+  const cached = cachedFurTexturesByVariant.get(variant);
+  if (cached) return cached;
+
   const size = 512;
   const colorCanvas = document.createElement('canvas');
   colorCanvas.width = size;
@@ -224,25 +237,29 @@ function createCampbellFurTextures(variant: MiniHamsterVariant): {
   bumpMap.wrapS = THREE.RepeatWrapping;
   bumpMap.wrapT = THREE.RepeatWrapping;
 
-  return { colorMap, headColorMap, bumpMap };
+  const created = { colorMap, headColorMap, bumpMap };
+  cachedFurTexturesByVariant.set(variant, created);
+  return created;
 }
+
+const HAMSTER_BODY_HALF_LEN = 0.455; // slightly longer body torso Z span ≈ 0.91
 
 /**
  * Sculpts a continuous, anatomically authentic Campbell's Dwarf Hamster (`Phodopus campbelli`) torso:
- * - Compact, plump pear-egg silhouette (~1.34:1 length-to-width, NOT an elongated mouse!)
- * - Broad, domed hindquarters with soft lower-flank fullness ("fluffy cotton-ball dumpling")
- * - Gentle hunched shoulder arch tapering directly into a thick, neckless head junction
+ * - Slightly longer, sleeker plump pear-oval silhouette (~1.58:1 length-to-width)
+ * - Rounded hindquarters with soft lower-flank fullness
+ * - Gentle shoulder arch tapering smoothly into a thick, neckless head junction
  * - Softly flattened ventral belly sitting low over the paws
  * - Exact cylindrical-anatomical UVs matching `createCampbellFurTextures`
  */
 function createCampbellBodyGeometry(): THREE.BufferGeometry {
-  const segU = 36;
-  const segV = 28;
+  const segU = 38;
+  const segV = 30;
   const geo = new THREE.SphereGeometry(1, segU, segV);
   const pos = geo.attributes.position;
   const uv = geo.attributes.uv;
 
-  const lengthHalf = 0.385; // total torso Z span ≈ 0.77
+  const lengthHalf = HAMSTER_BODY_HALF_LEN;
 
   for (let i = 0; i < pos.count; i++) {
     // SphereGeometry poles are along +Y / -Y; remap pole axis to longitudinal Z (rump=-1, front=+1)
@@ -258,34 +275,34 @@ function createCampbellBodyGeometry(): THREE.BufferGeometry {
     const cosA = radial > 1e-5 ? sx / radial : 0;
     const sinA = radial > 1e-5 ? sz / radial : 0; // +1 = dorsal top, -1 = ventral belly
 
-    // Longitudinal anatomical width profile (pear-egg: broadest at rounded hips t ≈ -0.26, snug at shoulders)
+    // Longitudinal anatomical width profile (pear-oval: broadest at rounded hips t ≈ -0.28, sleek through mid-body & shoulders)
     const pearWidth =
-      0.295 *
+      0.282 *
       (1.0 +
-        0.16 * Math.exp(-Math.pow((t + 0.28) / 0.48, 2)) -
-        0.13 * Math.exp(-Math.pow((t - 0.62) / 0.42, 2)));
+        0.15 * Math.exp(-Math.pow((t + 0.28) / 0.5, 2)) -
+        0.13 * Math.exp(-Math.pow((t - 0.62) / 0.44, 2)));
 
-    // Lower-flank plushness ("dumpling skirt"): wider slightly below mid-height
-    const skirtFlare = sinA < 0.15 ? 1.0 + 0.08 * Math.exp(-Math.pow((sinA + 0.25) / 0.42, 2)) : 1.0;
+    // Lower-flank plushness: wider slightly below mid-height
+    const skirtFlare = sinA < 0.15 ? 1.0 + 0.075 * Math.exp(-Math.pow((sinA + 0.25) / 0.42, 2)) : 1.0;
 
-    // Dorsal arch (classic compact hunched Campbell's back) & soft ventral flattening
+    // Dorsal arch & soft ventral flattening
     const dorsalHeight =
-      0.242 *
+      0.238 *
       (1.0 +
-        0.13 * Math.exp(-Math.pow((t + 0.18) / 0.55, 2)) +
-        0.04 * Math.exp(-Math.pow((t - 0.35) / 0.4, 2)));
-    const ventralDepth = 0.182;
+        0.12 * Math.exp(-Math.pow((t + 0.18) / 0.58, 2)) +
+        0.04 * Math.exp(-Math.pow((t - 0.35) / 0.42, 2)));
+    const ventralDepth = 0.18;
 
     const x = cosA * radial * pearWidth * skirtFlare;
     let y = (sinA >= 0 ? sinA * dorsalHeight : sinA * ventralDepth) * radial;
     // Slight natural dorsal rise across mid-back
-    y += 0.022 * Math.exp(-Math.pow((t + 0.12) / 0.65, 2)) * (1 - Math.abs(t) * 0.4);
+    y += 0.021 * Math.exp(-Math.pow((t + 0.12) / 0.68, 2)) * (1 - Math.abs(t) * 0.4);
     // Gently flatten underside where tummy skims near the chessboard
     if (y < -0.155) {
       y = -0.155 + (y + 0.155) * 0.38;
     }
 
-    // Round off the rear rump smoothly while keeping front chest slightly fuller
+    // Smoothly elongated rear rump and front chest
     const zOffset = t < 0 ? t * lengthHalf * 1.03 : t * lengthHalf * 0.96;
     pos.setXYZ(i, x, y, zOffset);
 
@@ -341,8 +358,8 @@ function createCampbellHeadGeometry(): THREE.BufferGeometry {
     // Subtle Roman-nose downward slope toward the blunt muzzle tip
     const nasalCurveY = t > 0 ? -0.048 * Math.pow(t, 1.8) : 0;
     const y = (sinA >= 0 ? sinA * heightTop : sinA * heightBot) * radial + nasalCurveY;
-    // Short compact skull length (Campbell's face is adorably short!)
-    const z = t >= 0 ? t * 0.245 : t * 0.21;
+    // Proportionally lengthened skull & muzzle to harmonize with the slightly longer torso
+    const z = t >= 0 ? t * 0.262 : t * 0.224;
 
     pos.setXYZ(i, x, y, z);
 
@@ -390,6 +407,7 @@ function createCampbellEarShellGeometry(radiusX: number, radiusY: number, cupDep
 }
 
 function createHamsterShadowTexture(): THREE.CanvasTexture {
+  if (cachedHamsterShadowTexture) return cachedHamsterShadowTexture;
   const canvas = document.createElement('canvas');
   canvas.width = 96;
   canvas.height = 96;
@@ -404,6 +422,7 @@ function createHamsterShadowTexture(): THREE.CanvasTexture {
   }
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
+  cachedHamsterShadowTexture = tex;
   return tex;
 }
 
@@ -605,8 +624,8 @@ export class MiniHamsterActor {
       return m;
     };
 
-    // Grounded soft contact shadow matching the compact plump Campbell's oval silhouette
-    const shadowGeo = this.trackGeo(new THREE.PlaneGeometry(0.84, 1.08));
+    // Grounded soft contact shadow matching the slightly longer Campbell's oval silhouette
+    const shadowGeo = this.trackGeo(new THREE.PlaneGeometry(0.82, 1.26));
     this.shadowMat = new THREE.MeshBasicMaterial({
       map: this.shadowTex,
       transparent: true,
@@ -626,7 +645,7 @@ export class MiniHamsterActor {
     this.bodyPivot.position.set(0, 0.215, -0.02);
     this.root.add(this.bodyPivot);
 
-    // 1. Continuous sculpted Campbell's Dwarf Hamster pear-egg torso
+    // 1. Continuous sculpted Campbell's Dwarf Hamster torso (slightly longer silhouette)
     const bodyMesh = makeMesh(createCampbellBodyGeometry(), coatMat);
     bodyMesh.position.set(0, 0.015, -0.04);
     this.bodyPivot.add(bodyMesh);
@@ -638,15 +657,16 @@ export class MiniHamsterActor {
         const t = -0.92 + (s / 18) * 1.66; // rump (-0.92) -> upper back/shoulders (+0.74), never onto head
         const radial = Math.sqrt(Math.max(0, 1 - t * t));
         const dorsalHeight =
-          0.242 *
+          0.238 *
           (1.0 +
-            0.13 * Math.exp(-Math.pow((t + 0.18) / 0.55, 2)) +
-            0.04 * Math.exp(-Math.pow((t - 0.35) / 0.4, 2)));
+            0.12 * Math.exp(-Math.pow((t + 0.18) / 0.58, 2)) +
+            0.04 * Math.exp(-Math.pow((t - 0.35) / 0.42, 2)));
         const ySurf =
           dorsalHeight * radial +
-          0.022 * Math.exp(-Math.pow((t + 0.12) / 0.65, 2)) * (1 - Math.abs(t) * 0.4) +
+          0.021 * Math.exp(-Math.pow((t + 0.12) / 0.68, 2)) * (1 - Math.abs(t) * 0.4) +
           0.015;
-        const zSurf = (t < 0 ? t * 0.385 * 1.03 : t * 0.385 * 0.96) - 0.04;
+        const zSurf =
+          (t < 0 ? t * HAMSTER_BODY_HALF_LEN * 1.03 : t * HAMSTER_BODY_HALF_LEN * 0.96) - 0.04;
         // Embed tube center slightly beneath dorsal surface so a crisp flush dark-grey stripe shows along his back
         spinePts.push(new THREE.Vector3(0, ySurf - 0.015, zSurf));
       }
@@ -660,30 +680,30 @@ export class MiniHamsterActor {
 
     // Soft furry neck-collar / chest ruff blending shoulders seamlessly into the head (no skinny neck!)
     const chestRuff = makeMesh(new THREE.SphereGeometry(0.185, 16, 12), creamFurMat);
-    chestRuff.scale.set(1.04, 0.72, 0.85);
-    chestRuff.position.set(0, -0.045, 0.235);
+    chestRuff.scale.set(1.02, 0.72, 0.95);
+    chestRuff.position.set(0, -0.045, 0.292);
     this.bodyPivot.add(chestRuff);
 
     // 2. Sculpted Campbell's Head with broad cheek pouches & short blunt Roman muzzle
-    this.headPivot.position.set(0, 0.032, 0.285);
+    this.headPivot.position.set(0, 0.032, 0.348);
     this.bodyPivot.add(this.headPivot);
 
     const headMesh = makeMesh(createCampbellHeadGeometry(), headCoatMat);
-    headMesh.position.set(0, 0.01, 0.035);
+    headMesh.position.set(0, 0.01, 0.038);
     this.headPivot.add(headMesh);
 
     // Subtle soft furry whisker pads (mystacial pads) + tiny cleft upper lip (philtrum)
     for (const side of [-1, 1]) {
       const whiskerPad = makeMesh(new THREE.SphereGeometry(0.056, 12, 10), creamFurMat);
-      whiskerPad.scale.set(1.06, 0.82, 0.96);
-      whiskerPad.position.set(side * 0.048, -0.042, 0.228);
+      whiskerPad.scale.set(1.06, 0.82, 0.98);
+      whiskerPad.position.set(side * 0.048, -0.042, 0.244);
       this.headPivot.add(whiskerPad);
     }
 
     // Soft tucked cream lower chin
     const chin = makeMesh(new THREE.SphereGeometry(0.052, 10, 8), creamFurMat);
-    chin.scale.set(1.12, 0.62, 0.92);
-    chin.position.set(0, -0.075, 0.205);
+    chin.scale.set(1.12, 0.62, 0.96);
+    chin.position.set(0, -0.075, 0.22);
     this.headPivot.add(chin);
 
     // Delicate small rhinarium button nose tucked right on the blunt muzzle tip
@@ -693,7 +713,7 @@ export class MiniHamsterActor {
       false,
     );
     this.noseMesh.scale.set(1.18, 0.82, 0.82);
-    this.noseMesh.position.set(0, -0.022, 0.282);
+    this.noseMesh.position.set(0, -0.022, 0.301);
     this.headPivot.add(this.noseMesh);
 
     // Glossy prominent dark obsidian "boba" eyes set slightly high & wide-lateral + curved whiskers
@@ -701,21 +721,21 @@ export class MiniHamsterActor {
       // Subtle fur eyelid rim
       const eyeRim = makeMesh(new THREE.SphereGeometry(0.05, 12, 10), headCoatMat, false);
       eyeRim.scale.set(0.92, 0.94, 0.82);
-      eyeRim.position.set(side * 0.132, 0.042, 0.146);
+      eyeRim.position.set(side * 0.132, 0.042, 0.156);
       this.headPivot.add(eyeRim);
 
       const eye = makeMesh(new THREE.SphereGeometry(0.045, 14, 12), eyeMat, false);
-      eye.position.set(side * 0.14, 0.044, 0.158);
+      eye.position.set(side * 0.14, 0.044, 0.168);
       this.headPivot.add(eye);
 
       // Primary bright studio catchlight
       const glintMain = makeMesh(new THREE.SphereGeometry(0.014, 8, 6), catchlightMat, false);
-      glintMain.position.set(side * 0.156, 0.058, 0.193);
+      glintMain.position.set(side * 0.156, 0.058, 0.203);
       this.headPivot.add(glintMain);
 
       // Tiny secondary lower glint
       const glintSub = makeMesh(new THREE.SphereGeometry(0.007, 6, 6), catchlightMat, false);
-      glintSub.position.set(side * 0.165, 0.035, 0.186);
+      glintSub.position.set(side * 0.165, 0.035, 0.196);
       this.headPivot.add(glintSub);
 
       // 4 gracefully arched fine Campbell's vibrissae (whiskers) sweeping outward & back
@@ -727,16 +747,16 @@ export class MiniHamsterActor {
       ];
       for (const wc of whiskerConfigs) {
         const wCurve = new THREE.CatmullRomCurve3([
-          new THREE.Vector3(side * 0.068, -0.036 + wc.yOff, 0.238),
+          new THREE.Vector3(side * 0.068, -0.036 + wc.yOff, 0.252),
           new THREE.Vector3(
             side * (0.068 + wc.reachX * 0.55),
             -0.036 + wc.yOff + wc.spreadY * 0.65,
-            0.238 + wc.sweepZ * 0.45,
+            0.252 + wc.sweepZ * 0.45,
           ),
           new THREE.Vector3(
             side * (0.068 + wc.reachX),
             -0.036 + wc.yOff + wc.spreadY,
-            0.238 + wc.sweepZ,
+            0.252 + wc.sweepZ,
           ),
         ]);
         const whisker = makeMesh(
@@ -769,10 +789,10 @@ export class MiniHamsterActor {
     buildCampbellEar(-1, this.earLeftPivot);
     buildCampbellEar(1, this.earRightPivot);
 
-    // 3. Authentic tiny blunt furry nub tail tucked snugly at the base of the plump rump
+    // 3. Authentic tiny blunt furry nub tail tucked snugly at the base of the lengthened rump
     this.tailMesh = makeMesh(new THREE.SphereGeometry(0.044, 10, 8), creamFurMat);
     this.tailMesh.scale.set(0.84, 0.78, 1.28);
-    this.tailMesh.position.set(0, -0.042, -0.442);
+    this.tailMesh.position.set(0, -0.042, -0.514);
     this.bodyPivot.add(this.tailMesh);
 
     // 4. Authentic Phodopus ("hairy-footed") short furry legs & dainty 4-toe paws!
@@ -824,10 +844,10 @@ export class MiniHamsterActor {
       }
     };
 
-    buildPhodopusPaw(this.pawFL, -0.145, -0.072, 0.185, false);
-    buildPhodopusPaw(this.pawFR, 0.145, -0.072, 0.185, false);
-    buildPhodopusPaw(this.pawBL, -0.168, -0.068, -0.205, true);
-    buildPhodopusPaw(this.pawBR, 0.168, -0.068, -0.205, true);
+    buildPhodopusPaw(this.pawFL, -0.142, -0.072, 0.228, false);
+    buildPhodopusPaw(this.pawFR, 0.142, -0.072, 0.228, false);
+    buildPhodopusPaw(this.pawBL, -0.162, -0.068, -0.252, true);
+    buildPhodopusPaw(this.pawBR, 0.162, -0.068, -0.252, true);
 
     // 5. Tiny subtle scurry puffs
     const puffGeo = this.trackGeo(new THREE.SphereGeometry(0.042, 7, 5));
@@ -973,9 +993,5 @@ export class MiniHamsterActor {
   public dispose(): void {
     for (const g of this.geometries) g.dispose();
     for (const m of this.materials) m.dispose();
-    this.furTex.dispose();
-    this.headFurTex?.dispose();
-    this.furBumpTex.dispose();
-    this.shadowTex.dispose();
   }
 }

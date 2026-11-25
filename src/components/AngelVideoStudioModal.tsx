@@ -4,10 +4,12 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  Crown,
   Film,
   Hand,
   Loader2,
   Lock,
+  Music,
   Play,
   Plus,
   Repeat,
@@ -94,6 +96,11 @@ interface AngelVideoStudioModalProps {
   onTriggerDogEvent?: (options: { playVideo: boolean }) => void;
   onTriggerHamsterChase?: () => void;
   onTriggerDanceStarsEvent?: () => void;
+  onSimulateEighthRow?: () => void;
+  musicTracks?: readonly { id: string; title: string; url: string }[];
+  unavailableMusicIndices?: readonly number[];
+  onSelectMusicTrack?: (index: number) => void;
+  onUploadMusicTrack?: (trackId: string, file: File) => Promise<boolean>;
 }
 
 function formatSec(sec: number): string {
@@ -122,6 +129,11 @@ export function AngelVideoStudioModal({
   onTriggerDogEvent,
   onTriggerHamsterChase,
   onTriggerDanceStarsEvent,
+  onSimulateEighthRow,
+  musicTracks = [],
+  unavailableMusicIndices = [],
+  onSelectMusicTrack,
+  onUploadMusicTrack,
 }: AngelVideoStudioModalProps) {
   const [overrides, setOverrides] = useState<AngelVideoMapPayload>(() =>
     getAngelVideoOverridesSnapshot(),
@@ -868,6 +880,116 @@ export function AngelVideoStudioModal({
           </div>
         </div>
 
+        {/* Soundtrack / Background Music Buttons (.mp3) */}
+        {musicTracks.length > 0 && onUploadMusicTrack && (
+          <div className="rounded-xl border border-[#d6ae63]/45 bg-gradient-to-b from-[#15120b] to-[#080a0f] p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <div className="flex items-center gap-1.5">
+                <Music className="w-3.5 h-3.5 text-[#e3be78] shrink-0" />
+                <span className="text-xs font-semibold text-[#f7eedb]">
+                  Background Music Buttons (.mp3)
+                </span>
+              </div>
+              <span className="text-[10px] text-[#b4bdcc]">
+                Attach or replace .mp3 files for the 4 unfold-menu music buttons
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {musicTracks.map((track, idx) => {
+                const slotKey = `music:${track.id}`;
+                const isBusy = busySlot === slotKey;
+                const isMissing = unavailableMusicIndices.includes(idx);
+                return (
+                  <div
+                    key={track.id}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setDragOverSlot(slotKey);
+                    }}
+                    onDragLeave={() => {
+                      setDragOverSlot((prev) => (prev === slotKey ? null : prev));
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDragOverSlot(null);
+                      const f = e.dataTransfer.files?.[0];
+                      if (!f) return;
+                      setBusySlot(slotKey);
+                      void onUploadMusicTrack(track.id, f).then((ok) => {
+                        setBusySlot(null);
+                        setStatusNote(
+                          ok
+                            ? `Attached "${f.name}" to "${track.title}" and started playback.`
+                            : `Could not attach "${f.name}" to "${track.title}".`,
+                        );
+                      });
+                    }}
+                    className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 transition-colors ${
+                      dragOverSlot === slotKey
+                        ? 'border-[#e3be78] bg-[#241c0e]'
+                        : 'border-white/12 bg-[#0d1118]'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-[#f3efe4] truncate">
+                        {track.title}
+                      </div>
+                      <div
+                        className={`text-[10px] font-mono-tabular truncate ${
+                          isMissing ? 'text-amber-300' : 'text-emerald-300'
+                        }`}
+                      >
+                        {isMissing ? 'Awaiting .mp3 file' : '✓ Ready'}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {onSelectMusicTrack && !isMissing && (
+                        <button
+                          type="button"
+                          onClick={() => onSelectMusicTrack(idx)}
+                          title={`Play ${track.title}`}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-white/15 bg-[#171d28] hover:bg-[#222a3a] text-[11px] text-[#e2e8f0] cursor-pointer"
+                        >
+                          <Play className="w-3 h-3 text-[#e3be78]" />
+                          Play
+                        </button>
+                      )}
+                      <label className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-[#d6ae63]/55 bg-[#261e10] hover:bg-[#342915] text-[11px] font-medium text-[#f7e7c2] cursor-pointer whitespace-nowrap">
+                        {isBusy ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Upload className="w-3 h-3 text-[#e3be78]" />
+                        )}
+                        <span>{isMissing ? 'Attach .mp3' : 'Replace'}</span>
+                        <input
+                          type="file"
+                          accept=".mp3,audio/mpeg,audio/*"
+                          className="hidden"
+                          disabled={isBusy}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            e.target.value = '';
+                            if (!f) return;
+                            setBusySlot(slotKey);
+                            void onUploadMusicTrack(track.id, f).then((ok) => {
+                              setBusySlot(null);
+                              setStatusNote(
+                                ok
+                                  ? `Attached "${f.name}" to "${track.title}" and started playback.`
+                                  : `Could not attach "${f.name}" to "${track.title}".`,
+                              );
+                            });
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* 0. Multi-Video Idle / Quiet Listening Pool */}
         <div className="rounded-xl border border-[#d6ae63]/40 bg-black overflow-hidden">
           <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 bg-[#0c1017] border-b border-white/10">
@@ -1602,6 +1724,186 @@ export function AngelVideoStudioModal({
                     )}
                   </div>
                 </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Special Board Event Video — Pawn Reaches 8th Row / Promotion Choice (case:ask_promotion) */}
+        {(() => {
+          const [promoSlot1Key, promoSlot2Key] = getCaseSlotKeys('ask_promotion');
+          const promoUrl1 = overrides.cases?.[promoSlot1Key];
+          const promoUrl2 = overrides.cases?.[promoSlot2Key];
+          const promoFallbackUrl = ANGEL_CASE_VIDEO_MAP.ask_promotion;
+          const promoPool = getCaseVideoPool('ask_promotion', overrides);
+          const promoTalkSec =
+            ANGEL_VIDEO_STUDIO_GROUPS.flatMap((g) => g.cases).find(
+              (c) => c.caseId === 'ask_promotion',
+            )?.talkSec ?? 8.9;
+
+          const previewEighthRowSlot = (preferredUrl?: string) => {
+            primeNextCaseSlotPreview('ask_promotion', preferredUrl);
+            onPreviewCase(
+              'ask_promotion_v1',
+              CLIP_TEXT.ask_promotion_v1,
+              'PAWN REACHES 8TH ROW',
+            );
+          };
+
+          const promoSlots = [
+            {
+              slotKey: promoSlot1Key,
+              quotaSlotId: 'case:ask_promotion_primary',
+              slotLabel: '8th-Row Arrival #1 (Primary)',
+              slotUrl: promoUrl1,
+              emptyHint: promoFallbackUrl
+                ? 'Insert custom .mp4 (currently using promotion fallback)'
+                : 'Insert primary 8th-row arrival .mp4',
+              subCaption: promoFallbackUrl
+                ? `Fallback active (${promoFallbackUrl.split('?')[0]}) — insert or drop your dedicated 8th-row .mp4 here`
+                : 'Primary video played when a player pawn reaches the 8th row',
+            },
+            {
+              slotKey: promoSlot2Key,
+              quotaSlotId: `case:${promoSlot2Key}`,
+              slotLabel: '8th-Row Arrival #2 (Optional Alt)',
+              slotUrl: promoUrl2,
+              emptyHint: 'Optional — insert 2nd alternating 8th-row .mp4',
+              subCaption: 'Alternates automatically with #1 whenever another pawn reaches the 8th row',
+            },
+          ] as const;
+
+          return (
+            <div className="rounded-xl border border-[#e3be78]/65 bg-[#141008] overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#241b0b] border-b border-[#e3be78]/35">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Crown className="w-3.5 h-3.5 text-[#f7d78a] shrink-0" />
+                    <span className="text-xs font-semibold text-[#fff7e0]">
+                      Pawn Reaches 8th Row — Promotion Choice Video (ask_promotion)
+                    </span>
+                    <span
+                      className={`font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+                        promoPool.length > 0
+                          ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300'
+                          : 'border-amber-400/50 bg-amber-950/40 text-amber-200'
+                      }`}
+                    >
+                      {promoPool.length >= 2
+                        ? '✓ 2 Custom .mp4s Alternating'
+                        : promoPool.length === 1
+                          ? '✓ Custom 8th-Row .mp4 Active'
+                          : 'Ready for .mp4 Insert'}
+                    </span>
+                    <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-[#d6ae63]/55 bg-[#2a1f0d] text-[#fde68a]">
+                      Talk: {formatSec(promoTalkSec)}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#ded0b4] mt-0.5 leading-snug">
+                    Insert or drag-and-drop the portrait <code className="text-[#fde68a]">.mp4</code>{' '}
+                    that Chess Angel plays the instant a pawn reaches the eighth row and she asks
+                    whether to crown a Queen, Rook, Bishop, or Knight.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => previewEighthRowSlot(undefined)}
+                    title="Preview Chess Angel's 8th-row voice prompt, promotion buttons, and inserted video"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-[#2c200b] hover:bg-[#3f2e10] border border-[#e3be78]/60 text-[11px] font-semibold text-[#fff3cf] cursor-pointer"
+                  >
+                    <Play className="w-3 h-3 text-[#f7d78a]" />
+                    Test 8th-Row Video
+                  </button>
+                  {onSimulateEighthRow && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onSimulateEighthRow();
+                      }}
+                      title="Close Studio and run the live 3D match simulation where a pawn reaches the 8th row"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-black hover:bg-[#1e180d] border border-[#d6ae63]/45 text-[11px] font-medium text-[#f3cf83] cursor-pointer"
+                    >
+                      <Crown className="w-3 h-3 text-[#e3be78]" />
+                      Simulate 8th Row
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="divide-y divide-white/10">
+                {promoSlots.map((slot) => {
+                  const slotClipSec = getVideoFileDurationSec(
+                    slot.slotUrl || (slot.slotKey === 'ask_promotion' ? promoFallbackUrl : undefined),
+                    overrides,
+                  );
+                  return (
+                    <div
+                      key={slot.slotKey}
+                      {...makeDropHandlers('case', slot.slotKey, (uploadedUrl) =>
+                        previewEighthRowSlot(uploadedUrl),
+                      )}
+                      className={`px-3 py-2.5 transition-colors ${
+                        dragOverSlot === `case:${slot.slotKey}`
+                          ? 'bg-[#2c210e]'
+                          : 'bg-black hover:bg-[#110d06]'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="font-mono-tabular text-xs font-semibold text-[#f7d78a]">
+                              {slot.slotLabel}
+                            </span>
+                            <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-[#d6ae63]/40 bg-[#22190a] text-[#f3cf83]">
+                              case:{slot.slotKey}
+                            </span>
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded border truncate ${
+                                slot.slotUrl
+                                  ? 'border-emerald-500/45 bg-emerald-950/40 text-emerald-300 font-medium'
+                                  : 'border-amber-400/40 bg-amber-950/30 text-amber-200'
+                              }`}
+                            >
+                              {slot.slotUrl ? '✓ Custom .mp4 Inserted' : slot.emptyHint}
+                            </span>
+                            {slotClipSec !== null && (
+                              <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200 whitespace-nowrap">
+                                Video: {formatSec(slotClipSec)}
+                              </span>
+                            )}
+                            {renderVideoSizeBadge(slot.slotUrl, slot.slotLabel)}
+                            {renderMaxPlaysControl(slot.quotaSlotId, slot.slotLabel)}
+                            {renderPlayToEndFlagButton(`case:${slot.slotKey}`, slot.slotLabel)}
+                          </div>
+                          <div className="font-mono-tabular text-[10px] text-[#9aa3b2] truncate mt-0.5">
+                            {slot.slotUrl ? slot.slotUrl.split('?')[0] : slot.subCaption}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => previewEighthRowSlot(slot.slotUrl)}
+                            title={`Preview ${slot.slotLabel} on Chess Angel`}
+                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#151c28] border border-white/16 text-[11px] text-[#cbd5e1] cursor-pointer"
+                          >
+                            <Play className="w-3 h-3 text-[#7dd3fc]" />
+                            Test
+                          </button>
+                          {renderUploadButton(
+                            'case',
+                            slot.slotKey,
+                            Boolean(slot.slotUrl),
+                            (uploadedUrl) => previewEighthRowSlot(uploadedUrl),
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           );
@@ -2569,7 +2871,9 @@ export function AngelVideoStudioModal({
                               ? 'fork warning'
                               : item.caseId === 'undo_done'
                                 ? 'undo movie'
-                                : item.caseId;
+                                : item.caseId === 'ask_promotion'
+                                  ? '8th-row pawn arrival'
+                                  : item.caseId;
                           return (
                           <div className="mt-2.5 rounded-lg border border-white/12 bg-[#07090e] divide-y divide-white/10 overflow-hidden">
                             {(

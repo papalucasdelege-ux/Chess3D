@@ -33,6 +33,7 @@ import {
   Leaf,
   Lightbulb,
   Music,
+  Crown,
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 import {
@@ -93,6 +94,7 @@ interface ControlDockProps {
   onToggleMusic: () => void;
   musicTracks: readonly { id: string; title: string }[];
   activeMusicTrackIndex: number;
+  unavailableMusicIndices?: readonly number[];
   onSelectMusicTrack: (index: number) => void;
   angelVoice: AngelVoiceMode;
   onChangeAngelVoice: (mode: AngelVoiceMode) => void;
@@ -150,6 +152,8 @@ interface ControlDockProps {
   justSaved: boolean;
   onOpenLoadDrawer?: () => void;
   onTitleTribute?: () => void;
+  onSimulatePawnPromotion?: () => void;
+  onExportAngelUdoVideo?: () => void;
   onResetAngelMessages: () => void;
 
   // Tactical Training & Performance Statistics
@@ -323,10 +327,10 @@ export function ControlDock(props: ControlDockProps) {
 
       {/* Unified Horizontal Bottom Control Dock (solid/rgba surface — zero backdrop-filter over WebGL) */}
       <div
-        className={`pointer-events-auto w-full rounded-t-xl mb-0 sm:rounded-xl sm:mb-3 bg-[#11151d]/95 border border-white/12 shadow-2xl transition-all duration-200 ease-out overflow-hidden ${
+        className={`pointer-events-auto w-full rounded-t-xl mb-0 sm:rounded-xl sm:mb-3 bg-[#11151d]/95 border border-white/12 shadow-2xl transition-all duration-200 ease-out ${
           props.collapsed
-            ? 'max-h-0 opacity-0 translate-y-4 pointer-events-none border-transparent sm:mb-0'
-            : 'max-h-[440px] opacity-100 translate-y-0'
+            ? 'max-h-0 opacity-0 translate-y-4 pointer-events-none border-transparent sm:mb-0 overflow-hidden'
+            : 'max-h-[82dvh] sm:max-h-[480px] opacity-100 translate-y-0 overflow-y-auto thin-scroll'
         }`}
       >
         {/* Unified Menu Header Bar: Logo + ChessAngel 3D + Version + Copyright on Left | Controls + Play/Analysis/Replay on Far Right */}
@@ -442,70 +446,86 @@ export function ControlDock(props: ControlDockProps) {
               Coords: {props.showCoordinates ? 'On' : 'Off'}
             </button>
 
-            <button
-              type="button"
-              onClick={props.onToggleMusic}
-              aria-pressed={props.musicEnabled}
-              title={
-                props.musicEnabled
-                  ? `Turn music off (Playing: ${
-                      props.musicTracks[props.activeMusicTrackIndex]?.title ||
-                      "Queen's Infinite Reign"
-                    })`
-                  : `Play background music (${
-                      props.musicTracks[props.activeMusicTrackIndex]?.title ||
-                      "Queen's Infinite Reign"
-                    })`
-              }
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap focus-visible:outline-2 focus-visible:outline-[#e3be78] ${
-                props.musicEnabled
-                  ? 'bg-[#262014] hover:bg-[#31291a] border-[#d6ae63]/65 text-[#f6e4bc]'
-                  : 'bg-[#171c26] hover:bg-[#1f2634] border-white/10 text-[#8d96a6] hover:text-white'
-              }`}
+            <div
+              role="radiogroup"
+              aria-label="Select background song"
+              className="inline-flex flex-wrap items-center gap-1 rounded-md border border-white/12 bg-[#141821] px-2 py-1"
             >
-              <Music
-                className={`w-3.5 h-3.5 ${
-                  props.musicEnabled ? 'text-[#e3be78]' : 'text-[#8d96a6]'
-                }`}
-              />
-              Music: {props.musicEnabled ? 'On' : 'Off'}
-            </button>
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#cbd2df] pr-1 whitespace-nowrap">
+                <Music
+                  className={`w-3.5 h-3.5 ${
+                    props.musicEnabled ? 'text-[#e3be78]' : 'text-[#8d96a6]'
+                  }`}
+                />
+                <span>Music:</span>
+              </span>
 
-            {props.musicTracks.length > 1 && (
-              <div
-                className="inline-flex items-center rounded border border-white/10 bg-[#141821] p-0.5"
-                role="group"
-                aria-label="Select background song"
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!props.musicEnabled}
+                onClick={() => {
+                  if (props.musicEnabled) props.onToggleMusic();
+                }}
+                title="Turn background music off"
+                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                  !props.musicEnabled
+                    ? 'bg-white/12 text-white font-semibold'
+                    : 'text-[#8e98a8] hover:text-white hover:bg-white/5'
+                }`}
               >
-                {props.musicTracks.map((track, idx) => {
-                  const isActive = props.musicEnabled && props.activeMusicTrackIndex === idx;
-                  const lowerTitle = track.title.toLowerCase();
-                  const shortLabel = lowerTitle.includes('rap')
-                    ? 'Rap'
-                    : lowerTitle.includes('queen')
-                      ? 'Queen'
-                      : lowerTitle.includes('angel') || lowerTitle.includes('angle')
-                        ? 'Angel'
-                        : track.title;
-                  return (
-                    <button
-                      key={track.id}
-                      type="button"
-                      onClick={() => props.onSelectMusicTrack(idx)}
-                      aria-pressed={isActive}
-                      title={`Play ${track.title}`}
-                      className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
-                        isActive
-                          ? 'bg-[#d6ae63] text-[#111419] font-semibold'
-                          : 'text-[#9aa4b5] hover:text-white hover:bg-white/5'
+                <span
+                  aria-hidden="true"
+                  className={`w-3 h-3 rounded-full border inline-flex items-center justify-center shrink-0 ${
+                    !props.musicEnabled ? 'border-[#e3be78]' : 'border-white/35'
+                  }`}
+                >
+                  {!props.musicEnabled && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#e3be78]" />
+                  )}
+                </span>
+                <span>Off</span>
+              </button>
+
+              {props.musicTracks.map((track, idx) => {
+                const isActive = props.musicEnabled && props.activeMusicTrackIndex === idx;
+                const isMissing = props.unavailableMusicIndices?.includes(idx) ?? false;
+                return (
+                  <button
+                    key={track.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={isActive}
+                    onClick={() => props.onSelectMusicTrack(idx)}
+                    title={
+                      isMissing
+                        ? `${track.title} (MP3 file missing on disk — re-attach to restore)`
+                        : `Play ${track.title}`
+                    }
+                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                      isActive
+                        ? 'bg-[#2a2214] border border-[#d6ae63]/65 text-[#f7e7c2] font-semibold'
+                        : isMissing
+                          ? 'border border-transparent text-[#7b8494] hover:text-[#cbd2df]'
+                          : 'border border-transparent text-[#9aa4b5] hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`w-3 h-3 rounded-full border inline-flex items-center justify-center shrink-0 ${
+                        isActive ? 'border-[#e3be78]' : 'border-white/35'
                       }`}
                     >
-                      {shortLabel}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+                      {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[#e3be78]" />}
+                    </span>
+                    <span>
+                      {track.title}
+                      {isMissing ? ' (missing)' : ''}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
 
             <button
               type="button"
@@ -592,7 +612,7 @@ export function ControlDock(props: ControlDockProps) {
                       : 'text-[#9aa3b2] hover:text-white'
                   }`}
                 >
-                  {t}
+                  {t === 'training' ? 'Tactical Training' : t}
                 </button>
               ))}
             </div>
@@ -869,21 +889,33 @@ export function ControlDock(props: ControlDockProps) {
                   </div>
 
                   {/* Side selector */}
-                  <div className="flex items-center gap-1 p-1 bg-[#191f2a] rounded-md border border-white/8">
-                    {(['w', 'b', 'random'] as const).map((side) => (
-                      <button
-                        key={side}
-                        type="button"
-                        onClick={() => props.onChangeHumanColorVsAi(side)}
-                        className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap cursor-pointer ${
-                          props.humanColorVsAi === side
-                            ? 'bg-white/14 text-white font-medium'
-                            : 'text-[#8e98a8] hover:text-white'
-                        }`}
-                      >
-                        {side === 'w' ? 'White' : side === 'b' ? 'Black' : 'Random'}
-                      </button>
-                    ))}
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-[#8d96a6] whitespace-nowrap">Play as</span>
+                    <div
+                      role="radiogroup"
+                      aria-label="Choose piece color"
+                      className="flex items-center gap-1 p-1 bg-[#191f2a] rounded-md border border-white/8"
+                    >
+                      {(['w', 'b', 'random'] as const).map((side) => {
+                        const activeSide = props.humanColorVsAi === side;
+                        return (
+                          <button
+                            key={side}
+                            type="button"
+                            role="radio"
+                            aria-checked={activeSide}
+                            onClick={() => props.onChangeHumanColorVsAi(side)}
+                            className={`px-2.5 py-1 text-[11px] rounded transition-colors whitespace-nowrap cursor-pointer ${
+                              activeSide
+                                ? 'bg-[#d6ae63]/20 text-[#f0d192] font-semibold border border-[#d6ae63]/50'
+                                : 'text-[#8e98a8] hover:text-white border border-transparent'
+                            }`}
+                          >
+                            {side === 'w' ? '♔ White' : side === 'b' ? '♚ Black' : 'Random'}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   {/* Warm Female Chess Angel Voice (On / Off) + Angel & Modal Visibility Switch + Auto Tree */}
@@ -952,6 +984,28 @@ export function ControlDock(props: ControlDockProps) {
 
                 {/* Match actions */}
                 <div className="flex flex-wrap items-center gap-2">
+                  {props.onSimulatePawnPromotion && props.gameMode !== 'multiplayer' && (
+                    <button
+                      type="button"
+                      onClick={props.onSimulatePawnPromotion}
+                      title="Simulate a live match where a pawn marches to the 8th rank for promotion"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-[#181d27] hover:bg-[#222937] border border-[#d6ae63]/45 text-[#f0d192] hover:text-[#fff3d6] cursor-pointer whitespace-nowrap"
+                    >
+                      <Crown className="w-3.5 h-3.5 text-[#d6ae63]" />
+                      Simulate 8th-Rank Pawn
+                    </button>
+                  )}
+                  {props.onExportAngelUdoVideo && (
+                    <button
+                      type="button"
+                      onClick={props.onExportAngelUdoVideo}
+                      title="Export the portrait video of Chess Angel and Udo (.mp4)"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-[#181d27] hover:bg-[#222937] border border-[#d6ae63]/45 text-[#f0d192] hover:text-[#fff3d6] cursor-pointer whitespace-nowrap"
+                    >
+                      <Download className="w-3.5 h-3.5 text-[#d6ae63]" />
+                      Export Angel &amp; Udo Video
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={props.onUndo}

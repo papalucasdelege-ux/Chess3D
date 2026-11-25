@@ -6,8 +6,8 @@ import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
-  const appVersion = '4.5';
-  const appBuildId = `4.5.0-${Date.now().toString(36)}`;
+  const appVersion = '4.6';
+  const appBuildId = `4.6.0-${Date.now().toString(36)}`;
 
   return {
     define: {
@@ -62,7 +62,7 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
-          cacheId: 'chessangel-v4-5b',
+          cacheId: 'chessangel-v4-6',
           // Precache app shell, 3D chess engine, and UI bundle (icons included via includeAssets above)
           globPatterns: ['**/*.{js,css,html,ico,woff,woff2}'],
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
@@ -92,7 +92,7 @@ export default defineConfig(() => {
               urlPattern: ({ url }) => url.pathname.startsWith('/voices/'),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-voices-v4-5b',
+                cacheName: 'chessangel-voices-v4-6',
                 expiration: {
                   maxEntries: 260,
                   maxAgeSeconds: 60 * 60 * 24 * 30,
@@ -108,7 +108,7 @@ export default defineConfig(() => {
               urlPattern: ({ url }) => url.pathname === '/assets/aistudio/angel_video_map.json',
               handler: 'NetworkFirst',
               options: {
-                cacheName: 'chessangel-registry-v4-5b',
+                cacheName: 'chessangel-registry-v4-6',
                 networkTimeoutSeconds: 3,
                 cacheableResponse: {
                   statuses: [200],
@@ -122,7 +122,7 @@ export default defineConfig(() => {
                 /\.(png|jpg|jpeg|webp|svg)$/i.test(url.pathname),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-images-v4-5b',
+                cacheName: 'chessangel-images-v4-6',
                 expiration: {
                   maxEntries: 40,
                   maxAgeSeconds: 60 * 60 * 24 * 30,
@@ -320,53 +320,116 @@ export default defineConfig(() => {
             }
             rawMap.seductionAudioVariants = sedVariants;
 
-            // Discover bundled soundtrack MP3 files (> 200KB, excluding short voice clips)
-            const excludedMp3 = new Set(['seduction.mp3', 'seduction_6.mp3', 'thank_jan.mp3']);
-            const mp3Entries = fs
+            // Discover bundled soundtrack MP3 files (> 200KB, excluding short voice clips and superseded Angle_45923f8a.mp3)
+            const excludedMp3 = new Set([
+              'seduction.mp3',
+              'seduction_6.mp3',
+              'thank_jan.mp3',
+              'angle_45923f8a.mp3',
+            ]);
+            const rawMp3Candidates = fs
               .readdirSync(aistudioDir, { withFileTypes: true })
+              .filter((e) => {
+                if (!e.isFile() || !/\.mp3$/i.test(e.name)) return false;
+                if (excludedMp3.has(e.name.toLowerCase()) || e.name.includes('.tmp')) return false;
+                try {
+                  return fs.statSync(path.join(aistudioDir, e.name)).size >= 200 * 1024;
+                } catch {
+                  return false;
+                }
+              });
+            const isQueenTrack = (n: string) =>
+              n.toLowerCase().includes('a_beautiful_queen_and_her_infinite_re');
+            const isRapTrack = (n: string) => {
+              const l = n.toLowerCase();
+              return l.includes('chess_angle_rap') || l.includes('chess_angel_rap');
+            };
+            const isMeditationalTrack = (n: string) => {
+              const l = n.toLowerCase();
+              return l === 'meditational.mp3' || l.startsWith('meditational_');
+            };
+            const isLegacyAngleFile = (n: string) => {
+              const l = n.toLowerCase();
+              return l === 'angle_45923f8a.mp3' || /^angle_[0-9a-f]{8}\.mp3$/.test(l);
+            };
+            const dedicatedAngelTrack = rawMp3Candidates
               .filter(
                 (e) =>
-                  e.isFile() &&
-                  /\.mp3$/i.test(e.name) &&
-                  !excludedMp3.has(e.name.toLowerCase()) &&
-                  !e.name.includes('.tmp'),
+                  !isQueenTrack(e.name) &&
+                  !isRapTrack(e.name) &&
+                  !isMeditationalTrack(e.name) &&
+                  !isLegacyAngleFile(e.name),
               )
               .sort((a, b) => {
+                const la = a.name.toLowerCase();
+                const lb = b.name.toLowerCase();
+                if (la === 'chess_angle_2f568dfd.mp3') return -1;
+                if (lb === 'chess_angle_2f568dfd.mp3') return 1;
+                if (la === 'chess_angel_theme.mp3') return -1;
+                if (lb === 'chess_angel_theme.mp3') return 1;
+                return (
+                  fs.statSync(path.join(aistudioDir, b.name)).mtimeMs -
+                  fs.statSync(path.join(aistudioDir, a.name)).mtimeMs
+                );
+              })[0];
+            const mp3Entries = rawMp3Candidates
+              .filter((e) => {
+                if (dedicatedAngelTrack && isLegacyAngleFile(e.name)) return false;
+                return true;
+              })
+              .sort((a, b) => {
                 const rank = (name: string) => {
-                  const l = name.toLowerCase();
-                  if (l.includes('a_beautiful_queen')) return 0;
-                  if (l.includes('chess_angle_rap') || l.includes('chess_angel_rap')) return 1;
-                  if (l.includes('angle_45923f8a') || /^angle_[0-9a-f]{8}\.mp3$/.test(l)) return 2;
-                  return 3;
+                  if (isQueenTrack(name)) return 0;
+                  if (isRapTrack(name)) return 1;
+                  if (dedicatedAngelTrack && name === dedicatedAngelTrack.name) return 2;
+                  if (isLegacyAngleFile(name)) return 2;
+                  if (isMeditationalTrack(name)) return 3;
+                  return 4;
                 };
                 return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
               });
             const discoveredMusicTracks: Array<{ id: string; title: string; url: string }> = [];
+            const seenMusicIds = new Set<string>();
             for (const mp3 of mp3Entries) {
-              const stat = fs.statSync(path.join(aistudioDir, mp3.name));
-              if (stat.size < 200 * 1024) continue;
-              const lower = mp3.name.toLowerCase();
-              const title = lower.includes('a_beautiful_queen_and_her_infinite_re')
+              const isChosenAngel =
+                (dedicatedAngelTrack && mp3.name === dedicatedAngelTrack.name) ||
+                (!dedicatedAngelTrack && isLegacyAngleFile(mp3.name));
+              if (!isChosenAngel && mp3.name.toLowerCase() === 'chess_angel_theme.mp3') {
+                continue;
+              }
+              const title = isQueenTrack(mp3.name)
                 ? "Queen's Infinite Reign"
-                : lower.includes('chess_angle_rap') || lower.includes('chess_angel_rap')
+                : isRapTrack(mp3.name)
                   ? 'Chess Angel Rap'
-                  : lower.includes('angle_45923f8a') || /^angle_[0-9a-f]{8}\.mp3$/.test(lower)
+                  : isChosenAngel
                     ? 'Chess Angel'
-                    : mp3.name
-                        .replace(/\.mp3$/i, '')
-                        .replace(/_[0-9a-f]{8}$/i, '')
-                        .replace(/[_-]+/g, ' ')
-                        .replace(/\s+/g, ' ')
-                        .trim()
-                        .replace(/\b\w/g, (c) => c.toUpperCase())
-                        .slice(0, 48) || 'Chess Angel Track';
-              const id = mp3.name
-                .replace(/\.mp3$/i, '')
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, '_')
-                .replace(/^_+|_+$/g, '');
+                    : isMeditationalTrack(mp3.name)
+                      ? 'Meditational'
+                      : mp3.name
+                          .replace(/\.mp3$/i, '')
+                          .replace(/_[0-9a-f]{8}$/i, '')
+                          .replace(/[_-]+/g, ' ')
+                          .replace(/\s+/g, ' ')
+                          .trim()
+                          .replace(/\b\w/g, (c) => c.toUpperCase())
+                          .slice(0, 48) || 'Chess Angel Track';
+              const id = isQueenTrack(mp3.name)
+                ? 'queen_infinite_reign'
+                : isRapTrack(mp3.name)
+                  ? 'chess_angel_rap'
+                  : isChosenAngel
+                    ? 'chess_angel_theme'
+                    : isMeditationalTrack(mp3.name)
+                      ? 'meditational'
+                      : mp3.name
+                          .replace(/\.mp3$/i, '')
+                          .toLowerCase()
+                          .replace(/[^a-z0-9]+/g, '_')
+                          .replace(/^_+|_+$/g, '') || 'chess_angel_track';
+              if (seenMusicIds.has(id)) continue;
+              seenMusicIds.add(id);
               discoveredMusicTracks.push({
-                id: id || 'chess_angel_track',
+                id,
                 title,
                 url: `/assets/aistudio/${mp3.name}`,
               });
