@@ -37,6 +37,14 @@
   X-Content-Type-Options: nosniff
   X-Robots-Tag: noindex, nofollow, nosnippet, noarchive, noai, noimageai
 
+/assets/aistudio/*.mp3
+  Content-Type: audio/mpeg
+  Accept-Ranges: bytes
+  Cache-Control: public, max-age=604800
+  Cross-Origin-Resource-Policy: same-origin
+  X-Content-Type-Options: nosniff
+  X-Robots-Tag: noindex, nofollow, nosnippet, noarchive, noai, noimageai
+
 /chess_angel_midgame_tree_animation.mp4
   Content-Type: video/mp4
   Accept-Ranges: bytes

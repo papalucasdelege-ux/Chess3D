@@ -1,10 +1,13 @@
 import {
   CLIP_TEXT,
+  DEFAULT_MUSIC_TRACKS,
   registerCaseMaxPlaysProvider,
+  setMusicTracksOverride,
   setNextSeductionPlaybackAudio,
   setSeductionAudioUrlOverride,
   setThankJanAudioUrlOverride,
   type CommentaryCaseId,
+  type MusicTrack,
   type SeductionTriggerMode,
   type VoiceClipId,
 } from './opponentVoice';
@@ -31,7 +34,18 @@ export const ANGEL_IDLE_LISTENING_VIDEO_SRC =
  * Built-in default frameless 3:4 portrait speaking video (lip movements, silent video track).
  */
 export const ANGEL_DEFAULT_SPEAKING_VIDEO_SRC =
-  '/assets/aistudio/builtin_default_speaking.mp4';
+  '/assets/aistudio/angel_default_speaking_default.mp4';
+
+/**
+ * Built-in locked Special Event video where Chess Angel lets the small white fluffy puppy
+ * run underneath into her modal before it leaps out onto the 3D chessboard.
+ */
+export const ANGEL_DOG_RUN_VIDEO_SRC = '/assets/aistudio/builtin_dog_run.mp4';
+
+/**
+ * Built-in locked Special Event video where Chess Angel dances amid sparkling golden star dust.
+ */
+export const ANGEL_DANCE_STARS_VIDEO_SRC = '/assets/aistudio/builtin_dance_stars.mp4';
 
 export type AngelExpressionGroup =
   | 'welcome'
@@ -113,11 +127,12 @@ export type AnyCaseSlotKey = CommentaryCaseId | CaseAlternativeSlotKey;
 
 /**
  * Sayings that expose a Primary (#1) + 2nd Alternative (#2) .mp4 slot in Video Studio,
- * alternating automatically each time the warning triggers during gameplay.
+ * alternating automatically each time the saying triggers during gameplay.
  */
 export const MULTI_SLOT_CASE_IDS: ReadonlySet<CommentaryCaseId> = new Set<CommentaryCaseId>([
   'warn_fork_2step',
   'warn_double',
+  'undo_done',
 ]);
 
 export const DEFAULT_VIDEO_MAX_PLAYS: Readonly<Record<string, number>> = {
@@ -132,6 +147,8 @@ export const DEFAULT_VIDEO_PLAY_TO_END: Readonly<Record<string, boolean>> = {
   'case:angel_modal_on': true,
   'case:angel_modal_off': true,
   'case:thank_jan': true,
+  'special:dog_run': true,
+  'special:dance_stars': true,
   'case:tree_browse': false,
 };
 
@@ -193,6 +210,10 @@ export interface AngelVideoMapPayload {
   seductionTriggerMode?: SeductionTriggerMode;
   thankJanAudioUrl?: string;
   thankJanAudioDuration?: number;
+  dogRunVideo?: string;
+  dogRunJumpSec?: number;
+  danceStarsVideo?: string;
+  musicTracks?: MusicTrack[];
 }
 
 /**
@@ -265,9 +286,9 @@ export const VOICE_CLIP_DURATION_SEC: Record<VoiceClipId, number> = {
   promotion_v1: 5.4,
   promotion_v2: 3.3,
   promotion_v3: 3.9,
-  seduction_v1: 4.5,
-  seduction_v2: 4.5,
-  seduction_v3: 4.5,
+  seduction_v1: 217.6,
+  seduction_v2: 217.6,
+  seduction_v3: 217.6,
   stalemate_v1: 5.3,
   stalemate_v2: 4.9,
   stalemate_v3: 3.9,
@@ -503,13 +524,30 @@ export const ACOUSTIC_CLIP_CUE_WORDS: Partial<
 export const ANGEL_GROUP_VIDEO_MAP: Partial<Record<AngelExpressionGroup, string>> = {};
 
 /**
- * Built-in static per-saying video overrides (exact CommentaryCaseId).
+ * Built-in locked per-saying video defaults (exact CommentaryCaseId).
  */
 export const ANGEL_CASE_VIDEO_MAP: Partial<Record<CommentaryCaseId, string>> = {
-  intro: '/assets/aistudio/waving_hello_abc4f35b.mp4',
+  intro: '/assets/aistudio/angel_case_intro.mp4',
   opening: '/assets/aistudio/builtin_opening.mp4',
-  calc_offer: '/assets/aistudio/builtin_calc_offer.mp4',
-  new_match: '/assets/aistudio/builtin_new_match.mp4',
+  tree_browse: '/assets/aistudio/angel_case_tree_browse.mp4',
+  castled: '/assets/aistudio/angel_case_castled.mp4',
+  calc_offer: '/assets/aistudio/angel_case_calc_offer.mp4',
+  calc_pure: '/assets/aistudio/angel_case_calc_pure.mp4',
+  calc_showing: '/assets/aistudio/angel_case_calc_showing.mp4',
+  checkmate_win: '/assets/aistudio/angel_case_checkmate_win.mp4',
+  draw: '/assets/aistudio/angel_case_draw.mp4',
+  lost_queen: '/assets/aistudio/angel_case_lost_queen.mp4',
+  new_match: '/assets/aistudio/angel_case_new_match.mp4',
+  seduction: '/assets/aistudio/angel_case_seduction.mp4',
+  stalemate: '/assets/aistudio/angel_case_stalemate.mp4',
+  trial_confirm_1: '/assets/aistudio/angel_case_trial_confirm_1.mp4',
+  trial_confirm_2: '/assets/aistudio/angel_case_trial_confirm_2.mp4',
+  undo_done: '/assets/aistudio/angel_case_undo_done.mp4',
+  warn_double: '/assets/aistudio/angel_case_warn_double.mp4',
+  warn_fork_2step: '/assets/aistudio/angel_case_warn_fork_2step.mp4',
+  warn_king_file: '/assets/aistudio/angel_case_warn_king_file.mp4',
+  warn_pawn_promo: '/assets/aistudio/angel_case_warn_pawn_promo.mp4',
+  watch_bishop: '/assets/aistudio/angel_case_watch_bishop.mp4',
   resign: '/assets/aistudio/builtin_resign.mp4',
   save_game: '/assets/aistudio/builtin_save_game.mp4',
   load_game: '/assets/aistudio/builtin_load_game.mp4',
@@ -520,10 +558,48 @@ export const ANGEL_CASE_VIDEO_MAP: Partial<Record<CommentaryCaseId, string>> = {
   level_grandmaster: '/assets/aistudio/builtin_level_grandmaster.mp4',
   clock_timeout: '/assets/aistudio/builtin_clock_timeout.mp4',
   promotion: '/assets/aistudio/builtin_promotion.mp4',
-  angel_modal_on: '/assets/aistudio/builtin_angel_modal_on.mp4',
-  angel_modal_off: '/assets/aistudio/builtin_angel_modal_off.mp4',
+  angel_modal_on: '/assets/aistudio/angel_case_angel_modal_on.mp4',
+  angel_modal_off: '/assets/aistudio/angel_case_angel_modal_off.mp4',
   hesitate_hint: '/assets/aistudio/builtin_hesitate_hint.mp4',
   thank_jan: '/assets/aistudio/builtin_thank_jan.mp4',
+  alt_shown: '/assets/aistudio/builtin_alt_shown.mp4',
+};
+
+export const ANGEL_SEDUCTION_AUDIO_SRC =
+  '/assets/aistudio/Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3';
+
+export const ANGEL_LOCKED_IDLE_VARIANTS: Readonly<Record<string, string>> = {
+  idle_2: '/assets/aistudio/angel_idle_idle_2.mp4',
+  idle_3: '/assets/aistudio/angel_idle_idle_3.mp4',
+  idle_4: '/assets/aistudio/angel_idle_idle_4.mp4',
+  idle_5: '/assets/aistudio/angel_idle_idle_5.mp4',
+  idle_6: '/assets/aistudio/angel_idle_idle_6.mp4',
+  idle_7: '/assets/aistudio/angel_idle_idle_7.mp4',
+  idle_8: '/assets/aistudio/builtin_idle_8.mp4',
+};
+
+export const ANGEL_LOCKED_CASES: Readonly<Partial<Record<AnyCaseSlotKey, string>>> = {
+  ...ANGEL_CASE_VIDEO_MAP,
+  seduction_2: '/assets/aistudio/angel_case_seduction_2.mp4',
+  seduction_3: '/assets/aistudio/angel_case_seduction_3.mp4',
+  seduction_4: '/assets/aistudio/builtin_seduction_4.mp4',
+  seduction_5: '/assets/aistudio/builtin_seduction_5.mp4',
+  seduction_6: '/assets/aistudio/builtin_seduction_6.mp4',
+  warn_fork_2step_2: '/assets/aistudio/angel_case_warn_fork_2step_2.mp4',
+  undo_done_2: '/assets/aistudio/builtin_undo_done_2.mp4',
+};
+
+export const ANGEL_LOCKED_ESCAPES: Readonly<Partial<Record<AngelEscapeSlotKey, string>>> = {
+  point_you: '/assets/aistudio/angel_escape_point_you.mp4',
+  point_you_2: '/assets/aistudio/angel_escape_point_you_2.mp4',
+  point_you_3: '/assets/aistudio/angel_escape_point_you_3.mp4',
+  point_you_5: '/assets/aistudio/angel_escape_point_you_5.mp4',
+  point_you_6: '/assets/aistudio/angel_escape_point_you_6.mp4',
+  point_me: '/assets/aistudio/angel_escape_point_me.mp4',
+  point_me_2: '/assets/aistudio/angel_escape_point_me_2.mp4',
+  point_me_3: '/assets/aistudio/angel_escape_point_me_3.mp4',
+  push_button: '/assets/aistudio/angel_escape_push_button.mp4',
+  push_button_2: '/assets/aistudio/angel_escape_push_button_2.mp4',
 };
 
 const CASE_TO_GROUP: Record<CommentaryCaseId, AngelExpressionGroup> = {
@@ -607,6 +683,10 @@ export interface AngelStudioCaseSpec {
   caseId: CommentaryCaseId;
   sampleClipId: VoiceClipId;
   sampleText: string;
+  v2ClipId: VoiceClipId;
+  v2Text: string;
+  v3ClipId: VoiceClipId;
+  v3Text: string;
   talkSec: number;
   v2Sec: number;
   v3Sec: number;
@@ -629,6 +709,10 @@ function makeCaseItem(caseId: CommentaryCaseId): AngelStudioCaseSpec {
     caseId,
     sampleClipId: v1Id,
     sampleText: CLIP_TEXT[v1Id] || caseId,
+    v2ClipId: v2Id,
+    v2Text: CLIP_TEXT[v2Id] || CLIP_TEXT[v1Id] || caseId,
+    v3ClipId: v3Id,
+    v3Text: CLIP_TEXT[v3Id] || CLIP_TEXT[v1Id] || caseId,
     talkSec: VOICE_CLIP_DURATION_SEC[v1Id] ?? 5.0,
     v2Sec: VOICE_CLIP_DURATION_SEC[v2Id] ?? 4.0,
     v3Sec: VOICE_CLIP_DURATION_SEC[v3Id] ?? 3.5,
@@ -735,6 +819,7 @@ const LIP_SYNC_STORAGE_KEY = 'chess_angel_lipsync_rules_v1';
 const CASE_CUE_STORAGE_KEY = 'chess_angel_case_cues_v1';
 const VIDEO_MAX_PLAYS_STORAGE_KEY = 'chess_angel_video_max_plays_v2';
 const VIDEO_PLAY_TO_END_STORAGE_KEY = 'chess_angel_video_play_to_end_v2';
+const DOG_RUN_JUMP_SEC_STORAGE_KEY = 'chess_angel_dog_run_jump_sec_v1';
 
 // In-memory Video Studio unlock flag (unlocked by 5-click gesture on game title — hidden from regular players)
 let studioSessionUnlocked = false;
@@ -900,71 +985,11 @@ function saveStoredVideoPlayToEndFallback(playToEndMap: Record<string, boolean>)
 
 // Pre-bundled video registry & calibrated metadata (baked directly into the JS bundle and kept in sync via /api/angel-videos & /assets/aistudio/angel_video_map.json)
 let runtimeOverrides: AngelVideoMapPayload = {
-  idleVariants: {
-    idle_2: '/assets/aistudio/angel_idle_idle_2.mp4',
-    idle_3: '/assets/aistudio/angel_idle_idle_3.mp4',
-    idle_4: '/assets/aistudio/angel_idle_idle_4.mp4',
-    idle_5: '/assets/aistudio/angel_idle_idle_5.mp4',
-    idle_6: '/assets/aistudio/angel_idle_idle_6.mp4',
-    idle_7: '/assets/aistudio/angel_idle_idle_7.mp4',
-    idle_8: '/assets/aistudio/builtin_idle_8.mp4',
-  },
-  defaultSpeaking: '/assets/aistudio/angel_default_speaking_default.mp4',
+  idleVariants: { ...ANGEL_LOCKED_IDLE_VARIANTS },
+  defaultSpeaking: ANGEL_DEFAULT_SPEAKING_VIDEO_SRC,
   groups: {},
-  cases: {
-    intro: '/assets/aistudio/angel_case_intro.mp4',
-    opening: '/assets/aistudio/builtin_opening.mp4',
-    tree_browse: '/assets/aistudio/angel_case_tree_browse.mp4',
-    castled: '/assets/aistudio/angel_case_castled.mp4',
-    calc_offer: '/assets/aistudio/angel_case_calc_offer.mp4',
-    calc_pure: '/assets/aistudio/angel_case_calc_pure.mp4',
-    calc_showing: '/assets/aistudio/angel_case_calc_showing.mp4',
-    checkmate_win: '/assets/aistudio/angel_case_checkmate_win.mp4',
-    draw: '/assets/aistudio/angel_case_draw.mp4',
-    lost_queen: '/assets/aistudio/angel_case_lost_queen.mp4',
-    new_match: '/assets/aistudio/angel_case_new_match.mp4',
-    seduction: '/assets/aistudio/angel_case_seduction.mp4',
-    seduction_2: '/assets/aistudio/angel_case_seduction_2.mp4',
-    seduction_3: '/assets/aistudio/angel_case_seduction_3.mp4',
-    seduction_4: '/assets/aistudio/builtin_seduction_4.mp4',
-    seduction_5: '/assets/aistudio/builtin_seduction_5.mp4',
-    stalemate: '/assets/aistudio/angel_case_stalemate.mp4',
-    trial_confirm_1: '/assets/aistudio/angel_case_trial_confirm_1.mp4',
-    trial_confirm_2: '/assets/aistudio/angel_case_trial_confirm_2.mp4',
-    undo_done: '/assets/aistudio/angel_case_undo_done.mp4',
-    warn_double: '/assets/aistudio/angel_case_warn_double.mp4',
-    warn_fork_2step: '/assets/aistudio/angel_case_warn_fork_2step.mp4',
-    warn_fork_2step_2: '/assets/aistudio/angel_case_warn_fork_2step_2.mp4',
-    warn_king_file: '/assets/aistudio/angel_case_warn_king_file.mp4',
-    warn_pawn_promo: '/assets/aistudio/angel_case_warn_pawn_promo.mp4',
-    watch_bishop: '/assets/aistudio/angel_case_watch_bishop.mp4',
-    angel_modal_on: '/assets/aistudio/angel_case_angel_modal_on.mp4',
-    angel_modal_off: '/assets/aistudio/angel_case_angel_modal_off.mp4',
-    hesitate_hint: '/assets/aistudio/builtin_hesitate_hint.mp4',
-    resign: '/assets/aistudio/builtin_resign.mp4',
-    thank_jan: '/assets/aistudio/builtin_thank_jan.mp4',
-    clock_timeout: '/assets/aistudio/builtin_clock_timeout.mp4',
-    promotion: '/assets/aistudio/builtin_promotion.mp4',
-    save_game: '/assets/aistudio/builtin_save_game.mp4',
-    load_game: '/assets/aistudio/builtin_load_game.mp4',
-    level_beginner: '/assets/aistudio/builtin_level_beginner.mp4',
-    level_intermediate: '/assets/aistudio/builtin_level_intermediate.mp4',
-    level_advanced: '/assets/aistudio/builtin_level_advanced.mp4',
-    level_master: '/assets/aistudio/builtin_level_master.mp4',
-    level_grandmaster: '/assets/aistudio/builtin_level_grandmaster.mp4',
-  },
-  escapes: {
-    point_you: '/assets/aistudio/angel_escape_point_you.mp4',
-    point_you_2: '/assets/aistudio/angel_escape_point_you_2.mp4',
-    point_you_3: '/assets/aistudio/angel_escape_point_you_3.mp4',
-    point_you_5: '/assets/aistudio/angel_escape_point_you_5.mp4',
-    point_you_6: '/assets/aistudio/angel_escape_point_you_6.mp4',
-    point_me: '/assets/aistudio/angel_escape_point_me.mp4',
-    point_me_2: '/assets/aistudio/angel_escape_point_me_2.mp4',
-    point_me_3: '/assets/aistudio/angel_escape_point_me_3.mp4',
-    push_button: '/assets/aistudio/angel_escape_push_button.mp4',
-    push_button_2: '/assets/aistudio/angel_escape_push_button_2.mp4',
-  },
+  cases: { ...ANGEL_LOCKED_CASES },
+  escapes: { ...ANGEL_LOCKED_ESCAPES },
   escapeEnabled: { point_you: true, point_me: true, push_button: true },
   caseEscapeCues: {
     lost_queen: { point_you: 'off', point_me: 'off' },
@@ -1002,8 +1027,13 @@ let runtimeOverrides: AngelVideoMapPayload = {
     'case:hesitate_hint': true,
     'case:resign': true,
     'case:thank_jan': true,
+    'special:dog_run': true,
+    'special:dance_stars': true,
     ...readStoredVideoPlayToEndFallback(),
   },
+  dogRunVideo: ANGEL_DOG_RUN_VIDEO_SRC,
+  dogRunJumpSec: 4.2,
+  danceStarsVideo: ANGEL_DANCE_STARS_VIDEO_SRC,
   lipSync: {
     defaultEnabled: true,
     groups: {},
@@ -1031,8 +1061,8 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/angel_case_seduction_3.mp4': 15.1,
     '/assets/aistudio/angel_case_seduction_4.mp4': 8.1,
     '/assets/aistudio/angel_case_seduction_5.mp4': 12.1,
+    '/assets/aistudio/angel_case_seduction_6.mp4': 10.1,
     '/assets/aistudio/angel_case_stalemate.mp4': 5.1,
-    '/assets/aistudio/angel_case_thank_jan.mp4': 9.3,
     '/assets/aistudio/angel_case_tree_browse.mp4': 5.2,
     '/assets/aistudio/angel_case_trial_confirm_1.mp4': 5.1,
     '/assets/aistudio/angel_case_trial_confirm_2.mp4': 5.1,
@@ -1044,6 +1074,7 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/angel_case_warn_pawn_promo.mp4': 5.1,
     '/assets/aistudio/angel_case_watch_bishop.mp4': 5.1,
     '/assets/aistudio/angel_default_speaking_default.mp4': 5.3,
+    '/assets/aistudio/builtin_dog_run.mp4': 7.1,
     '/assets/aistudio/angel_escape_point_you.mp4': 5.1,
     '/assets/aistudio/angel_escape_point_you_2.mp4': 5.1,
     '/assets/aistudio/angel_escape_point_you_3.mp4': 3.1,
@@ -1068,6 +1099,7 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/builtin_idle_8.mp4': 8.1,
     '/assets/aistudio/builtin_seduction_4.mp4': 8.1,
     '/assets/aistudio/builtin_seduction_5.mp4': 12.1,
+    '/assets/aistudio/builtin_seduction_6.mp4': 10.1,
     '/assets/aistudio/builtin_hesitate_hint.mp4': 9.1,
     '/assets/aistudio/builtin_escape_point_you_3.mp4': 3.1,
     '/assets/aistudio/builtin_escape_point_me_3.mp4': 3.1,
@@ -1075,7 +1107,7 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/builtin_calc_offer.mp4': 9.1,
     '/assets/aistudio/builtin_opening.mp4': 10.1,
     '/assets/aistudio/builtin_resign.mp4': 8.1,
-    '/assets/aistudio/builtin_thank_jan.mp4': 9.3,
+    '/assets/aistudio/builtin_thank_jan.mp4': 12.1,
     '/assets/aistudio/builtin_save_game.mp4': 6.9,
     '/assets/aistudio/builtin_load_game.mp4': 6.9,
     '/assets/aistudio/builtin_level_beginner.mp4': 6.6,
@@ -1089,6 +1121,9 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/builtin_angel_modal_off.mp4': 12.1,
     '/assets/aistudio/builtin_mouse_idle_sleep.mp4': 8.7,
     '/assets/aistudio/builtin_mouse_wake_up.mp4': 6.6,
+    '/assets/aistudio/builtin_dance_stars.mp4': 10.1,
+    '/assets/aistudio/builtin_undo_done_2.mp4': 5.1,
+    '/assets/aistudio/builtin_alt_shown.mp4': 5.1,
   },
   escapeApexes: {
     '/assets/aistudio/angel_escape_point_you.mp4': 2.4,
@@ -1104,8 +1139,8 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/builtin_escape_point_you_3.mp4': 1.15,
     '/assets/aistudio/builtin_escape_point_me_3.mp4': 1.6,
   },
-  seductionAudioUrl: '/voices/female/seduction.mp3',
-  seductionAudioDuration: 4.5,
+  seductionAudioUrl: ANGEL_SEDUCTION_AUDIO_SRC,
+  seductionAudioDuration: 217.6,
   seductionAudioVariants: {},
   seductionAudioDurations: {},
   thankJanAudioUrl: '/voices/female/thank_jan.mp3',
@@ -1145,8 +1180,13 @@ function notifyListeners(): void {
   }
 }
 
+const sessionReplacedSlots = new Set<string>();
+let dogRunJumpMutationSeq = 0;
+let dogRunJumpDebounceTimer: number | null = null;
+let pendingDogRunJumpSec: number | null = null;
+
 function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMapPayload {
-  const variants: Record<string, string> = {};
+  const variants: Record<string, string> = { ...ANGEL_LOCKED_IDLE_VARIANTS };
   if (data?.idle) {
     variants.idle_1 = data.idle;
   }
@@ -1300,6 +1340,22 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
   VOICE_CLIP_DURATION_SEC.thank_jan_v3 = thankJanAudioDuration;
   setThankJanAudioUrlOverride(thankJanAudioUrl);
 
+  const musicTracks: MusicTrack[] | undefined = Array.isArray(data?.musicTracks)
+    ? data.musicTracks.filter(
+        (t): t is MusicTrack =>
+          Boolean(
+            t &&
+              typeof t.id === 'string' &&
+              typeof t.title === 'string' &&
+              typeof t.url === 'string' &&
+              t.url.startsWith('/assets/aistudio/'),
+          ),
+      )
+    : runtimeOverrides.musicTracks;
+  if (musicTracks && musicTracks.length > 0) {
+    setMusicTracksOverride(musicTracks);
+  }
+
   const validPresets: ReadonlySet<string> = new Set([
     'lossless_21',
     'balanced_24',
@@ -1311,41 +1367,17 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
       ? (data.compressionPreset as AngelCompressionPreset)
       : runtimeOverrides.compressionPreset || 'lossless_21';
 
-  if (!variants.idle_8) {
-    variants.idle_8 = '/assets/aistudio/builtin_idle_8.mp4';
-  }
-
   return {
     idle: variants.idle_1 || data?.idle,
     idleVariants: variants,
-    defaultSpeaking:
-      data?.defaultSpeaking || '/assets/aistudio/angel_default_speaking_default.mp4',
+    defaultSpeaking: data?.defaultSpeaking || ANGEL_DEFAULT_SPEAKING_VIDEO_SRC,
     groups: data?.groups || {},
     cases: {
-      opening: '/assets/aistudio/builtin_opening.mp4',
-      calc_offer: '/assets/aistudio/angel_case_calc_offer.mp4',
-      new_match: '/assets/aistudio/angel_case_new_match.mp4',
-      angel_modal_on: '/assets/aistudio/angel_case_angel_modal_on.mp4',
-      angel_modal_off: '/assets/aistudio/angel_case_angel_modal_off.mp4',
-      hesitate_hint: '/assets/aistudio/builtin_hesitate_hint.mp4',
-      seduction_4: '/assets/aistudio/builtin_seduction_4.mp4',
-      seduction_5: '/assets/aistudio/builtin_seduction_5.mp4',
-      resign: '/assets/aistudio/builtin_resign.mp4',
-      thank_jan: '/assets/aistudio/builtin_thank_jan.mp4',
-      clock_timeout: '/assets/aistudio/builtin_clock_timeout.mp4',
-      promotion: '/assets/aistudio/builtin_promotion.mp4',
-      save_game: '/assets/aistudio/builtin_save_game.mp4',
-      load_game: '/assets/aistudio/builtin_load_game.mp4',
-      level_beginner: '/assets/aistudio/builtin_level_beginner.mp4',
-      level_intermediate: '/assets/aistudio/builtin_level_intermediate.mp4',
-      level_advanced: '/assets/aistudio/builtin_level_advanced.mp4',
-      level_master: '/assets/aistudio/builtin_level_master.mp4',
-      level_grandmaster: '/assets/aistudio/builtin_level_grandmaster.mp4',
+      ...ANGEL_LOCKED_CASES,
       ...(data?.cases || {}),
     },
     escapes: {
-      point_you_3: '/assets/aistudio/angel_escape_point_you_3.mp4',
-      point_me_3: '/assets/aistudio/angel_escape_point_me_3.mp4',
+      ...ANGEL_LOCKED_ESCAPES,
       ...(data?.escapes || {}),
     },
     escapeEnabled,
@@ -1365,6 +1397,24 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
     seductionTriggerMode,
     thankJanAudioUrl,
     thankJanAudioDuration,
+    dogRunVideo:
+      typeof data?.dogRunVideo === 'string' && data.dogRunVideo.length > 0
+        ? data.dogRunVideo
+        : ANGEL_DOG_RUN_VIDEO_SRC,
+    dogRunJumpSec:
+      pendingDogRunJumpSec !== null
+        ? pendingDogRunJumpSec
+        : typeof data?.dogRunJumpSec === 'number' &&
+            Number.isFinite(data.dogRunJumpSec) &&
+            data.dogRunJumpSec >= 0 &&
+            data.dogRunJumpSec <= 30
+          ? Math.round(data.dogRunJumpSec * 10) / 10
+          : runtimeOverrides.dogRunJumpSec ?? 4.2,
+    danceStarsVideo:
+      typeof data?.danceStarsVideo === 'string' && data.danceStarsVideo.length > 0
+        ? data.danceStarsVideo
+        : ANGEL_DANCE_STARS_VIDEO_SRC,
+    musicTracks,
   };
 }
 
@@ -1408,6 +1458,7 @@ export function resetGameVideoPlayCounts(): void {
   gameSlotPlayCounts.clear();
   lastCaseTriggerKey.warn_fork_2step = undefined;
   lastCaseTriggerKey.warn_double = undefined;
+  lastCaseTriggerKey.undo_done = undefined;
   for (const g of Object.keys(lastGroupTriggerKey) as AngelExpressionGroup[]) {
     delete lastGroupTriggerKey[g];
   }
@@ -1450,7 +1501,53 @@ export function getVideoUrlForSlotId(
   if (kind === 'escape') {
     return map.escapes?.[key as AngelEscapeSlotKey];
   }
+  if (kind === 'special' && key === 'dog_run') {
+    return map.dogRunVideo;
+  }
+  if (kind === 'special' && key === 'dance_stars') {
+    return map.danceStarsVideo;
+  }
   return undefined;
+}
+
+/**
+ * Returns true if `slotId` (`idle:*`, `default:speaking_default`, `case:*`, `escape:*`) is
+ * permanently locked into the app bundle and has not been replaced with an unsaved override
+ * in the current Studio session.
+ */
+export function isSlotLockedInApp(
+  slotId: string,
+  map: AngelVideoMapPayload = runtimeOverrides,
+): boolean {
+  if (sessionReplacedSlots.has(slotId)) return false;
+  const activeClean = getVideoUrlForSlotId(slotId, map)?.split('?')[0];
+  if (!activeClean) return false;
+  if (slotId === 'default:speaking_default') {
+    return activeClean === ANGEL_DEFAULT_SPEAKING_VIDEO_SRC;
+  }
+  const colonIdx = slotId.indexOf(':');
+  if (colonIdx <= 0) return false;
+  const kind = slotId.slice(0, colonIdx);
+  const key = slotId.slice(colonIdx + 1);
+  if (kind === 'idle') {
+    if (key === 'idle_1' || key === 'idle_listening') {
+      return activeClean === ANGEL_IDLE_LISTENING_VIDEO_SRC;
+    }
+    return activeClean === ANGEL_LOCKED_IDLE_VARIANTS[key];
+  }
+  if (kind === 'case') {
+    return activeClean === ANGEL_LOCKED_CASES[key as AnyCaseSlotKey];
+  }
+  if (kind === 'escape') {
+    return activeClean === ANGEL_LOCKED_ESCAPES[key as AngelEscapeSlotKey];
+  }
+  if (kind === 'special' && key === 'dog_run') {
+    return activeClean === ANGEL_DOG_RUN_VIDEO_SRC;
+  }
+  if (kind === 'special' && key === 'dance_stars') {
+    return activeClean === ANGEL_DANCE_STARS_VIDEO_SRC;
+  }
+  return false;
 }
 
 /**
@@ -1468,7 +1565,7 @@ export function findSlotIdsForVideoUrl(
     if (!found.includes(id)) found.push(id);
   };
 
-  const m = /\/angel_(idle|default|group|case|escape)_([a-z0-9_]+)\.mp4$/i.exec(clean);
+  const m = /\/angel_(idle|special|default|group|case|escape)_([a-z0-9_]+)\.mp4$/i.exec(clean);
   if (m) {
     const kind = m[1].toLowerCase();
     const rawKey = m[2].toLowerCase();
@@ -1480,6 +1577,10 @@ export function findSlotIdsForVideoUrl(
     const bKey = mBuiltin[1].toLowerCase();
     if (bKey === 'default_speaking') {
       add('default:speaking_default');
+    } else if (bKey === 'dog_run') {
+      add('special:dog_run');
+    } else if (bKey === 'dance_stars') {
+      add('special:dance_stars');
     } else if (bKey.startsWith('idle_')) {
       add(`idle:${bKey}`);
     } else if (bKey.startsWith('escape_')) {
@@ -1495,6 +1596,13 @@ export function findSlotIdsForVideoUrl(
     ANGEL_IDLE_LISTENING_VIDEO_SRC
   ).split('?')[0];
   if (clean === idle1) add('idle:idle_1');
+
+  if (map.dogRunVideo && map.dogRunVideo.split('?')[0] === clean) {
+    add('special:dog_run');
+  }
+  if (map.danceStarsVideo && map.danceStarsVideo.split('?')[0] === clean) {
+    add('special:dance_stars');
+  }
 
   for (const [k, v] of Object.entries(map.idleVariants || {})) {
     if (v && v.split('?')[0] === clean) add(`idle:${k}`);
@@ -1781,7 +1889,7 @@ export interface CompressAngelVideosResult {
 }
 
 export async function uploadAngelPortraitVideo(
-  kind: 'idle' | 'default' | 'group' | 'case' | 'escape',
+  kind: 'idle' | 'special' | 'default' | 'group' | 'case' | 'escape',
   key: string,
   file: File,
 ): Promise<UploadAngelVideoResult> {
@@ -1806,6 +1914,7 @@ export async function uploadAngelPortraitVideo(
     crf?: number;
     map: Partial<AngelVideoMapPayload>;
   };
+  sessionReplacedSlots.add(`${kind}:${key}`);
   runtimeOverrides = normalizeMapPayload(payload.map);
   notifyListeners();
   return {
@@ -1903,7 +2012,7 @@ export async function uploadAngelSeductionAudio(
 }
 
 export async function resetAngelPortraitVideo(
-  kind: 'idle' | 'default' | 'group' | 'case' | 'escape',
+  kind: 'idle' | 'special' | 'default' | 'group' | 'case' | 'escape',
   key: string,
 ): Promise<void> {
   const res = await fetch(`/api/angel-videos/${encodeURIComponent(kind)}/${encodeURIComponent(key)}`, {
@@ -1914,9 +2023,95 @@ export async function resetAngelPortraitVideo(
   if (!res.ok) {
     throw new Error('Failed to reset video slot');
   }
+  sessionReplacedSlots.delete(`${kind}:${key}`);
   const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
   runtimeOverrides = normalizeMapPayload(payload.map);
   notifyListeners();
+}
+
+function saveStoredDogRunJumpSecFallback(sec: number): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(DOG_RUN_JUMP_SEC_STORAGE_KEY, String(sec));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export async function updateAngelDogRunJumpSec(
+  jumpSec: number,
+  options?: { immediate?: boolean },
+): Promise<void> {
+  const clamped = Math.max(0, Math.min(30, Math.round(jumpSec * 10) / 10));
+  const seq = ++dogRunJumpMutationSeq;
+  pendingDogRunJumpSec = clamped;
+  saveStoredDogRunJumpSecFallback(clamped);
+  runtimeOverrides = { ...runtimeOverrides, dogRunJumpSec: clamped };
+  notifyListeners();
+
+  const sendSave = async () => {
+    try {
+      const res = await fetch('/api/angel-videos/dog-run-jump', {
+        method: 'PUT',
+        headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ jumpSec: clamped }),
+      });
+      handleUnauthorizedStudioResponse(res);
+      if (seq !== dogRunJumpMutationSeq) {
+        return;
+      }
+      if (res.ok) {
+        const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
+        pendingDogRunJumpSec = null;
+        runtimeOverrides = normalizeMapPayload(payload.map);
+        runtimeOverrides = { ...runtimeOverrides, dogRunJumpSec: clamped };
+        notifyListeners();
+      } else {
+        pendingDogRunJumpSec = null;
+      }
+    } catch {
+      if (seq === dogRunJumpMutationSeq) {
+        pendingDogRunJumpSec = null;
+      }
+    }
+  };
+
+  if (typeof window !== 'undefined' && dogRunJumpDebounceTimer !== null) {
+    window.clearTimeout(dogRunJumpDebounceTimer);
+    dogRunJumpDebounceTimer = null;
+  }
+
+  if (options?.immediate || typeof window === 'undefined') {
+    await sendSave();
+    return;
+  }
+
+  dogRunJumpDebounceTimer = window.setTimeout(() => {
+    dogRunJumpDebounceTimer = null;
+    if (seq === dogRunJumpMutationSeq) {
+      void sendSave();
+    }
+  }, 140);
+}
+
+export function getAngelDogRunVideoUrl(
+  map: AngelVideoMapPayload = runtimeOverrides,
+): string | undefined {
+  return map.dogRunVideo || ANGEL_DOG_RUN_VIDEO_SRC;
+}
+
+export function getAngelDogRunJumpSec(
+  map: AngelVideoMapPayload = runtimeOverrides,
+): number {
+  if (pendingDogRunJumpSec !== null) return pendingDogRunJumpSec;
+  const raw = map.dogRunJumpSec;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 && raw <= 30 ? raw : 4.2;
+}
+
+export function getAngelDanceStarsVideoUrl(
+  map: AngelVideoMapPayload = runtimeOverrides,
+): string | undefined {
+  return map.danceStarsVideo || ANGEL_DANCE_STARS_VIDEO_SRC;
 }
 
 export async function updateAngelEscapeEnabled(
@@ -2763,9 +2958,10 @@ export function primeNextCaseSlotPreview(
 }
 
 function applySeductionSlotAudioForKey(key: string, map: AngelVideoMapPayload): void {
-  const slotAudio = map.seductionAudioVariants?.[key] || map.seductionAudioUrl || null;
+  const slotAudio =
+    map.seductionAudioUrl || map.seductionAudioVariants?.[key] || ANGEL_SEDUCTION_AUDIO_SRC;
   setNextSeductionPlaybackAudio(slotAudio);
-  const slotDur = map.seductionAudioDurations?.[key] ?? map.seductionAudioDuration;
+  const slotDur = map.seductionAudioDuration ?? map.seductionAudioDurations?.[key];
   if (typeof slotDur === 'number' && Number.isFinite(slotDur) && slotDur > 0) {
     VOICE_CLIP_DURATION_SEC.seduction_v1 = slotDur;
     VOICE_CLIP_DURATION_SEC.seduction_v2 = slotDur;
@@ -3061,6 +3257,8 @@ export function startAngelMediaBackgroundPrewarmer(): void {
     push(runtimeOverrides.cases?.warn_double);
     push(runtimeOverrides.cases?.warn_fork_2step);
     push(runtimeOverrides.cases?.warn_fork_2step_2);
+    push(runtimeOverrides.cases?.undo_done);
+    push(runtimeOverrides.cases?.undo_done_2);
     push(runtimeOverrides.cases?.thank_jan);
     push(runtimeOverrides.cases?.opening);
     push(runtimeOverrides.cases?.tree_browse);
@@ -3069,11 +3267,22 @@ export function startAngelMediaBackgroundPrewarmer(): void {
     push(runtimeOverrides.cases?.seduction_3);
     push(runtimeOverrides.cases?.seduction_4);
     push(runtimeOverrides.cases?.seduction_5);
+    push(runtimeOverrides.cases?.seduction_6);
     for (const escUrl of Object.values(runtimeOverrides.escapes || {})) {
       push(escUrl);
     }
 
+    // Pre-warm both locked music tracks right away for instant playback
+    for (const track of DEFAULT_MUSIC_TRACKS) {
+      push(track.url);
+    }
+    for (const track of runtimeOverrides.musicTracks || []) {
+      push(track.url);
+    }
+
     if (warmFullCatalog) {
+      push(runtimeOverrides.dogRunVideo || ANGEL_DOG_RUN_VIDEO_SRC);
+      push(runtimeOverrides.danceStarsVideo || ANGEL_DANCE_STARS_VIDEO_SRC);
       for (const caseUrl of Object.values(runtimeOverrides.cases || {})) {
         push(caseUrl);
       }

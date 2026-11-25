@@ -922,6 +922,7 @@ export function buildSculptedPiece(
   aoDisc.rotation.x = -Math.PI / 2;
   aoDisc.scale.set(baseScale, baseScale, 1);
   aoDisc.position.set(0, 0.003, 0);
+  aoDisc.userData.isContactShadow = true;
   group.add(aoDisc);
 
   switch (type) {

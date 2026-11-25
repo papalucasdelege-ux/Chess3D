@@ -30,6 +30,8 @@ import {
   AlertTriangle,
   AlertCircle,
   Leaf,
+  Lightbulb,
+  Music,
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 import {
@@ -47,6 +49,18 @@ import {
 } from '../shared/types';
 import { formatEvalLabel } from '../chess/engine';
 import type { AngelVoiceMode } from '../chess/opponentVoice';
+import {
+  TACTICAL_DIFFICULTIES_ORDER,
+  TACTICAL_DIFFICULTY_LABELS,
+  TACTICAL_PUZZLES,
+  TACTICAL_THEMES_ORDER,
+  TACTICAL_THEME_LABELS,
+  formatSolveDuration,
+  type TacticalDifficulty,
+  type TacticalPuzzle,
+  type TacticalTheme,
+  type TacticalTrainingStats,
+} from '../chess/tacticalPuzzles';
 import type { DockTab } from './TopBar';
 
 interface ControlDockProps {
@@ -74,6 +88,11 @@ interface ControlDockProps {
   onSelectCameraPreset: (preset: CameraPreset) => void;
   soundEnabled: boolean;
   onToggleSound: () => void;
+  musicEnabled: boolean;
+  onToggleMusic: () => void;
+  musicTracks: readonly { id: string; title: string }[];
+  activeMusicTrackIndex: number;
+  onSelectMusicTrack: (index: number) => void;
   angelVoice: AngelVoiceMode;
   onChangeAngelVoice: (mode: AngelVoiceMode) => void;
   angelVisible: boolean;
@@ -131,6 +150,21 @@ interface ControlDockProps {
   onOpenLoadDrawer?: () => void;
   onSecretStudioTrigger?: () => void;
   onTitleTribute?: () => void;
+
+  // Tactical Training & Performance Statistics
+  onStartTacticalTraining: (puzzleId?: string) => void;
+  onReturnToCasualPlay: () => void;
+  activePuzzle: TacticalPuzzle;
+  tacticalStats: TacticalTrainingStats;
+  tacticalThemeFilter: TacticalTheme | 'all';
+  onChangeTacticalThemeFilter: (theme: TacticalTheme | 'all') => void;
+  tacticalDifficultyFilter: TacticalDifficulty | 'all';
+  onChangeTacticalDifficultyFilter: (diff: TacticalDifficulty | 'all') => void;
+  onResetTacticalStats: () => void;
+  onTacticalHint: () => void;
+  onTacticalRetry: () => void;
+  onTacticalShowSolution: () => void;
+  onTacticalNextPuzzle: () => void;
 }
 
 const QUALITY_COLORS: Record<MoveQuality, string> = {
@@ -227,6 +261,7 @@ export function ControlDock(props: ControlDockProps) {
   const [replayListTab, setReplayListTab] = useState<'saved' | 'classics'>('saved');
   const [loadDrawerOpen, setLoadDrawerOpen] = useState(false);
   const [importNotice, setImportNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [confirmResetStats, setConfirmResetStats] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const secretTapTimesRef = useRef<number[]>([]);
 
@@ -309,7 +344,7 @@ export function ControlDock(props: ControlDockProps) {
             <button
               type="button"
               onClick={handleBrandSecretTap}
-              title="ChessAngel 3D v3.3"
+              title="ChessAngel 3D v4.0"
               className="group inline-flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer rounded-md focus-visible:outline-2 focus-visible:outline-[#e3be78]"
             >
               {!emblemBroken ? (
@@ -331,7 +366,7 @@ export function ControlDock(props: ControlDockProps) {
                 </span>
               )}
               <span className="font-display text-base font-medium tracking-tight text-[#f5f0e6] group-hover:text-[#f3d38b] transition-colors whitespace-nowrap">
-                ChessAngel 3D v3.3
+                ChessAngel 3D v4.0
               </span>
             </button>
 
@@ -417,6 +452,68 @@ export function ControlDock(props: ControlDockProps) {
 
             <button
               type="button"
+              onClick={props.onToggleMusic}
+              aria-pressed={props.musicEnabled}
+              title={
+                props.musicEnabled
+                  ? `Turn music off (Playing: ${
+                      props.musicTracks[props.activeMusicTrackIndex]?.title ||
+                      "Queen's Infinite Reign"
+                    })`
+                  : `Play background music (${
+                      props.musicTracks[props.activeMusicTrackIndex]?.title ||
+                      "Queen's Infinite Reign"
+                    })`
+              }
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap focus-visible:outline-2 focus-visible:outline-[#e3be78] ${
+                props.musicEnabled
+                  ? 'bg-[#262014] hover:bg-[#31291a] border-[#d6ae63]/65 text-[#f6e4bc]'
+                  : 'bg-[#171c26] hover:bg-[#1f2634] border-white/10 text-[#8d96a6] hover:text-white'
+              }`}
+            >
+              <Music
+                className={`w-3.5 h-3.5 ${
+                  props.musicEnabled ? 'text-[#e3be78]' : 'text-[#8d96a6]'
+                }`}
+              />
+              Music: {props.musicEnabled ? 'On' : 'Off'}
+            </button>
+
+            {props.musicTracks.length > 1 && (
+              <div
+                className="inline-flex items-center rounded border border-white/10 bg-[#141821] p-0.5"
+                role="group"
+                aria-label="Select background song"
+              >
+                {props.musicTracks.map((track, idx) => {
+                  const isActive = props.musicEnabled && props.activeMusicTrackIndex === idx;
+                  const shortLabel = track.title.toLowerCase().includes('rap')
+                    ? 'Rap'
+                    : track.title.toLowerCase().includes('queen')
+                      ? 'Queen'
+                      : track.title;
+                  return (
+                    <button
+                      key={track.id}
+                      type="button"
+                      onClick={() => props.onSelectMusicTrack(idx)}
+                      aria-pressed={isActive}
+                      title={`Play ${track.title}`}
+                      className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                        isActive
+                          ? 'bg-[#d6ae63] text-[#111419] font-semibold'
+                          : 'text-[#9aa4b5] hover:text-white hover:bg-white/5'
+                      }`}
+                    >
+                      {shortLabel}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <button
+              type="button"
               onClick={props.onToggleSound}
               aria-pressed={!props.soundEnabled}
               title={props.soundEnabled ? 'Mute sound (M)' : 'Unmute sound (M)'}
@@ -444,12 +541,16 @@ export function ControlDock(props: ControlDockProps) {
               onClick={props.onPrimaryAction}
               className="px-3.5 py-1 text-xs font-semibold text-[#111419] bg-[#d6ae63] hover:bg-[#e3be78] rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#e3be78]"
             >
-              {props.isReplayMode ? 'Exit Replay' : 'New Match'}
+              {props.isReplayMode
+                ? 'Exit Replay'
+                : props.gameMode === 'tactical'
+                  ? 'Next Puzzle'
+                  : 'New Match'}
             </button>
 
             {/* Tab Switcher at the Far Right End of the Rollout Header */}
             <div className="flex items-center gap-1 bg-[#171c26] border border-white/8 rounded-md p-0.5 text-xs">
-              {(['play', 'analysis', 'replay'] as DockTab[]).map((t) => (
+              {(['play', 'training', 'analysis', 'replay'] as DockTab[]).map((t) => (
                 <button
                   key={t}
                   type="button"
@@ -457,7 +558,7 @@ export function ControlDock(props: ControlDockProps) {
                     setLoadDrawerOpen(false);
                     props.onSelectTab(t);
                   }}
-                  className={`px-3 py-1 rounded capitalize transition-colors whitespace-nowrap cursor-pointer ${
+                  className={`px-3 py-1 rounded capitalize transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                     props.activeTab === t && !(t === 'play' && loadDrawerOpen)
                       ? 'bg-[#d6ae63] text-[#111419] font-semibold'
                       : 'text-[#9aa3b2] hover:text-white'
@@ -658,6 +759,17 @@ export function ControlDock(props: ControlDockProps) {
                     }`}
                   >
                     Pass &amp; Play
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => props.onStartTacticalTraining()}
+                    className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap cursor-pointer ${
+                      props.gameMode === 'tactical'
+                        ? 'bg-[#d6ae63] text-[#111419] font-semibold'
+                        : 'text-[#aeb7c6] hover:text-white'
+                    }`}
+                  >
+                    Tactical Training
                   </button>
                 </div>
 
@@ -870,6 +982,353 @@ export function ControlDock(props: ControlDockProps) {
               </div>
             </div>
           )}
+
+          {/* ==================== TACTICAL TRAINING & STATS TAB ==================== */}
+          {props.activeTab === 'training' &&
+            (() => {
+              const filteredPuzzles = TACTICAL_PUZZLES.filter((p) => {
+                if (props.tacticalThemeFilter !== 'all' && p.theme !== props.tacticalThemeFilter) {
+                  return false;
+                }
+                if (
+                  props.tacticalDifficultyFilter !== 'all' &&
+                  p.difficulty !== props.tacticalDifficultyFilter
+                ) {
+                  return false;
+                }
+                return true;
+              });
+              const uniqueSolved = Object.values(props.tacticalStats.puzzleRecords).filter(
+                (r) => r.solved,
+              ).length;
+              const accuracyPct =
+                props.tacticalStats.attemptedCount > 0
+                  ? Math.round(
+                      (props.tacticalStats.cleanSolvedCount / props.tacticalStats.attemptedCount) *
+                        100,
+                    )
+                  : 100;
+
+              return (
+                <div className="flex flex-col gap-3">
+                  {/* Row 1: Learning vs Casual Play Mode Switch + Theme & Difficulty Filters */}
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2.5 border-b border-white/8">
+                    <div className="flex items-center gap-1 p-1 bg-[#191f2a] rounded-md border border-white/8">
+                      <button
+                        type="button"
+                        onClick={() => props.onStartTacticalTraining(props.activePuzzle.id)}
+                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                          props.gameMode === 'tactical'
+                            ? 'bg-[#d6ae63] text-[#111419] font-semibold'
+                            : 'text-[#aeb7c6] hover:text-white'
+                        }`}
+                      >
+                        Learning · Tactical Training
+                      </button>
+                      <button
+                        type="button"
+                        onClick={props.onReturnToCasualPlay}
+                        className={`px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                          props.gameMode !== 'tactical' && !props.isReplayMode
+                            ? 'bg-[#d6ae63] text-[#111419] font-semibold'
+                            : 'text-[#aeb7c6] hover:text-white'
+                        }`}
+                      >
+                        Casual Play
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* Difficulty Filter */}
+                      <div className="flex items-center gap-1 p-0.5 bg-[#191f2a] rounded-md border border-white/8 overflow-x-auto">
+                        <button
+                          type="button"
+                          onClick={() => props.onChangeTacticalDifficultyFilter('all')}
+                          className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                            props.tacticalDifficultyFilter === 'all'
+                              ? 'bg-white/14 text-white font-medium'
+                              : 'text-[#8e98a8] hover:text-white'
+                          }`}
+                        >
+                          All Levels
+                        </button>
+                        {TACTICAL_DIFFICULTIES_ORDER.map((diff) => (
+                          <button
+                            key={diff}
+                            type="button"
+                            onClick={() => props.onChangeTacticalDifficultyFilter(diff)}
+                            className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                              props.tacticalDifficultyFilter === diff
+                                ? 'bg-white/14 text-white font-medium'
+                                : 'text-[#8e98a8] hover:text-white'
+                            }`}
+                          >
+                            {TACTICAL_DIFFICULTY_LABELS[diff]}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Theme Filter */}
+                      <div className="flex items-center gap-1 p-0.5 bg-[#191f2a] rounded-md border border-white/8 overflow-x-auto">
+                        <button
+                          type="button"
+                          onClick={() => props.onChangeTacticalThemeFilter('all')}
+                          className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                            props.tacticalThemeFilter === 'all'
+                              ? 'bg-[#d6ae63]/20 text-[#f0d192] font-semibold border border-[#d6ae63]/45'
+                              : 'text-[#8e98a8] hover:text-white border border-transparent'
+                          }`}
+                        >
+                          All Motifs
+                        </button>
+                        {TACTICAL_THEMES_ORDER.map((th) => (
+                          <button
+                            key={th}
+                            type="button"
+                            onClick={() => props.onChangeTacticalThemeFilter(th)}
+                            className={`px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                              props.tacticalThemeFilter === th
+                                ? 'bg-[#d6ae63]/20 text-[#f0d192] font-semibold border border-[#d6ae63]/45'
+                                : 'text-[#8e98a8] hover:text-white border border-transparent'
+                            }`}
+                          >
+                            {TACTICAL_THEME_LABELS[th]}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Two-Column Split — Curated Puzzles List & Performance Statistics */}
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-stretch">
+                    {/* Left: Curated Puzzle Selector + Quick Controls */}
+                    <div className="md:col-span-7 flex flex-col gap-2">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2 text-[#cbd2df] min-w-0 truncate">
+                          <span className="font-semibold text-[#f3efe4] whitespace-nowrap">
+                            Curated Puzzles
+                          </span>
+                          <span className="text-white/25" aria-hidden="true">
+                            ·
+                          </span>
+                          <span className="text-[11px] text-[#8d96a6] font-mono-tabular whitespace-nowrap">
+                            {filteredPuzzles.length} shown
+                          </span>
+                        </div>
+
+                        {props.gameMode === 'tactical' && (
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={props.onTacticalHint}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded bg-[#181d27] hover:bg-[#232b3a] border border-white/10 text-[#d7dce5] whitespace-nowrap cursor-pointer"
+                            >
+                              <Lightbulb className="w-3 h-3 text-[#d6ae63]" />
+                              Hint
+                            </button>
+                            <button
+                              type="button"
+                              onClick={props.onTacticalRetry}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded bg-[#181d27] hover:bg-[#232b3a] border border-white/10 text-[#d7dce5] whitespace-nowrap cursor-pointer"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              Retry
+                            </button>
+                            <button
+                              type="button"
+                              onClick={props.onTacticalShowSolution}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded bg-[#181d27] hover:bg-[#232b3a] border border-white/10 text-[#7dd3fc] whitespace-nowrap cursor-pointer"
+                            >
+                              <Eye className="w-3 h-3" />
+                              Solution
+                            </button>
+                            <button
+                              type="button"
+                              onClick={props.onTacticalNextPuzzle}
+                              className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold rounded bg-[#d6ae63] hover:bg-[#e3be78] text-[#111419] whitespace-nowrap cursor-pointer"
+                            >
+                              Next
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-[148px] overflow-y-auto thin-scroll pr-0.5">
+                        {filteredPuzzles.length === 0 ? (
+                          <p className="text-xs text-[#8d96a6] col-span-full py-4">
+                            No puzzles match this filter combination. Select All Levels or All Motifs
+                            to view more puzzles.
+                          </p>
+                        ) : (
+                          filteredPuzzles.map((puz) => {
+                            const rec = props.tacticalStats.puzzleRecords[puz.id];
+                            const isCurrent =
+                              props.gameMode === 'tactical' && props.activePuzzle.id === puz.id;
+                            return (
+                              <button
+                                key={puz.id}
+                                type="button"
+                                onClick={() => props.onStartTacticalTraining(puz.id)}
+                                className={`text-left flex items-center justify-between gap-2 px-2.5 py-2 rounded border transition-colors cursor-pointer ${
+                                  isCurrent
+                                    ? 'bg-[#222938] border-[#d6ae63]/70'
+                                    : 'bg-[#171c25] border-white/8 hover:border-white/20'
+                                }`}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-xs font-medium text-[#f3f1ec] truncate">
+                                    <span className="font-mono-tabular text-[#d6ae63] mr-1">
+                                      {String(puz.index).padStart(2, '0')}.
+                                    </span>
+                                    {puz.title}
+                                  </div>
+                                  <div className="text-[11px] text-[#8d96a6] truncate font-mono-tabular">
+                                    {TACTICAL_THEME_LABELS[puz.theme]} ·{' '}
+                                    {TACTICAL_DIFFICULTY_LABELS[puz.difficulty]} · {puz.rating}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0 text-[11px] font-mono-tabular">
+                                  {rec?.solved ? (
+                                    <>
+                                      {typeof rec.bestSolveMs === 'number' && (
+                                        <span className="text-[#9aa3b2]">
+                                          {formatSolveDuration(rec.bestSolveMs)}
+                                        </span>
+                                      )}
+                                      <span
+                                        className="inline-flex items-center gap-1 text-[#6ee7b7]"
+                                        title={
+                                          rec.clean
+                                            ? 'Solved cleanly on first try'
+                                            : 'Solved'
+                                        }
+                                      >
+                                        <Check className="w-3.5 h-3.5" strokeWidth={2.6} />
+                                        <span>{rec.clean ? 'Clean' : 'Done'}</span>
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <span className="text-[#7f8999]">Solve</span>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Right: Performance Statistics Breakdown */}
+                    <div className="md:col-span-5 flex flex-col justify-between gap-2.5 md:border-l md:border-white/8 md:pl-3.5">
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold text-[#f3efe4] whitespace-nowrap">
+                            Performance Statistics
+                          </span>
+                          {!confirmResetStats ? (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmResetStats(true)}
+                              disabled={props.tacticalStats.attemptedCount === 0}
+                              className="text-[11px] text-[#8d96a6] hover:text-[#fca5a5] disabled:opacity-35 transition-colors whitespace-nowrap cursor-pointer disabled:cursor-default"
+                            >
+                              Reset Stats
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-1.5 text-[11px]">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  props.onResetTacticalStats();
+                                  setConfirmResetStats(false);
+                                }}
+                                className="px-2 py-0.5 rounded bg-[#3a2024] text-[#fca5a5] border border-[#f87171]/40 font-medium whitespace-nowrap cursor-pointer"
+                              >
+                                Confirm Reset
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmResetStats(false)}
+                                className="px-2 py-0.5 rounded bg-[#181d27] text-[#cbd2df] border border-white/10 whitespace-nowrap cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Tabular KPI Strip */}
+                        <div className="grid grid-cols-4 gap-2 py-2 border-y border-white/8 font-mono-tabular">
+                          <div>
+                            <div className="text-[11px] text-[#8d96a6] font-sans">Score</div>
+                            <div className="text-sm font-semibold text-[#e3be78]">
+                              {props.tacticalStats.totalScore.toLocaleString()}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-[#8d96a6] font-sans">Rating</div>
+                            <div className="text-sm font-semibold text-[#f5f0e6]">
+                              {props.tacticalStats.rating}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-[#8d96a6] font-sans">Accuracy</div>
+                            <div className="text-sm font-semibold text-[#6ee7b7]">
+                              {accuracyPct}%
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-[#8d96a6] font-sans">Avg Time</div>
+                            <div className="text-sm font-semibold text-[#f5f0e6]">
+                              {props.tacticalStats.timedSolveCount > 0
+                                ? formatSolveDuration(
+                                    props.tacticalStats.totalSolveMs /
+                                      props.tacticalStats.timedSolveCount,
+                                  )
+                                : '—'}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Per-Motif Breakdown */}
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                          {TACTICAL_THEMES_ORDER.map((th) => {
+                            const totalInTheme = TACTICAL_PUZZLES.filter(
+                              (p) => p.theme === th,
+                            ).length;
+                            const solvedInTheme = TACTICAL_PUZZLES.filter(
+                              (p) =>
+                                p.theme === th &&
+                                props.tacticalStats.puzzleRecords[p.id]?.solved,
+                            ).length;
+                            return (
+                              <div
+                                key={th}
+                                className="flex items-center justify-between gap-2 text-[#aeb7c6]"
+                              >
+                                <span className="truncate">{TACTICAL_THEME_LABELS[th]}</span>
+                                <span className="font-mono-tabular text-[#f3efe4] shrink-0">
+                                  {solvedInTheme}/{totalInTheme}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="text-[11px] text-[#8d96a6] font-mono-tabular truncate">
+                        {uniqueSolved}/{TACTICAL_PUZZLES.length} solved · Streak{' '}
+                        {props.tacticalStats.currentStreak} ({props.tacticalStats.bestStreak})
+                        {props.tacticalStats.fastestSolveMs !== null
+                          ? ` · Best ${formatSolveDuration(props.tacticalStats.fastestSolveMs)} (${props.tacticalStats.bestMultiplier.toFixed(1)}x)`
+                          : ` · ${props.tacticalStats.hintsUsed} hints`}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
           {/* ==================== ANALYSIS TAB ==================== */}
           {props.activeTab === 'analysis' && (

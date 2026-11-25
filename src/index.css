@@ -15,13 +15,14 @@
     margin: 0;
     padding: 0;
     overflow: hidden;
+    overscroll-behavior: none;
     font-family: var(--font-sans);
     background-color: #000000;
     color: #f3f1ec;
   }
 }
 
-/* Explicit absolute viewport sizing for WebGL container (prevents 0x0 collapse on Android/mobile) */
+/* Explicit absolute viewport sizing for WebGL container (prevents 0x0 collapse & pull-to-refresh on Android/mobile) */
 .webgl-viewport-container {
   position: fixed;
   top: 0;
@@ -35,6 +36,10 @@
   min-height: 1px;
   background-color: #000000;
   overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .font-display {
@@ -79,4 +84,45 @@
   scroll-behavior: auto !important;
 }
 
+/* Subtle urgency pulse for Tactical Training countdown when time remaining drops below 10s */
+@keyframes tactical-timer-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+    filter: drop-shadow(0 0 0px rgba(248, 113, 113, 0));
+  }
+  50% {
+    transform: scale(1.045);
+    opacity: 0.78;
+    filter: drop-shadow(0 0 6px rgba(248, 113, 113, 0.55));
+  }
+}
 
+@keyframes tactical-bar-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0px rgba(239, 68, 68, 0);
+  }
+  50% {
+    opacity: 0.65;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
+  }
+}
+
+.tactical-timer-urgent {
+  animation: tactical-timer-pulse 1s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.tactical-bar-urgent {
+  animation: tactical-bar-pulse 1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tactical-timer-urgent,
+  .tactical-bar-urgent {
+    animation: none;
+  }
+}

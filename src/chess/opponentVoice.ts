@@ -493,9 +493,9 @@ export const CLIP_TEXT: Record<VoiceClipId, string> = {
   seduction_v1:
     'Oh, bravo... Very clever... Alright, you have my full attention.',
   seduction_v2:
-    'Oh, bravo... Very clever... Alright, you have my full attention.',
+    'Again, such sharp chess... you are making it hard for me to look away.',
   seduction_v3:
-    'Oh, bravo... Very clever... Alright, you have my full attention.',
+    'Three brilliant strokes in a row... careful, you might actually distract your Chess Angel.',
 
   // 45. New Match Button
   new_match_v1:
@@ -597,9 +597,9 @@ export const CLIP_TEXT: Record<VoiceClipId, string> = {
   thank_jan_v1:
     'Thank you, Jan, for all the trouble you gave yourself to create me and this game. Now enjoy playing chess with me, too...',
   thank_jan_v2:
-    'Thank you, Jan, for all the trouble you gave yourself to create me and this game. Now enjoy playing chess with me, too...',
+    'Again, thank you, Jan... every piece, board light, and line of code here carries your care. Let us play another fine game together.',
   thank_jan_v3:
-    'Thank you, Jan, for all the trouble you gave yourself to create me and this game. Now enjoy playing chess with me, too...',
+    'Always grateful to you, Jan... thank you for bringing me to life. Now sit back and enjoy our match.',
 };
 
 const PIECE_VALUES: Record<PieceSymbol, number> = {
@@ -614,12 +614,16 @@ const PIECE_VALUES: Record<PieceSymbol, number> = {
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 const SPEAKER_NAME = 'Chess Angel';
 
-// Tracks how many times each commentary case has occurred so:
-// - 1st occurrence plays _v1 (full primary phrasing)
-// - 2nd occurrence plays _v2 ("As I said..." / "Again..." / shorter secondary phrasing)
-// - 3rd occurrence plays _v3 (concise third-occurrence phrasing)
-// - 4th+ occurrences alternate cleanly between _v2 and _v3
-const caseOccurrenceCounts = new Map<CommentaryCaseId, number>();
+// Per-match play quota counter (resets on New Match via resetGameCommentaryCounts).
+// Enforces per-game limits like max 2 fork warnings, max 1 seduction, or max 6 hesitation/tree hints.
+const inGameCasePlayCounts = new Map<CommentaryCaseId, number>();
+
+// Persistent inter-match conversation branch flags across ALL 57 remarks:
+// - 1st occurrence (flag 0 -> 1): plays _v1 (full first-time remark)
+// - 2nd occurrence (flag 1 -> 2, within the same match OR in a following match): plays _v2
+// - 3rd occurrence (flag 2 -> 3, within the same match OR in a following match): plays _v3
+// - 4th+ occurrences: alternates cleanly between _v2 and _v3 (and stays concise v4..v6 for 6-stage cases)
+const interMatchCaseFlags = new Map<CommentaryCaseId, number>();
 let forkWarningsShownInGame = 0;
 const MAX_FORK_WARNINGS_PER_GAME = 2;
 let messageSeq = 1;
@@ -646,12 +650,103 @@ export function canPlayCaseInGame(caseId: CommentaryCaseId): boolean {
   const maxPlays = getCaseMaxPlaysInGame(caseId);
   if (maxPlays === null) return true;
   if (maxPlays <= 0) return false;
-  const used = caseOccurrenceCounts.get(caseId) || 0;
+  const used = inGameCasePlayCounts.get(caseId) || 0;
   return used < maxPlays;
 }
 
+const INTER_MATCH_FLAGS_STORAGE_KEY = 'chess_angel_inter_match_flags_v1';
+const LEGACY_INTRO_VISIT_STORAGE_KEY = 'chess_angel_intro_count_v1';
+
+function hydrateInterMatchFlags(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(INTER_MATCH_FLAGS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (parsed && typeof parsed === 'object') {
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+            interMatchCaseFlags.set(k as CommentaryCaseId, Math.floor(v));
+          }
+        }
+      }
+    }
+    const legacyIntro = Number(window.localStorage.getItem(LEGACY_INTRO_VISIT_STORAGE_KEY) || '0');
+    if (
+      Number.isFinite(legacyIntro) &&
+      legacyIntro > 0 &&
+      legacyIntro > (interMatchCaseFlags.get('intro') || 0)
+    ) {
+      interMatchCaseFlags.set('intro', Math.floor(legacyIntro));
+    }
+  } catch {
+    // Ignore storage read errors
+  }
+}
+
+function persistInterMatchFlags(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const serialized: Record<string, number> = {};
+    for (const [k, v] of interMatchCaseFlags.entries()) {
+      if (v > 0) serialized[k] = v;
+    }
+    window.localStorage.setItem(INTER_MATCH_FLAGS_STORAGE_KEY, JSON.stringify(serialized));
+  } catch {
+    // Ignore storage write errors
+  }
+}
+
+hydrateInterMatchFlags();
+
+function resolveClipIdForOccurrence(caseId: CommentaryCaseId, occurrenceCount: number): VoiceClipId {
+  if (caseId === 'hesitate_hint' || caseId === 'tree_browse') {
+    const seqStage = Math.min(6, Math.max(1, occurrenceCount)) as 1 | 2 | 3 | 4 | 5 | 6;
+    return `${caseId}_v${seqStage}` as VoiceClipId;
+  }
+
+  const variant: 'v1' | 'v2' | 'v3' =
+    occurrenceCount <= 1
+      ? 'v1'
+      : occurrenceCount === 2
+        ? 'v2'
+        : occurrenceCount === 3
+          ? 'v3'
+          : occurrenceCount % 2 === 0
+            ? 'v2'
+            : 'v3';
+  return `${caseId}_${variant}` as VoiceClipId;
+}
+
+/**
+ * Returns how many times Chess Angel has already delivered `caseId` across matches/sessions.
+ */
+export function getInterMatchRemarkFlag(caseId: CommentaryCaseId): number {
+  return interMatchCaseFlags.get(caseId) || 0;
+}
+
+/**
+ * Resets all persistent inter-match conversation branch flags (returns Chess Angel to 1st-time _v1 remarks).
+ */
+export function resetInterMatchRemarkFlags(): void {
+  interMatchCaseFlags.clear();
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.removeItem(INTER_MATCH_FLAGS_STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_INTRO_VISIT_STORAGE_KEY);
+    } catch {
+      // Ignore storage remove errors
+    }
+  }
+}
+
+/**
+ * Called when starting a new match: resets ONLY per-match play quotas (fork warnings, seduction,
+ * hesitation caps) while preserving inter-match conversation branch flags so 2nd & 3rd alternatives
+ * continue naturally when one match is played after another.
+ */
 export function resetGameCommentaryCounts(): void {
-  caseOccurrenceCounts.clear();
+  inGameCasePlayCounts.clear();
   forkWarningsShownInGame = 0;
 }
 
@@ -659,26 +754,14 @@ function tryPickCaseClip(caseId: CommentaryCaseId): ClipEntry | null {
   if (!canPlayCaseInGame(caseId)) {
     return null;
   }
-  const count = (caseOccurrenceCounts.get(caseId) || 0) + 1;
-  caseOccurrenceCounts.set(caseId, count);
+  const inGameCount = (inGameCasePlayCounts.get(caseId) || 0) + 1;
+  inGameCasePlayCounts.set(caseId, inGameCount);
 
-  if (caseId === 'hesitate_hint' || caseId === 'tree_browse') {
-    const seqStage = Math.min(6, Math.max(1, count)) as 1 | 2 | 3 | 4 | 5 | 6;
-    const clipId = `${caseId}_v${seqStage}` as VoiceClipId;
-    return { clipId, text: CLIP_TEXT[clipId] };
-  }
+  const interMatchCount = (interMatchCaseFlags.get(caseId) || 0) + 1;
+  interMatchCaseFlags.set(caseId, interMatchCount);
+  persistInterMatchFlags();
 
-  const variant: 'v1' | 'v2' | 'v3' =
-    count === 1
-      ? 'v1'
-      : count === 2
-        ? 'v2'
-        : count === 3
-          ? 'v3'
-          : count % 2 === 0
-            ? 'v2'
-            : 'v3';
-  const clipId = `${caseId}_${variant}` as VoiceClipId;
+  const clipId = resolveClipIdForOccurrence(caseId, interMatchCount);
   return { clipId, text: CLIP_TEXT[clipId] };
 }
 
@@ -928,10 +1011,14 @@ export function createAngelModalOffMessage(): OpponentMessage | null {
 }
 
 export function createThankJanMessage(): OpponentMessage {
+  const entry = tryPickCaseClip('thank_jan') || {
+    clipId: 'thank_jan_v1' as VoiceClipId,
+    text: CLIP_TEXT.thank_jan_v1,
+  };
   return {
     id: messageSeq++,
-    clipId: 'thank_jan_v1',
-    text: CLIP_TEXT.thank_jan_v1,
+    clipId: entry.clipId,
+    text: entry.text,
     tag: 'FOR JAN · CHESS ANGEL',
     tone: 'opening',
     speaker: SPEAKER_NAME,
@@ -2246,12 +2333,46 @@ export function setNextSeductionPlaybackAudio(url?: string | null): void {
   nextSeductionSlotAudioUrl = url && url.trim().length > 0 ? url : null;
 }
 
+export interface MusicTrack {
+  id: string;
+  title: string;
+  url: string;
+}
+
+export interface MusicPlaybackSnapshot {
+  enabled: boolean;
+  playing: boolean;
+  trackIndex: number;
+  track: MusicTrack | null;
+  tracks: MusicTrack[];
+}
+
+type MusicStateListener = (snapshot: MusicPlaybackSnapshot) => void;
+
+export const QUEEN_THEME_MUSIC_URL =
+  '/assets/aistudio/Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3';
+
+export const CHESS_ANGEL_RAP_MUSIC_URL = '/assets/aistudio/Chess_Angle_RAP.mp3';
+
+export const DEFAULT_MUSIC_TRACKS: readonly MusicTrack[] = [
+  {
+    id: 'queen_infinite_reign',
+    title: "Queen's Infinite Reign",
+    url: QUEEN_THEME_MUSIC_URL,
+  },
+  {
+    id: 'chess_angel_rap',
+    title: 'Chess Angel Rap',
+    url: CHESS_ANGEL_RAP_MUSIC_URL,
+  },
+];
+
 function buildVoiceUrl(clipId: VoiceClipId): string {
   if (clipId.startsWith('seduction_')) {
     return (
       nextSeductionSlotAudioUrl ||
       seductionCustomAudioUrl ||
-      `/voices/female/seduction.mp3?v=${VOICE_ASSET_VERSION}`
+      QUEEN_THEME_MUSIC_URL
     );
   }
   if (clipId.startsWith('thank_jan_')) {
@@ -2276,6 +2397,18 @@ class OpponentSpeechController {
   private activeSource: AudioBufferSourceNode | null = null;
   private activeHtmlAudio: HTMLAudioElement | null = null;
   private activeAbort: AbortController | null = null;
+  private bgMusicAudio: HTMLAudioElement | null = null;
+  private bgMusicUrl: string | null = null;
+  private pendingGestureBgMusicUrl: string | null = null;
+  private bgMusicFadeRaf: number | null = null;
+  private musicTracks: MusicTrack[] = [...DEFAULT_MUSIC_TRACKS];
+  private musicTrackIndex = 0;
+  private musicPlaylistEnabled = false;
+  private musicSoundAllowed = true;
+  private musicStateListeners = new Set<MusicStateListener>();
+  private preloadedMusicBlobUrls = new Map<string, string>();
+  private preloadedMusicAudio = new Map<string, HTMLAudioElement>();
+  private preloadingMusicUrls = new Set<string>();
   private rawBytesCache = new Map<string, ArrayBuffer>();
   private bufferCache = new Map<string, AudioBuffer>();
   private speakSeq = 0;
@@ -2298,6 +2431,52 @@ class OpponentSpeechController {
       window.setTimeout(() => {
         this.preloadCoreClips();
       }, 60);
+      window.setTimeout(() => {
+        this.preloadBackgroundMusicTracks();
+      }, 140);
+    }
+  }
+
+  public preloadBackgroundMusicTracks(): void {
+    if (typeof window === 'undefined') return;
+    for (const track of this.musicTracks) {
+      const url = track.url;
+      if (!url) continue;
+      // Warm an HTMLAudioElement immediately so streaming play starts without delay
+      if (!this.preloadedMusicAudio.has(url)) {
+        try {
+          const el = new Audio(url);
+          el.preload = 'auto';
+          el.loop = false;
+          el.load();
+          this.preloadedMusicAudio.set(url, el);
+        } catch {
+          // ignore
+        }
+      }
+      // Also fetch the untouched MP3 bytes into an in-memory Blob URL so switching tracks is instantaneous
+      if (!this.preloadedMusicBlobUrls.has(url) && !this.preloadingMusicUrls.has(url)) {
+        this.preloadingMusicUrls.add(url);
+        void fetch(url)
+          .then((res) => (res.ok ? res.blob() : null))
+          .then((blob) => {
+            if (!blob || blob.size < 4096) return;
+            const objUrl = URL.createObjectURL(blob);
+            this.preloadedMusicBlobUrls.set(url, objUrl);
+            const warmEl = this.preloadedMusicAudio.get(url);
+            if (warmEl && warmEl !== this.bgMusicAudio && warmEl.paused) {
+              warmEl.src = objUrl;
+              warmEl.preload = 'auto';
+              warmEl.load();
+            }
+          })
+          .catch(() => {
+            // Keep direct URL streaming fallback
+          })
+          .finally(() => {
+            this.preloadingMusicUrls.delete(url);
+          });
+      }
     }
   }
 
@@ -2312,9 +2491,302 @@ class OpponentSpeechController {
   private setPlaybackState(next: VoicePlaybackState): void {
     if (this.playbackState === next) return;
     this.playbackState = next;
+    this.updateBgMusicDucking(next === 'speaking');
     for (const fn of this.listeners) {
       fn(next);
     }
+  }
+
+  private fadeBgMusicVolumeTo(targetVolume: number, durationMs: number): void {
+    if (typeof window === 'undefined') return;
+    if (this.bgMusicFadeRaf !== null) {
+      window.cancelAnimationFrame(this.bgMusicFadeRaf);
+      this.bgMusicFadeRaf = null;
+    }
+    const audio = this.bgMusicAudio;
+    if (!audio || audio.paused || audio.ended) return;
+
+    const startVol = audio.volume;
+    const clampedTarget = Math.max(0, Math.min(1, targetVolume));
+    if (Math.abs(startVol - clampedTarget) < 0.01 || durationMs <= 0) {
+      audio.volume = clampedTarget;
+      return;
+    }
+    const startMs = performance.now();
+    const step = (now: number) => {
+      if (this.bgMusicAudio !== audio || audio.paused || audio.ended) {
+        this.bgMusicFadeRaf = null;
+        return;
+      }
+      const t = Math.min(1, (now - startMs) / durationMs);
+      audio.volume = startVol + (clampedTarget - startVol) * t;
+      if (t < 1) {
+        this.bgMusicFadeRaf = window.requestAnimationFrame(step);
+      } else {
+        this.bgMusicFadeRaf = null;
+      }
+    };
+    this.bgMusicFadeRaf = window.requestAnimationFrame(step);
+  }
+
+  private getMusicTargetVolume(isVoiceSpeaking: boolean): number {
+    if (isVoiceSpeaking) return 0.22;
+    return this.musicPlaylistEnabled ? 0.68 : 0.84;
+  }
+
+  private getMusicSnapshot(): MusicPlaybackSnapshot {
+    const safeIdx =
+      this.musicTracks.length > 0
+        ? ((this.musicTrackIndex % this.musicTracks.length) + this.musicTracks.length) %
+          this.musicTracks.length
+        : 0;
+    const playing = Boolean(
+      this.bgMusicAudio && !this.bgMusicAudio.paused && !this.bgMusicAudio.ended,
+    );
+    return {
+      enabled: this.musicPlaylistEnabled,
+      playing,
+      trackIndex: safeIdx,
+      track: this.musicTracks[safeIdx] ?? null,
+      tracks: [...this.musicTracks],
+    };
+  }
+
+  private emitMusicState(): void {
+    const snap = this.getMusicSnapshot();
+    for (const fn of this.musicStateListeners) {
+      fn(snap);
+    }
+  }
+
+  public subscribeMusicState(listener: MusicStateListener): () => void {
+    this.musicStateListeners.add(listener);
+    listener(this.getMusicSnapshot());
+    return () => {
+      this.musicStateListeners.delete(listener);
+    };
+  }
+
+  public getMusicTracks(): MusicTrack[] {
+    return [...this.musicTracks];
+  }
+
+  public setMusicTracks(tracks: MusicTrack[]): void {
+    const cleaned = tracks.filter(
+      (t) =>
+        t &&
+        typeof t.url === 'string' &&
+        t.url.trim().length > 0 &&
+        typeof t.title === 'string' &&
+        t.title.trim().length > 0,
+    );
+    const nextTracks = cleaned.length > 0 ? cleaned : [...DEFAULT_MUSIC_TRACKS];
+    const currentUrl = this.musicTracks[this.musicTrackIndex]?.url ?? this.bgMusicUrl;
+    this.musicTracks = nextTracks;
+    if (currentUrl) {
+      const matchedIdx = nextTracks.findIndex((t) => t.url === currentUrl);
+      this.musicTrackIndex = matchedIdx >= 0 ? matchedIdx : 0;
+    } else {
+      this.musicTrackIndex = 0;
+    }
+    this.preloadBackgroundMusicTracks();
+    this.emitMusicState();
+  }
+
+  public setBackgroundMusicEnabled(enabled: boolean, soundEnabled: boolean): void {
+    this.musicPlaylistEnabled = enabled;
+    this.musicSoundAllowed = soundEnabled;
+    if (!enabled || !soundEnabled) {
+      this.stopBackgroundMusicInternal(false);
+      this.emitMusicState();
+      return;
+    }
+    const track = this.musicTracks[this.musicTrackIndex] ?? DEFAULT_MUSIC_TRACKS[0];
+    if (track) {
+      this.startBackgroundMusicUrl(track.url);
+    }
+    this.emitMusicState();
+  }
+
+  public nextBackgroundMusicTrack(soundEnabled: boolean): void {
+    if (this.musicTracks.length === 0) return;
+    this.musicTrackIndex = (this.musicTrackIndex + 1) % this.musicTracks.length;
+    this.musicPlaylistEnabled = true;
+    this.musicSoundAllowed = soundEnabled;
+    if (!soundEnabled) {
+      this.stopBackgroundMusicInternal(false);
+      this.emitMusicState();
+      return;
+    }
+    const track = this.musicTracks[this.musicTrackIndex];
+    if (track) {
+      this.stopBackgroundMusicInternal(false);
+      this.startBackgroundMusicUrl(track.url);
+    }
+    this.emitMusicState();
+  }
+
+  public selectBackgroundMusicTrack(index: number, soundEnabled: boolean): void {
+    if (this.musicTracks.length === 0) return;
+    const safeIdx = ((index % this.musicTracks.length) + this.musicTracks.length) % this.musicTracks.length;
+    const changedTrack = safeIdx !== this.musicTrackIndex;
+    this.musicTrackIndex = safeIdx;
+    this.musicPlaylistEnabled = true;
+    this.musicSoundAllowed = soundEnabled;
+    if (!soundEnabled) {
+      this.stopBackgroundMusicInternal(false);
+      this.emitMusicState();
+      return;
+    }
+    const track = this.musicTracks[safeIdx];
+    if (track) {
+      if (changedTrack) {
+        this.stopBackgroundMusicInternal(false);
+      }
+      this.startBackgroundMusicUrl(track.url);
+    }
+    this.emitMusicState();
+  }
+
+  private updateBgMusicDucking(isVoiceSpeaking: boolean): void {
+    if (!this.bgMusicAudio || this.bgMusicAudio.paused || this.bgMusicAudio.ended) return;
+    // Gently duck background music while Chess Angel speaks so her voice stays crystal clear,
+    // then swell smoothly back up once she finishes speaking.
+    const target = this.getMusicTargetVolume(isVoiceSpeaking);
+    if (isVoiceSpeaking) {
+      this.fadeBgMusicVolumeTo(target, 240);
+    } else {
+      this.fadeBgMusicVolumeTo(target, 520);
+    }
+  }
+
+  private startBackgroundMusicUrl(url: string): void {
+    // If the same song is already playing in the background, let it continue uninterrupted
+    if (
+      this.bgMusicAudio &&
+      !this.bgMusicAudio.paused &&
+      !this.bgMusicAudio.ended &&
+      this.bgMusicUrl === url
+    ) {
+      this.updateBgMusicDucking(this.playbackState === 'speaking');
+      this.emitMusicState();
+      return;
+    }
+
+    this.stopBackgroundMusicInternal(false);
+    const cachedBlobUrl = this.preloadedMusicBlobUrls.get(url);
+    let audio = this.preloadedMusicAudio.get(url);
+    if (!audio) {
+      audio = new Audio(cachedBlobUrl || url);
+      this.preloadedMusicAudio.set(url, audio);
+    } else if (cachedBlobUrl && audio.src !== cachedBlobUrl) {
+      audio.src = cachedBlobUrl;
+    }
+    try {
+      audio.currentTime = 0;
+    } catch {
+      // ignore if metadata not yet ready
+    }
+    // Playlist mode advances/loops on ended; seduction one-shot plays until natural end
+    audio.loop = false;
+    audio.preload = 'auto';
+    audio.volume = this.getMusicTargetVolume(this.playbackState === 'speaking');
+    this.bgMusicAudio = audio;
+    this.bgMusicUrl = url;
+
+    audio.onended = () => {
+      if (this.bgMusicAudio === audio) {
+        this.bgMusicAudio = null;
+        this.bgMusicUrl = null;
+        if (this.musicPlaylistEnabled && this.musicSoundAllowed && this.musicTracks.length > 0) {
+          this.musicTrackIndex = (this.musicTrackIndex + 1) % this.musicTracks.length;
+          const nextTrack = this.musicTracks[this.musicTrackIndex];
+          if (nextTrack) {
+            this.startBackgroundMusicUrl(nextTrack.url);
+            return;
+          }
+        }
+        this.emitMusicState();
+      }
+    };
+    audio.onerror = () => {
+      if (this.bgMusicAudio === audio) {
+        this.bgMusicAudio = null;
+        this.bgMusicUrl = null;
+        this.emitMusicState();
+      }
+    };
+
+    const playPromise = audio.play();
+    if (playPromise !== undefined) {
+      playPromise
+        .then(() => {
+          if (this.bgMusicAudio === audio) {
+            this.pendingGestureBgMusicUrl = null;
+            this.emitMusicState();
+          }
+        })
+        .catch((err) => {
+          if (this.bgMusicAudio === audio) {
+            this.bgMusicAudio = null;
+            this.bgMusicUrl = null;
+          }
+          const isAutoplayBlocked =
+            err instanceof DOMException && err.name === 'NotAllowedError';
+          if (isAutoplayBlocked) {
+            this.pendingGestureBgMusicUrl = url;
+          }
+          this.emitMusicState();
+        });
+    } else {
+      this.emitMusicState();
+    }
+  }
+
+  private playSeductionBackgroundMusic(url: string): void {
+    // If continuous background music is already playing via the Music toggle, keep it flowing seamlessly
+    if (
+      this.musicPlaylistEnabled &&
+      this.bgMusicAudio &&
+      !this.bgMusicAudio.paused &&
+      !this.bgMusicAudio.ended
+    ) {
+      this.updateBgMusicDucking(this.playbackState === 'speaking');
+      return;
+    }
+    const matchedIdx = this.musicTracks.findIndex((t) => t.url === url);
+    if (matchedIdx >= 0) {
+      this.musicTrackIndex = matchedIdx;
+    }
+    this.startBackgroundMusicUrl(url);
+  }
+
+  private stopBackgroundMusicInternal(clearPlaylist: boolean): void {
+    if (clearPlaylist) {
+      this.musicPlaylistEnabled = false;
+    }
+    if (this.bgMusicFadeRaf !== null && typeof window !== 'undefined') {
+      window.cancelAnimationFrame(this.bgMusicFadeRaf);
+      this.bgMusicFadeRaf = null;
+    }
+    this.pendingGestureBgMusicUrl = null;
+    if (this.bgMusicAudio) {
+      try {
+        this.bgMusicAudio.onended = null;
+        this.bgMusicAudio.onerror = null;
+        this.bgMusicAudio.pause();
+        this.bgMusicAudio.currentTime = 0;
+      } catch {
+        // ignore
+      }
+      this.bgMusicAudio = null;
+    }
+    this.bgMusicUrl = null;
+  }
+
+  public stopBackgroundMusic(): void {
+    this.stopBackgroundMusicInternal(false);
+    this.emitMusicState();
   }
 
   private attachGlobalGestureUnlock(): void {
@@ -2323,6 +2795,11 @@ class OpponentSpeechController {
 
     const handleActivation = () => {
       this.unlock();
+      if (this.pendingGestureBgMusicUrl && this.musicSoundAllowed) {
+        const queuedMusicUrl = this.pendingGestureBgMusicUrl;
+        this.pendingGestureBgMusicUrl = null;
+        this.startBackgroundMusicUrl(queuedMusicUrl);
+      }
       if (this.pendingGestureClip) {
         const queued = this.pendingGestureClip;
         this.pendingGestureClip = null;
@@ -2346,19 +2823,21 @@ class OpponentSpeechController {
   }
 
   public preloadCoreClips(): void {
-    const coreIds: VoiceClipId[] = [
-      'intro_v1',
-      'opening_v1',
-      'calc_offer_v1',
-      'calc_pure_v1',
-      'wrong_distracted_v1',
-      'tree_browse_v1',
-      'wrong_hang_minor_v1',
-      'wrong_better_alt_v1',
-      'hesitate_hint_v1',
+    const coreCases: CommentaryCaseId[] = [
+      'intro',
+      'opening',
+      'calc_offer',
+      'calc_pure',
+      'wrong_distracted',
+      'tree_browse',
+      'wrong_hang_minor',
+      'wrong_better_alt',
+      'hesitate_hint',
     ];
-    for (const id of coreIds) {
-      void this.fetchMp3Bytes(buildVoiceUrl(id));
+    for (const caseId of coreCases) {
+      const nextCount = (interMatchCaseFlags.get(caseId) || 0) + 1;
+      const nextClipId = resolveClipIdForOccurrence(caseId, nextCount);
+      void this.fetchMp3Bytes(buildVoiceUrl(nextClipId));
     }
   }
 
@@ -2605,6 +3084,15 @@ class OpponentSpeechController {
     const url = buildVoiceUrl(clipId);
     const clipInfo = { clipId, voiceMode, soundEnabled };
 
+    // Play the seduction soundtrack on its own independent background music channel (non-looping)
+    // so it plays all the way until its natural end and continues smoothly in the background
+    // across subsequent moves and Chess Angel voice lines (softly ducking while she speaks).
+    if (clipId.startsWith('seduction_')) {
+      this.setPlaybackState('idle');
+      this.playSeductionBackgroundMusic(url);
+      return;
+    }
+
     const graph = this.ensureAudioGraph();
     const cachedBuffer = this.bufferCache.get(url);
 
@@ -2692,12 +3180,12 @@ class OpponentSpeechController {
 
   public invalidateSeductionCache(): void {
     for (const k of Array.from(this.rawBytesCache.keys())) {
-      if (k.includes('seduction.mp3')) {
+      if (k.includes('seduction.mp3') || k.includes('Chess_Angle__a_beautiful_queen')) {
         this.rawBytesCache.delete(k);
       }
     }
     for (const k of Array.from(this.bufferCache.keys())) {
-      if (k.includes('seduction.mp3')) {
+      if (k.includes('seduction.mp3') || k.includes('Chess_Angle__a_beautiful_queen')) {
         this.bufferCache.delete(k);
       }
     }
@@ -2739,5 +3227,11 @@ export function setThankJanAudioUrlOverride(url?: string | null): void {
   if (next !== thankJanCustomAudioUrl) {
     thankJanCustomAudioUrl = next;
     opponentSpeech.invalidateThankJanCache();
+  }
+}
+
+export function setMusicTracksOverride(tracks?: MusicTrack[] | null): void {
+  if (Array.isArray(tracks) && tracks.length > 0) {
+    opponentSpeech.setMusicTracks(tracks);
   }
 }

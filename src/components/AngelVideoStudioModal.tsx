@@ -28,6 +28,9 @@ import {
   ALL_ESCAPE_CUE_KEYS,
   caseHasAlternativeSlotUI,
   compressAngelStudioVideos,
+  getAngelDanceStarsVideoUrl,
+  getAngelDogRunJumpSec,
+  getAngelDogRunVideoUrl,
   getAngelIdleVideoPool,
   getAngelVideoOverridesSnapshot,
   getCaseEscapeCueStatus,
@@ -49,6 +52,7 @@ import {
   isEffectiveCasePlayToEnd,
   isEscapeCueEnabled,
   isGroupUsingDefaultLipSync,
+  isSlotLockedInApp,
   isVideoSlotAutoProtectedByLength,
   isVideoSlotPlayToEnd,
   parseEscapeSlotNumber,
@@ -61,6 +65,7 @@ import {
   subscribeAngelVideoOverrides,
   updateAngelCaseEscapeCue,
   updateAngelCompressionPreset,
+  updateAngelDogRunJumpSec,
   updateAngelEscapeEnabled,
   updateAngelLipSyncRule,
   updateAngelSeductionTriggerMode,
@@ -86,6 +91,9 @@ interface AngelVideoStudioModalProps {
   onLockStudio?: () => void;
   onPreviewCase: (clipId: VoiceClipId, text: string, tag: string) => void;
   onPreviewIdle: (specificIdleUrl?: string) => void;
+  onTriggerDogEvent?: (options: { playVideo: boolean }) => void;
+  onTriggerHamsterChase?: () => void;
+  onTriggerDanceStarsEvent?: () => void;
 }
 
 function formatSec(sec: number): string {
@@ -111,6 +119,9 @@ export function AngelVideoStudioModal({
   onLockStudio,
   onPreviewCase,
   onPreviewIdle,
+  onTriggerDogEvent,
+  onTriggerHamsterChase,
+  onTriggerDanceStarsEvent,
 }: AngelVideoStudioModalProps) {
   const [overrides, setOverrides] = useState<AngelVideoMapPayload>(() =>
     getAngelVideoOverridesSnapshot(),
@@ -153,7 +164,7 @@ export function AngelVideoStudioModal({
   const effectiveTargetCrf = getTargetCrfForPreset(effectiveBatchPreset);
 
   const handleUpload = async (
-    kind: 'idle' | 'default' | 'group' | 'case' | 'escape',
+    kind: 'idle' | 'default' | 'group' | 'case' | 'escape' | 'special',
     key: string,
     file: File | null | undefined,
     autoPreview?: (uploadedUrl: string) => void,
@@ -253,7 +264,7 @@ export function AngelVideoStudioModal({
   };
 
   const handleReset = async (
-    kind: 'idle' | 'default' | 'group' | 'case' | 'escape',
+    kind: 'idle' | 'default' | 'group' | 'case' | 'escape' | 'special',
     key: string,
   ) => {
     const slotId = `${kind}:${key}`;
@@ -269,7 +280,7 @@ export function AngelVideoStudioModal({
   };
 
   const makeDropHandlers = (
-    kind: 'idle' | 'default' | 'group' | 'case' | 'escape',
+    kind: 'idle' | 'default' | 'group' | 'case' | 'escape' | 'special',
     key: string,
     autoPreview?: (uploadedUrl: string) => void,
   ) => {
@@ -298,25 +309,36 @@ export function AngelVideoStudioModal({
   };
 
   const renderUploadButton = (
-    kind: 'idle' | 'default' | 'group' | 'case' | 'escape',
+    kind: 'idle' | 'default' | 'group' | 'case' | 'escape' | 'special',
     key: string,
     hasCustom: boolean,
     autoPreview?: (uploadedUrl: string) => void,
   ) => {
     const slotId = `${kind}:${key}`;
     const isBusy = busySlot === slotId;
+    const isLocked = isSlotLockedInApp(slotId, overrides);
+    const isAttached = hasCustom || isLocked;
     return (
       <div className="flex items-center gap-1.5 shrink-0">
         <label
+          title={
+            isLocked
+              ? 'Video is permanently locked into the app bundle (click to replace with a newer .mp4)'
+              : undefined
+          }
           className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-            hasCustom
-              ? 'bg-[#13261d] hover:bg-[#193327] border-emerald-500/50 text-emerald-200'
-              : 'bg-[#171c26] hover:bg-[#202736] border-[#d6ae63]/55 text-[#f3cf83]'
+            isLocked
+              ? 'bg-[#12241c] hover:bg-[#193327] border-emerald-400/55 text-emerald-200'
+              : isAttached
+                ? 'bg-[#13261d] hover:bg-[#193327] border-emerald-500/50 text-emerald-200'
+                : 'bg-[#171c26] hover:bg-[#202736] border-[#d6ae63]/55 text-[#f3cf83]'
           }`}
         >
           {isBusy ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : hasCustom ? (
+          ) : isLocked ? (
+            <Lock className="w-3 h-3 text-emerald-400" />
+          ) : isAttached ? (
             <Check className="w-3.5 h-3.5 text-emerald-400" />
           ) : (
             <Upload className="w-3.5 h-3.5" />
@@ -326,9 +348,11 @@ export function AngelVideoStudioModal({
               ? currentCompressionPreset === 'mute_only'
                 ? 'Muting & Saving…'
                 : 'Compressing…'
-              : hasCustom
-                ? 'Active · Replace'
-                : 'Attach .mp4'}
+              : isLocked
+                ? 'Locked · Replace'
+                : isAttached
+                  ? 'Active · Replace'
+                  : 'Attach .mp4'}
           </span>
           <input
             type="file"
@@ -343,7 +367,7 @@ export function AngelVideoStudioModal({
           />
         </label>
 
-        {hasCustom && !isBusy && (
+        {hasCustom && !isLocked && !isBusy && (
           <button
             type="button"
             onClick={() => void handleReset(kind, key)}
@@ -686,7 +710,7 @@ export function AngelVideoStudioModal({
                 ChessAngel 3D Video Studio
               </h2>
               <span className="font-mono-tabular text-xs font-bold px-1.5 py-0.5 rounded border border-[#d6ae63]/65 bg-[#261d0e] text-[#fde68a] whitespace-nowrap">
-                v3.3
+                v4.0
               </span>
               <span
                 title="Opened via 5 clicks on the game title; hidden from regular players. All attached .mp4 files, Play-per-Game quotas, and No-Cut flags are bundled into the deployed app."
@@ -1212,8 +1236,8 @@ export function AngelVideoStudioModal({
                     <span className="text-xs font-semibold text-[#fbf3df]">
                       Special Tribute Video — Thank You, Jan (thank_jan)
                     </span>
-                    <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-[#d6ae63]/55 bg-[#2a1f0d] text-[#f6d88f] font-medium">
-                      {customUrl ? '✓ Video Uploaded (.mp4)' : 'Awaiting .mp4 Upload'}
+                    <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/50 bg-emerald-950/40 text-emerald-300 font-medium">
+                      {activeUrl ? '✓ Locked in App (.mp4)' : 'Awaiting .mp4 Upload'}
                     </span>
                     {hasExtractedAudio && (
                       <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/45 bg-emerald-950/40 text-emerald-300 font-medium">
@@ -1224,7 +1248,7 @@ export function AngelVideoStudioModal({
                   <p className="text-[11px] text-[#cbbd9f] mt-0.5">
                     Plays on Chess Angel whenever anyone clicks the{' '}
                     <span className="text-[#f3d38b] font-medium">ChessAngel 3D</span> title or{' '}
-                    <span className="text-[#f3d38b] font-medium">v3.3</span> version number. Video
+                    <span className="text-[#f3d38b] font-medium">v4.0</span> version number. Video
                     sound is stripped automatically so Chess Angel&rsquo;s own voice speaks her
                     thank-you message cleanly.
                   </p>
@@ -1274,6 +1298,308 @@ export function AngelVideoStudioModal({
                       Test
                     </button>
                     {renderUploadButton('case', 'thank_jan', Boolean(customUrl), previewSlot)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Special Event Video — White Fluffy Puppy Rampage (special:dog_run) */}
+        {(() => {
+          const dogVideoUrl = getAngelDogRunVideoUrl(overrides);
+          const dogClipSec = getVideoFileDurationSec(dogVideoUrl || undefined, overrides);
+          const jumpSec = getAngelDogRunJumpSec(overrides);
+          const sliderMax = dogClipSec && dogClipSec > 2 ? Math.min(30, Math.ceil(dogClipSec)) : 15;
+          const previewFullEvent = () => onTriggerDogEvent?.({ playVideo: true });
+          const preview3DPuppyOnly = () => onTriggerDogEvent?.({ playVideo: false });
+
+          return (
+            <div className="rounded-xl border border-rose-400/55 bg-[#140c10] overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#201018] border-b border-rose-400/30">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-rose-300 shrink-0" />
+                    <span className="text-xs font-semibold text-[#fdf2f6]">
+                      Special Event Video — Fluffy White Puppy Rampage (dog_run)
+                    </span>
+                    <span
+                      className={`font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+                        dogVideoUrl
+                          ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300'
+                          : 'border-amber-500/45 bg-amber-950/40 text-amber-200'
+                      }`}
+                    >
+                      {isSlotLockedInApp('special:dog_run', overrides)
+                        ? '✓ Locked in App (.mp4)'
+                        : dogVideoUrl
+                          ? '✓ Ready (.mp4)'
+                          : 'Awaiting .mp4 Upload'}
+                    </span>
+                    <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-rose-400/40 bg-rose-950/40 text-rose-200 font-medium">
+                      Idle Event · 3D Fluffy Puppy · Tips Pieces · Wild Barking
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#d6bac4] mt-0.5 leading-snug">
+                    Plays automatically as a playful idle event when waiting for a match (~32s) or waiting long during a match (~75s). At the configured jump-out second, the 3D small white fluffy puppy leaps out of the side of Chess Angel&rsquo;s modal, barks wildly, runs across the chessboard tipping every piece it touches, and disappears off the left edge before the pieces spring back upright.
+                  </p>
+                </div>
+              </div>
+
+              <div
+                {...makeDropHandlers('special', 'dog_run', () => previewFullEvent())}
+                className={`px-3 py-2.5 transition-colors space-y-2.5 ${
+                  dragOverSlot === 'special:dog_run' ? 'bg-[#2a1520]' : 'bg-black'
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-xs font-semibold text-[#f7f1e5]">
+                        Angel Modal Puppy Video &amp; 3D Board Rampage
+                      </span>
+                      <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-rose-400/45 bg-[#26121b] text-rose-200">
+                        special:dog_run
+                      </span>
+                      {dogClipSec !== null && (
+                        <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200">
+                          Video: {formatSec(dogClipSec)}
+                        </span>
+                      )}
+                      {renderVideoSizeBadge(dogVideoUrl || undefined, 'Special Event — Puppy Rampage')}
+                    </div>
+                    {dogVideoUrl && (
+                      <div className="font-mono-tabular text-[10px] text-emerald-300/90 truncate mt-0.5">
+                        {dogVideoUrl.split('?')[0]}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                    {renderPlayToEndFlagButton('special:dog_run', 'Fluffy Puppy Rampage')}
+                    <button
+                      type="button"
+                      onClick={previewFullEvent}
+                      disabled={!onTriggerDogEvent}
+                      title={
+                        dogVideoUrl
+                          ? `Play Chess Angel's puppy video and launch the 3D fluffy puppy at ${jumpSec.toFixed(1)}s`
+                          : 'Test the 3D fluffy white puppy leaping out of Chess Angel modal now'
+                      }
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-[#26121b] hover:bg-[#381928] border border-rose-400/55 text-[11px] font-semibold text-rose-100 cursor-pointer disabled:opacity-45"
+                    >
+                      <Play className="w-3 h-3 text-rose-300" />
+                      {dogVideoUrl ? 'Test Full Event' : 'Test Event'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={preview3DPuppyOnly}
+                      disabled={!onTriggerDogEvent}
+                      title="Immediately launch the 3D small white fluffy puppy across the chessboard"
+                      className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#1c1619] border border-white/20 text-[11px] text-[#f3e6ec] cursor-pointer disabled:opacity-45"
+                    >
+                      <Zap className="w-3 h-3 text-amber-300" />
+                      3D Puppy Now
+                    </button>
+                    {renderUploadButton('special', 'dog_run', Boolean(dogVideoUrl), () =>
+                      previewFullEvent(),
+                    )}
+                  </div>
+                </div>
+
+                {/* Jump-out timing sync control */}
+                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/10">
+                  <div className="flex items-center gap-1.5 text-[11px] text-[#e6cbd5]">
+                    <Clock className="w-3.5 h-3.5 text-rose-300 shrink-0" />
+                    <span className="font-medium">3D Puppy jumps out of modal at:</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={sliderMax}
+                    step={0.1}
+                    value={Math.min(sliderMax, jumpSec)}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      if (Number.isFinite(next)) {
+                        void updateAngelDogRunJumpSec(next);
+                      }
+                    }}
+                    onPointerUp={(e) => {
+                      const next = Number((e.target as HTMLInputElement).value);
+                      if (Number.isFinite(next)) {
+                        void updateAngelDogRunJumpSec(next, { immediate: true });
+                      }
+                    }}
+                    className="w-32 sm:w-44 accent-rose-400 cursor-pointer"
+                    aria-label="Puppy jump-out timing in seconds"
+                  />
+                  <div className="inline-flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void updateAngelDogRunJumpSec(Math.max(0, jumpSec - 0.1), {
+                          immediate: true,
+                        })
+                      }
+                      title="Decrease by 0.1s"
+                      className="px-1.5 py-0.5 rounded border border-rose-400/40 bg-[#221018] hover:bg-[#351825] text-rose-200 font-mono-tabular text-xs font-semibold cursor-pointer"
+                    >
+                      −0.1
+                    </button>
+                    <input
+                      type="number"
+                      min={0}
+                      max={sliderMax}
+                      step={0.1}
+                      value={Number(jumpSec.toFixed(1))}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        if (Number.isFinite(next)) {
+                          void updateAngelDogRunJumpSec(next, { immediate: true });
+                        }
+                      }}
+                      aria-label="Exact puppy jump-out second"
+                      className="w-16 font-mono-tabular text-xs font-semibold text-center px-1.5 py-0.5 rounded border border-rose-400/50 bg-[#221018] text-rose-100 focus:outline-none focus:border-rose-300"
+                    />
+                    <span className="font-mono-tabular text-xs font-semibold text-rose-200">s</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void updateAngelDogRunJumpSec(Math.min(sliderMax, jumpSec + 0.1), {
+                          immediate: true,
+                        })
+                      }
+                      title="Increase by 0.1s"
+                      className="px-1.5 py-0.5 rounded border border-rose-400/40 bg-[#221018] hover:bg-[#351825] text-rose-200 font-mono-tabular text-xs font-semibold cursor-pointer"
+                    >
+                      +0.1
+                    </button>
+                  </div>
+                  <span className="text-[10px] text-[#a9989f]">
+                    Locked directly to the video&rsquo;s playback clock — the 3D puppy waits until the video reaches exactly {jumpSec.toFixed(1)}s.
+                  </span>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Special 3D Board Idle Event — Mini Hamsters Wild Chase */}
+        <div className="rounded-xl border border-sky-400/45 bg-[#0c1118] overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#101824]">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-sky-300 shrink-0" />
+                <span className="text-xs font-semibold text-[#eef6ff]">
+                  Special 3D Idle Animation — Mini Hamsters Wild Chase
+                </span>
+                <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-400/45 bg-sky-950/45 text-sky-200 font-medium">
+                  Russian Grey (Black Stripe) &amp; White (Pink Nose &amp; Claws)
+                </span>
+              </div>
+              <p className="text-[11px] text-[#b4c4d8] mt-0.5 leading-snug">
+                A dark grey Russian mini hamster with a black dorsal line and a white mini hamster with a pink nose and pink claws chase each other wildly across the 3D chessboard, alternating with the Fluffy White Puppy during idle waiting states.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onTriggerHamsterChase?.()}
+              disabled={!onTriggerHamsterChase}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[#132236] hover:bg-[#1a304d] border border-sky-400/55 text-[11px] font-semibold text-sky-100 cursor-pointer shrink-0 disabled:opacity-45"
+            >
+              <Play className="w-3 h-3 text-sky-300" />
+              Test 3D Hamsters Chase
+            </button>
+          </div>
+        </div>
+
+        {/* Special Event Video — Dance with Stars (special:dance_stars) */}
+        {(() => {
+          const danceStarsUrl = getAngelDanceStarsVideoUrl(overrides);
+          const danceClipSec = getVideoFileDurationSec(danceStarsUrl || undefined, overrides);
+          const previewDanceStars = () => onTriggerDanceStarsEvent?.();
+
+          return (
+            <div className="rounded-xl border border-amber-400/55 bg-[#151109] overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#221a0c] border-b border-amber-400/30">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                    <span className="text-xs font-semibold text-[#fff7e0]">
+                      Special Event Video — Dance with Stars (dance_stars)
+                    </span>
+                    <span
+                      className={`font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+                        danceStarsUrl
+                          ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300'
+                          : 'border-amber-500/45 bg-amber-950/40 text-amber-200'
+                      }`}
+                    >
+                      {isSlotLockedInApp('special:dance_stars', overrides)
+                        ? '✓ Locked in App (.mp4)'
+                        : danceStarsUrl
+                          ? '✓ Ready (.mp4)'
+                          : 'Awaiting .mp4 Upload'}
+                    </span>
+                    <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-amber-400/45 bg-amber-950/45 text-amber-200 font-medium">
+                      Fine Gold Stars · Leftward Drift · Fades to 0 at End
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#ded0b4] mt-0.5 leading-snug">
+                    When this video plays, fine sparkling gold stars drift around her portrait and spread across the left side of the screen, gently diminishing to 0 as the video finishes. Also joins the playful idle rotation once uploaded.
+                  </p>
+                </div>
+              </div>
+
+              <div
+                {...makeDropHandlers('special', 'dance_stars', () => previewDanceStars())}
+                className={`px-3 py-2.5 transition-colors ${
+                  dragOverSlot === 'special:dance_stars' ? 'bg-[#2c210e]' : 'bg-black'
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-xs font-semibold text-[#fdf5e0]">
+                        Dance with Stars Portrait Video &amp; Gold Star Drift
+                      </span>
+                      <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-amber-400/45 bg-[#251c0c] text-amber-200">
+                        special:dance_stars
+                      </span>
+                      {danceClipSec !== null && (
+                        <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200">
+                          Video: {formatSec(danceClipSec)}
+                        </span>
+                      )}
+                      {renderVideoSizeBadge(danceStarsUrl || undefined, 'Special Event — Dance with Stars')}
+                    </div>
+                    {danceStarsUrl ? (
+                      <div className="font-mono-tabular text-[10px] text-emerald-300/90 truncate mt-0.5">
+                        {danceStarsUrl.split('?')[0]}
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-amber-200/75 mt-0.5">
+                        Upload or drop your Dance with Stars .mp4 here (or click Preview Gold Stars now).
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                    {renderPlayToEndFlagButton('special:dance_stars', 'Dance with Stars')}
+                    <button
+                      type="button"
+                      onClick={previewDanceStars}
+                      disabled={!onTriggerDanceStarsEvent}
+                      title="Play Dance with Stars with fine sparkling gold stars spreading left and fading to 0 at video end"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-[#2a1f0b] hover:bg-[#3d2d10] border border-amber-400/55 text-[11px] font-semibold text-amber-100 cursor-pointer disabled:opacity-45"
+                    >
+                      <Play className="w-3 h-3 text-amber-300" />
+                      {danceStarsUrl ? 'Test Dance with Stars' : 'Preview Gold Stars'}
+                    </button>
+                    {renderUploadButton('special', 'dance_stars', Boolean(danceStarsUrl), () =>
+                      previewDanceStars(),
+                    )}
                   </div>
                 </div>
               </div>
@@ -2106,9 +2432,46 @@ export function AngelVideoStudioModal({
                                 {activeCaseUrl.split('?')[0]}
                               </div>
                             )}
-                            <p className="mt-1 text-[11px] leading-snug text-[#d9d4c7]">
-                              &ldquo;{item.sampleText}&rdquo;
-                            </p>
+                            <div className="mt-1 space-y-0.5 text-[11px] leading-snug">
+                              <p className="text-[#d9d4c7]">
+                                <span className="font-mono-tabular text-[10px] text-[#f3cf83] mr-1">1st:</span>
+                                &ldquo;{item.sampleText}&rdquo;
+                              </p>
+                              <p className="text-[#aeb7c6]">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onPreviewCase(
+                                      item.v2ClipId,
+                                      item.v2Text,
+                                      `${item.caseId.toUpperCase()} · 2ND`,
+                                    )
+                                  }
+                                  title={`Preview 2nd alternative (${item.v2ClipId})`}
+                                  className="font-mono-tabular text-[10px] text-[#93c5fd] hover:underline mr-1 cursor-pointer"
+                                >
+                                  2nd:
+                                </button>
+                                &ldquo;{item.v2Text}&rdquo;
+                              </p>
+                              <p className="text-[#8e98a8]">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onPreviewCase(
+                                      item.v3ClipId,
+                                      item.v3Text,
+                                      `${item.caseId.toUpperCase()} · 3RD`,
+                                    )
+                                  }
+                                  title={`Preview 3rd alternative (${item.v3ClipId})`}
+                                  className="font-mono-tabular text-[10px] text-[#c4b5fd] hover:underline mr-1 cursor-pointer"
+                                >
+                                  3rd:
+                                </button>
+                                &ldquo;{item.v3Text}&rdquo;
+                              </p>
+                            </div>
                           </div>
 
                           <div className="flex items-center gap-1.5 shrink-0">
@@ -2200,25 +2563,32 @@ export function AngelVideoStudioModal({
                           </div>
                         </div>
 
-                        {hasAltSlots && (
+                        {hasAltSlots && (() => {
+                          const slotKindNoun =
+                            item.caseId === 'warn_fork_2step' || item.caseId === 'warn_double'
+                              ? 'fork warning'
+                              : item.caseId === 'undo_done'
+                                ? 'undo movie'
+                                : item.caseId;
+                          return (
                           <div className="mt-2.5 rounded-lg border border-white/12 bg-[#07090e] divide-y divide-white/10 overflow-hidden">
                             {(
                               [
                                 {
                                   slotKey: slot1Key,
+                                  quotaSlotId: `case:${item.caseId}_primary`,
                                   slotLabel: `${item.caseId} #1`,
                                   slotUrl: customCaseUrl1,
-                                  emptyHint: 'Empty — attach or drop primary fork warning .mp4',
-                                  subCaption: 'Primary fork warning video (#1)',
+                                  emptyHint: `Empty — attach or drop primary ${slotKindNoun} .mp4`,
+                                  subCaption: `Primary ${slotKindNoun} video (#1)`,
                                 },
                                 {
                                   slotKey: slot2Key,
+                                  quotaSlotId: `case:${slot2Key}`,
                                   slotLabel: `${item.caseId} #2`,
                                   slotUrl: customCaseUrl2,
-                                  emptyHint:
-                                    'Empty — attach or drop 2nd alternative fork warning .mp4',
-                                  subCaption:
-                                    '2nd alternative fork warning video (#2 · alternates automatically with #1)',
+                                  emptyHint: `Empty — attach or drop 2nd alternative ${slotKindNoun} .mp4`,
+                                  subCaption: `2nd alternative ${slotKindNoun} video (#2 · alternates automatically with #1)`,
                                 },
                               ] as const
                             ).map((slot) => {
@@ -2257,7 +2627,7 @@ export function AngelVideoStudioModal({
                                         )}
                                         {renderVideoSizeBadge(slot.slotUrl, slot.slotLabel)}
                                         {renderMaxPlaysControl(
-                                          `case:${slot.slotKey}`,
+                                          slot.quotaSlotId,
                                           slot.slotLabel,
                                         )}
                                         {renderPlayToEndFlagButton(
@@ -2294,7 +2664,8 @@ export function AngelVideoStudioModal({
                               );
                             })}
                           </div>
-                        )}
+                          );
+                        })()}
                       </div>
                     );
                   })}

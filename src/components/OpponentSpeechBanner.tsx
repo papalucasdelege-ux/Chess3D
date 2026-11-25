@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject, type ReactNode, type SyntheticEvent } from 'react';
 import {
   Check,
   ChevronLeft,
@@ -18,6 +18,7 @@ import {
 import type { BotSearchReport, EngineLine, PieceColor } from '../shared/types';
 import { formatEvalLabel } from '../chess/engine';
 import { getSimulationColorSpec } from '../chess/treeJpgExporter';
+import { DanceWithStarsAura, type ForcedIdleVideoClock } from './DanceWithStarsAura';
 import {
   ANGEL_DEFAULT_SPEAKING_VIDEO_SRC,
   ANGEL_IDLE_LISTENING_VIDEO_SRC,
@@ -72,6 +73,10 @@ interface ChessAngelPortraitVideoProps {
   clipId?: VoiceClipId | null;
   speechText?: string | null;
   forcedIdleUrl?: string | null;
+  forcedIdleCueAtSec?: number | null;
+  onForcedIdleCueReached?: () => void;
+  forcedIdleClockRef?: MutableRefObject<ForcedIdleVideoClock>;
+  portraitCanvasRef?: MutableRefObject<HTMLCanvasElement | null>;
   isSpeaking: boolean;
   soundEnabled: boolean;
   angelVoice: AngelVoiceMode;
@@ -248,6 +253,10 @@ function ChessAngelPortraitVideo({
   clipId,
   speechText,
   forcedIdleUrl,
+  forcedIdleCueAtSec = null,
+  onForcedIdleCueReached,
+  forcedIdleClockRef,
+  portraitCanvasRef,
   isSpeaking,
   soundEnabled,
   angelVoice,
@@ -258,7 +267,8 @@ function ChessAngelPortraitVideo({
   onClick,
   title,
 }: ChessAngelPortraitVideoProps) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const internalCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasRef = portraitCanvasRef || internalCanvasRef;
   const video0Ref = useRef<HTMLVideoElement | null>(null);
   const video1Ref = useRef<HTMLVideoElement | null>(null);
   const escapeVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -347,6 +357,11 @@ function ChessAngelPortraitVideo({
   const clipIdLiveRef = useRef<VoiceClipId | null | undefined>(clipId);
   const activeSlotClipIdRef = useRef<VoiceClipId | null | undefined>(clipId);
   const speechTextLiveRef = useRef<string | null | undefined>(speechText);
+  const forcedIdleUrlLiveRef = useRef<string | null | undefined>(forcedIdleUrl);
+  const forcedIdleCueAtSecLiveRef = useRef<number | null | undefined>(forcedIdleCueAtSec);
+  const onForcedIdleCueReachedLiveRef = useRef<(() => void) | undefined>(onForcedIdleCueReached);
+  const forcedIdleCueFiredForTriggerRef = useRef<string>('');
+  const forcedIdleObservedNearStartRef = useRef<boolean>(false);
   const isInExtendedLipSyncRef = useRef<boolean>(false);
   powerSaveModeLiveRef.current = powerSaveMode;
   const deferredTransitionRef = useRef<{
@@ -362,6 +377,9 @@ function ChessAngelPortraitVideo({
   angelVoiceLiveRef.current = angelVoice;
   clipIdLiveRef.current = clipId;
   speechTextLiveRef.current = speechText;
+  forcedIdleUrlLiveRef.current = forcedIdleUrl;
+  forcedIdleCueAtSecLiveRef.current = forcedIdleCueAtSec;
+  onForcedIdleCueReachedLiveRef.current = onForcedIdleCueReached;
 
   const [overrideTick, setOverrideTick] = useState(0);
   useEffect(() => {
@@ -1037,7 +1055,9 @@ function ChessAngelPortraitVideo({
     blendDurationMsRef.current = powerSaveModeLiveRef.current
       ? 0
       : role === 'idle'
-        ? BLEND_TO_IDLE_MS
+        ? forcedIdleUrlLiveRef.current
+          ? 320
+          : BLEND_TO_IDLE_MS
         : BLEND_TO_SPEAK_MS;
 
     if (hasMasterFrameRef.current) {
@@ -1171,6 +1191,61 @@ function ChessAngelPortraitVideo({
     const activeReady = sampleSlotVideoFrame(activeSlot);
     if (useLiveOutgoingRef.current || (outVideo && outVideo.readyState >= 2 && !slotHasFrameRef.current[outSlot])) {
       sampleSlotVideoFrame(outSlot);
+    }
+
+    // 1.0 Live forced-idle video clock & frame-exact cue sync (e.g. launching 3D puppy at exact 4.2s, diminishing stars to 0)
+    const activeCueSec = forcedIdleCueAtSecLiveRef.current;
+    const activeForcedUrl = forcedIdleUrlLiveRef.current;
+    const isPlayingForcedIdleNow = Boolean(
+      activeForcedUrl &&
+        activeRoleRef.current === 'idle' &&
+        activeVideo &&
+        slotUrlRef.current[activeSlot].split('?')[0] === activeForcedUrl.split('?')[0] &&
+        activeReady &&
+        !waitingForIncomingFrameRef.current &&
+        !activeVideo.seeking &&
+        activeVideo.readyState >= 2,
+    );
+    if (forcedIdleClockRef) {
+      if (isPlayingForcedIdleNow && activeVideo) {
+        const liveDur = Number.isFinite(activeVideo.duration) ? activeVideo.duration : 0;
+        forcedIdleClockRef.current.currentTime =
+          activeVideo.ended || slotSafeEndedRef.current[activeSlot]
+            ? liveDur || activeVideo.currentTime
+            : activeVideo.currentTime;
+        forcedIdleClockRef.current.duration = liveDur;
+        forcedIdleClockRef.current.active = true;
+      } else if (!activeForcedUrl) {
+        forcedIdleClockRef.current.active = false;
+        forcedIdleClockRef.current.currentTime = 0;
+        forcedIdleClockRef.current.duration = 0;
+      }
+    }
+    if (
+      activeCueSec !== null &&
+      activeCueSec !== undefined &&
+      isPlayingForcedIdleNow &&
+      activeVideo &&
+      forcedIdleCueFiredForTriggerRef.current !== lastTriggerRef.current
+    ) {
+      const curSec = activeVideo.currentTime;
+      const durSec = activeVideo.duration;
+      const targetSec = Math.max(0, activeCueSec);
+      const nearStartThreshold = targetSec <= 0.1 ? 0.5 : Math.min(targetSec, 1.5);
+      if (curSec < nearStartThreshold) {
+        forcedIdleObservedNearStartRef.current = true;
+      }
+      const reachedExactTimestamp =
+        (targetSec <= 0.05 || forcedIdleObservedNearStartRef.current) && curSec >= targetSec;
+      const videoEndedBeforeTarget =
+        forcedIdleObservedNearStartRef.current &&
+        (activeVideo.ended ||
+          slotSafeEndedRef.current[activeSlot] ||
+          (Number.isFinite(durSec) && durSec > 0.3 && curSec >= durSec - 0.08));
+      if (reachedExactTimestamp || videoEndedBeforeTarget) {
+        forcedIdleCueFiredForTriggerRef.current = lastTriggerRef.current;
+        onForcedIdleCueReachedLiveRef.current?.();
+      }
     }
 
     // 1a. Incoming Frame Watchdog: fall back immediately (220ms) ONLY on actual <video> decode/404 error,
@@ -1800,6 +1875,8 @@ function ChessAngelPortraitVideo({
 
     if (lastTriggerRef.current === '') {
       lastTriggerRef.current = triggerKey;
+      forcedIdleCueFiredForTriggerRef.current = '';
+      forcedIdleObservedNearStartRef.current = false;
       speechObservedForTriggerRef.current = false;
       speakingFinishedForTriggerRef.current = false;
       activeSlotRef.current = 0;
@@ -1943,7 +2020,7 @@ function ChessAngelPortraitVideo({
       } else if (activeRoleRef.current === 'idle') {
         const pool = getAngelIdleVideoPool();
         const currentIdle = slotUrlRef.current[activeSlotRef.current];
-        if (!pool.includes(currentIdle)) {
+        if (!forcedIdleUrl && !pool.includes(currentIdle)) {
           startTransitionTo(resolveAngelIdleVideo(), 'idle', true, false);
         } else if (
           idleCycleTimerRef.current === null &&
@@ -1960,6 +2037,8 @@ function ChessAngelPortraitVideo({
     }
 
     lastTriggerRef.current = triggerKey;
+    forcedIdleCueFiredForTriggerRef.current = '';
+    forcedIdleObservedNearStartRef.current = false;
     speechObservedForTriggerRef.current = false;
     speakingFinishedForTriggerRef.current = false;
     const isExplicitStudioTest = triggerKey.startsWith('preview:') || Boolean(forcedIdleUrl);
@@ -2638,6 +2717,9 @@ interface OpponentSpeechBannerProps {
   treeBrowser: TreeBrowserState | null;
   idlePreviewNonce?: number;
   forcedIdleUrl?: string | null;
+  forcedIdleCueAtSec?: number | null;
+  onForcedIdleCueReached?: () => void;
+  danceWithStarsActive?: boolean;
   onSelectTreeSimulation: (index: number | null) => void;
   onStepTreeSimulation: (delta: -1 | 1) => void;
   onToggleTreeOnlyTopThree: () => void;
@@ -2685,6 +2767,9 @@ export function OpponentSpeechBanner({
   treeBrowser,
   idlePreviewNonce = 0,
   forcedIdleUrl = null,
+  forcedIdleCueAtSec = null,
+  onForcedIdleCueReached,
+  danceWithStarsActive = false,
   onSelectTreeSimulation,
   onStepTreeSimulation,
   onToggleTreeOnlyTopThree,
@@ -2709,6 +2794,12 @@ export function OpponentSpeechBanner({
   powerSaveMode = false,
 }: OpponentSpeechBannerProps) {
   const asideRef = useRef<HTMLElement | null>(null);
+  const portraitCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const forcedIdleClockRef = useRef<ForcedIdleVideoClock>({
+    currentTime: 0,
+    duration: 0,
+    active: false,
+  });
   const lastSteppedTierKeyRef = useRef<string>('');
   const [tierDowngrade, setTierDowngrade] = useState(0);
 
@@ -3250,11 +3341,11 @@ export function OpponentSpeechBanner({
           </div>
         )}
 
-        <div className={`${sectionDividerClass} flex flex-wrap items-center justify-between gap-1`}>
+        <div className={`${sectionDividerClass} flex flex-col ${isRoomy ? 'gap-2' : 'gap-1.5'}`}>
           <button
             type="button"
             onClick={onContinueFromTree}
-            className={primaryActionBtnClass}
+            className={`${primaryActionBtnClass} w-full justify-center`}
           >
             <Play className={iconSmClass} />
             <span>
@@ -3474,36 +3565,53 @@ export function OpponentSpeechBanner({
   );
   const showModalBelow = !isTurningOffAngel && Boolean(modalCardContent);
 
+  const isDanceStarsAuraVisible = Boolean(
+    danceWithStarsActive || (forcedIdleUrl && /dance_stars/i.test(forcedIdleUrl)),
+  );
+
   return (
     <aside
       ref={asideRef}
+      data-angel-portrait-modal="true"
       aria-live="polite"
       className={`fixed ${tier.asidePositionClass} ${
         isElevatedZ ? 'z-40' : 'z-30'
-      } ${unifiedColumnWidthClass} flex flex-col items-stretch pointer-events-none`}
+      } ${unifiedColumnWidthClass} flex flex-col items-stretch pointer-events-none overflow-visible`}
     >
-      <ChessAngelPortraitVideo
-        clipId={activeBannerMessage?.clipId}
-        speechText={activeBannerMessage?.text}
-        forcedIdleUrl={forcedIdleUrl}
-        isSpeaking={isSpeaking}
-        soundEnabled={soundEnabled}
-        angelVoice={angelVoice}
-        triggerKey={triggerKey}
-        portraitWidthClass="w-full"
-        hasCardBelow={showModalBelow}
-        powerSaveMode={powerSaveMode}
-        onClick={onTurnOffAngel ?? (canClickPortraitToReplay ? onReplayVoice : undefined)}
-        title={
-          onTurnOffAngel
-            ? isTurningOffAngel
-              ? 'Click again to hide Chess Angel immediately'
-              : 'Click Chess Angel to turn Angel & Modal off'
-            : canClickPortraitToReplay
-              ? 'Click to replay Chess Angel voice'
-              : 'Chess Angel'
-        }
-      />
+      <div className="relative w-full overflow-visible">
+        <DanceWithStarsAura
+          active={isDanceStarsAuraVisible}
+          powerSaveMode={powerSaveMode}
+          videoClockRef={forcedIdleClockRef}
+          portraitCanvasRef={portraitCanvasRef}
+        />
+        <ChessAngelPortraitVideo
+          clipId={activeBannerMessage?.clipId}
+          speechText={activeBannerMessage?.text}
+          forcedIdleUrl={forcedIdleUrl}
+          forcedIdleCueAtSec={forcedIdleCueAtSec}
+          onForcedIdleCueReached={onForcedIdleCueReached}
+          forcedIdleClockRef={forcedIdleClockRef}
+          portraitCanvasRef={portraitCanvasRef}
+          isSpeaking={isSpeaking}
+          soundEnabled={soundEnabled}
+          angelVoice={angelVoice}
+          triggerKey={triggerKey}
+          portraitWidthClass="w-full"
+          hasCardBelow={showModalBelow}
+          powerSaveMode={powerSaveMode}
+          onClick={onTurnOffAngel ?? (canClickPortraitToReplay ? onReplayVoice : undefined)}
+          title={
+            onTurnOffAngel
+              ? isTurningOffAngel
+                ? 'Click again to hide Chess Angel immediately'
+                : 'Click Chess Angel to turn Angel & Modal off'
+              : canClickPortraitToReplay
+                ? 'Click to replay Chess Angel voice'
+                : 'Chess Angel'
+          }
+        />
+      </div>
 
       {showModalBelow ? modalCardContent : null}
     </aside>

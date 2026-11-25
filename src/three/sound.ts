@@ -254,6 +254,10 @@ class ChessSoundEngine {
   private lastCheckIdx = -1;
   public enabled = true;
 
+  public unlock(): void {
+    this.ensureContext();
+  }
+
   private ensureContext(): AudioContext | null {
     opponentSpeech.unlock();
     if (!this.enabled || typeof window === 'undefined') return null;
@@ -515,6 +519,246 @@ class ChessSoundEngine {
       osc.start(now + idx * 0.09);
       osc.stop(now + idx * 0.09 + 0.48);
     });
+  }
+
+  /**
+   * Expressive procedural small fluffy puppy barking wildly ("YIP! ARF-YIP! YIP-YIP!")
+   * with bright high-pitched canine formants, excited vibrato, playful breath puff,
+   * and right-to-left stereo panning.
+   */
+  public playWildDogBark(pan = 0, intensity = 1): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const clampedPan = Math.max(-0.95, Math.min(0.95, pan));
+    const vol = Math.max(0.25, Math.min(1.2, intensity));
+
+    // Stereo panner output bus (graceful fallback if StereoPannerNode unavailable)
+    const outNode: AudioNode =
+      typeof ctx.createStereoPanner === 'function'
+        ? (() => {
+            const p = ctx.createStereoPanner();
+            p.pan.setValueAtTime(clampedPan, now);
+            p.connect(ctx.destination);
+            return p;
+          })()
+        : ctx.destination;
+
+    const triggerSingleYip = (startAt: number, basePitch: number, dur: number, gainScale: number) => {
+      // Bright sawtooth + warm triangle harmonic for lively small-puppy vocal cords
+      const osc = ctx.createOscillator();
+      const subOsc = ctx.createOscillator();
+      const lfo = ctx.createOscillator();
+      const lfoGain = ctx.createGain();
+
+      osc.type = 'sawtooth';
+      subOsc.type = 'triangle';
+
+      // Excited upward puppy yip scoop -> cute quick downward fall
+      osc.frequency.setValueAtTime(basePitch * 0.84, startAt);
+      osc.frequency.exponentialRampToValueAtTime(basePitch * 1.56, startAt + dur * 0.28);
+      osc.frequency.exponentialRampToValueAtTime(basePitch * 0.78, startAt + dur);
+
+      subOsc.frequency.setValueAtTime(basePitch * 0.5, startAt);
+      subOsc.frequency.exponentialRampToValueAtTime(basePitch * 0.82, startAt + dur * 0.28);
+      subOsc.frequency.exponentialRampToValueAtTime(basePitch * 0.45, startAt + dur);
+
+      // Lively high-energy puppy yip modulation (~44-58 Hz FM)
+      lfo.type = 'sine';
+      lfo.frequency.setValueAtTime(44 + Math.random() * 14, startAt);
+      lfoGain.gain.setValueAtTime(basePitch * 0.065, startAt);
+      lfo.connect(lfoGain);
+      lfoGain.connect(osc.frequency);
+
+      // Small-puppy vocal-tract formants (F1 ~ 1180Hz, F2 ~ 2450Hz)
+      const f1 = ctx.createBiquadFilter();
+      f1.type = 'bandpass';
+      f1.frequency.setValueAtTime(1020 * this.jitter(0.1), startAt);
+      f1.frequency.exponentialRampToValueAtTime(1480 * this.jitter(0.1), startAt + dur * 0.3);
+      f1.frequency.exponentialRampToValueAtTime(860, startAt + dur);
+      f1.Q.setValueAtTime(2.8, startAt);
+
+      const f2 = ctx.createBiquadFilter();
+      f2.type = 'bandpass';
+      f2.frequency.setValueAtTime(2250 * this.jitter(0.1), startAt);
+      f2.frequency.exponentialRampToValueAtTime(2880 * this.jitter(0.1), startAt + dur * 0.28);
+      f2.frequency.exponentialRampToValueAtTime(1840, startAt + dur);
+      f2.Q.setValueAtTime(3.3, startAt);
+
+      const env = ctx.createGain();
+      const peak = 0.29 * vol * gainScale;
+      env.gain.setValueAtTime(0.001, startAt);
+      env.gain.linearRampToValueAtTime(peak, startAt + 0.011);
+      env.gain.exponentialRampToValueAtTime(peak * 0.62, startAt + dur * 0.52);
+      env.gain.exponentialRampToValueAtTime(0.001, startAt + dur + 0.02);
+
+      const subEnv = ctx.createGain();
+      subEnv.gain.setValueAtTime(0.001, startAt);
+      subEnv.gain.linearRampToValueAtTime(peak * 0.34, startAt + 0.012);
+      subEnv.gain.exponentialRampToValueAtTime(0.001, startAt + dur + 0.018);
+
+      osc.connect(f1);
+      osc.connect(f2);
+      f1.connect(env);
+      f2.connect(env);
+      env.connect(outNode);
+
+      subOsc.connect(subEnv);
+      subEnv.connect(outNode);
+
+      // Cute breathy puppy puff at yip onset
+      const noiseSrc = ctx.createBufferSource();
+      noiseSrc.buffer = this.getNoiseBuffer(ctx);
+      const noiseFilter = ctx.createBiquadFilter();
+      noiseFilter.type = 'bandpass';
+      noiseFilter.frequency.setValueAtTime(2100 * this.jitter(0.12), startAt);
+      noiseFilter.Q.setValueAtTime(1.8, startAt);
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.001, startAt);
+      noiseGain.gain.linearRampToValueAtTime(0.11 * vol * gainScale, startAt + 0.008);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, startAt + Math.min(0.075, dur * 0.68));
+      noiseSrc.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+      noiseGain.connect(outNode);
+
+      osc.start(startAt);
+      subOsc.start(startAt);
+      lfo.start(startAt);
+      noiseSrc.start(startAt, 0, Math.min(0.12, dur + 0.02));
+
+      const stopAt = startAt + dur + 0.028;
+      osc.stop(stopAt);
+      subOsc.stop(stopAt);
+      lfo.stop(stopAt);
+    };
+
+    const basePitch = (440 + Math.random() * 145) * this.jitter(0.05);
+    const dur = 0.085 + Math.random() * 0.038;
+    triggerSingleYip(now, basePitch, dur, 1.0);
+
+    // Excited rapid puppy double-yip ("YIP-YIP!") ~62% of the time
+    if (Math.random() < 0.62) {
+      const secondAt = now + dur + 0.032 + Math.random() * 0.028;
+      const secondDur = dur * 0.86;
+      triggerSingleYip(
+        secondAt,
+        basePitch * (1.08 + Math.random() * 0.16),
+        secondDur,
+        0.9,
+      );
+      // Occasional ecstatic triple-yip!
+      if (Math.random() < 0.34) {
+        triggerSingleYip(
+          secondAt + secondDur + 0.03 + Math.random() * 0.024,
+          basePitch * (1.16 + Math.random() * 0.18),
+          secondDur * 0.82,
+          0.78,
+        );
+      }
+    }
+  }
+
+  /**
+   * Crisp wooden chess piece knock & secondary bounce rattle when tipped over on the board.
+   */
+  public playPieceTopple(pan = 0): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const clampedPan = Math.max(-0.9, Math.min(0.9, pan));
+    const outNode: AudioNode =
+      typeof ctx.createStereoPanner === 'function'
+        ? (() => {
+            const p = ctx.createStereoPanner();
+            p.pan.setValueAtTime(clampedPan, now);
+            p.connect(ctx.destination);
+            return p;
+          })()
+        : ctx.destination;
+
+    const taps = [
+      { delay: 0, freq: 340 + Math.random() * 140, gain: 0.18, dur: 0.042 },
+      { delay: 0.075 + Math.random() * 0.035, freq: 270 + Math.random() * 120, gain: 0.14, dur: 0.036 },
+      { delay: 0.15 + Math.random() * 0.04, freq: 390 + Math.random() * 130, gain: 0.08, dur: 0.026 },
+    ];
+
+    for (const tap of taps) {
+      const t = now + tap.delay;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(tap.freq, t);
+      osc.frequency.exponentialRampToValueAtTime(tap.freq * 0.42, t + tap.dur);
+      gain.gain.setValueAtTime(0.001, t);
+      gain.gain.linearRampToValueAtTime(tap.gain, t + 0.0025);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + tap.dur + 0.01);
+      osc.connect(gain);
+      gain.connect(outNode);
+      osc.start(t);
+      osc.stop(t + tap.dur + 0.015);
+
+      const src = ctx.createBufferSource();
+      src.buffer = this.getNoiseBuffer(ctx);
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(1450 + Math.random() * 650, t);
+      filter.Q.setValueAtTime(2.1, t);
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(tap.gain * 0.72, t);
+      ng.gain.exponentialRampToValueAtTime(0.001, t + 0.028);
+      src.connect(filter);
+      filter.connect(ng);
+      ng.connect(outNode);
+      src.start(t, 0, 0.032);
+    }
+  }
+
+  /**
+   * Cute rapid mini-hamster squeaks & playful chase chirps ("squeak-peep!") with stereo panning.
+   */
+  public playHamsterSqueak(pan = 0, variant: 'grey' | 'white' = 'white'): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const clampedPan = Math.max(-0.92, Math.min(0.92, pan));
+    const outNode: AudioNode =
+      typeof ctx.createStereoPanner === 'function'
+        ? (() => {
+            const p = ctx.createStereoPanner();
+            p.pan.setValueAtTime(clampedPan, now);
+            p.connect(ctx.destination);
+            return p;
+          })()
+        : ctx.destination;
+
+    const triggerChirp = (startAt: number, baseHz: number, dur: number, gainPeak: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      // Quick adorable upward chirp -> playful little tail bend
+      osc.frequency.setValueAtTime(baseHz * 0.88, startAt);
+      osc.frequency.exponentialRampToValueAtTime(baseHz * 1.42, startAt + dur * 0.45);
+      osc.frequency.exponentialRampToValueAtTime(baseHz * 1.05, startAt + dur);
+
+      gain.gain.setValueAtTime(0.0008, startAt);
+      gain.gain.linearRampToValueAtTime(gainPeak, startAt + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.0008, startAt + dur + 0.012);
+
+      osc.connect(gain);
+      gain.connect(outNode);
+      osc.start(startAt);
+      osc.stop(startAt + dur + 0.018);
+    };
+
+    const baseHz = variant === 'white' ? 2150 + Math.random() * 520 : 1720 + Math.random() * 440;
+    const dur = 0.052 + Math.random() * 0.026;
+    triggerChirp(now, baseHz, dur, 0.11);
+
+    // Rapid playful double-squeak ~72% of the time
+    if (Math.random() < 0.72) {
+      const t2 = now + dur + 0.026 + Math.random() * 0.022;
+      triggerChirp(t2, baseHz * (1.08 + Math.random() * 0.14), dur * 0.85, 0.095);
+    }
   }
 
   private playClickNoise(

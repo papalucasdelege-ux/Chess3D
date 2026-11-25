@@ -7,7 +7,7 @@ export type LightingMood = 'warm-studio';
 
 export type CameraPreset = 'white' | 'black' | 'top' | 'cinematic';
 
-export type GameMode = 'engine' | 'local' | 'multiplayer' | 'replay';
+export type GameMode = 'engine' | 'local' | 'tactical' | 'multiplayer' | 'replay';
 
 export type EngineLevel = 'beginner' | 'intermediate' | 'advanced' | 'master' | 'grandmaster';
 

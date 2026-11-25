@@ -70,12 +70,15 @@ export default defineConfig(() => {
               handler: 'NetworkOnly',
             },
             {
-              // Voice clips are small (~40-70 KB) and fetched as ArrayBuffers: cache all clips for offline speech
+              // Voice clips & seduction soundtrack MP3s: cache for instant offline playback (with range requests for streaming)
               urlPattern: ({ url }) =>
-                url.pathname.startsWith('/voices/') || url.pathname === '/seduction.mp3',
+                url.pathname.startsWith('/voices/') ||
+                url.pathname === '/seduction.mp3' ||
+                (url.pathname.startsWith('/assets/aistudio/') && url.pathname.endsWith('.mp3')),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-voices-v3-4',
+                cacheName: 'chessangel-voices-v4-0',
+                rangeRequests: true,
                 expiration: {
                   maxEntries: 260,
                   maxAgeSeconds: 60 * 60 * 24 * 30,
@@ -87,12 +90,12 @@ export default defineConfig(() => {
               },
             },
             {
-              // Chess Angel portrait MP4s: hold all ~70 videos (maxEntries: 150) with RangeRequestsPlugin so Android tablets NEVER evict or stall
+              // Chess Angel portrait MP4s: hold all ~76 videos (maxEntries: 150) with RangeRequestsPlugin so Android tablets NEVER evict or stall
               urlPattern: ({ url }) =>
                 url.pathname.startsWith('/assets/aistudio/') && url.pathname.endsWith('.mp4'),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-videos-v3-4',
+                cacheName: 'chessangel-videos-v4-0',
                 rangeRequests: true,
                 expiration: {
                   maxEntries: 150,
@@ -109,7 +112,7 @@ export default defineConfig(() => {
               urlPattern: ({ url }) => url.pathname === '/assets/aistudio/angel_video_map.json',
               handler: 'StaleWhileRevalidate',
               options: {
-                cacheName: 'chessangel-registry-v3-4',
+                cacheName: 'chessangel-registry-v4-0',
                 cacheableResponse: {
                   statuses: [200],
                 },
@@ -122,7 +125,7 @@ export default defineConfig(() => {
                 /\.(png|jpg|jpeg|webp|svg)$/i.test(url.pathname),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-images-v3-4',
+                cacheName: 'chessangel-images-v4-0',
                 expiration: {
                   maxEntries: 40,
                   maxAgeSeconds: 60 * 60 * 24 * 30,
@@ -178,7 +181,7 @@ export default defineConfig(() => {
                 }
               }
             }
-            for (const topKey of ['defaultSpeaking', 'mouseIdle', 'mouseIdleWake'] as const) {
+            for (const topKey of ['defaultSpeaking', 'mouseIdle', 'mouseIdleWake', 'dogRunVideo', 'danceStarsVideo'] as const) {
               const val = rawMap[topKey];
               if (typeof val === 'string') {
                 const clean = val.split('?')[0];
@@ -218,7 +221,7 @@ export default defineConfig(() => {
                 changed = true;
               }
 
-              const mAngel = /^angel_(idle|mouse_idle|default|group|case|escape)_([a-z0-9_]+)\.mp4$/i.exec(
+              const mAngel = /^angel_(idle|mouse_idle|special|default|group|case|escape)_([a-z0-9_]+)\.mp4$/i.exec(
                 entry.name,
               );
               if (mAngel) {
@@ -236,6 +239,14 @@ export default defineConfig(() => {
                     changed = true;
                   } else if (key !== 'wake' && !rawMap.mouseIdle) {
                     rawMap.mouseIdle = cleanPath;
+                    changed = true;
+                  }
+                } else if (kind === 'special') {
+                  if (key === 'dog_run' && !rawMap.dogRunVideo) {
+                    rawMap.dogRunVideo = cleanPath;
+                    changed = true;
+                  } else if (key === 'dance_stars' && !rawMap.danceStarsVideo) {
+                    rawMap.danceStarsVideo = cleanPath;
                     changed = true;
                   }
                 } else if (kind === 'default' && !rawMap.defaultSpeaking) {
@@ -272,6 +283,16 @@ export default defineConfig(() => {
                     rawMap.mouseIdleWake = cleanPath;
                     changed = true;
                   }
+                } else if (bKey === 'dog_run') {
+                  if (!rawMap.dogRunVideo) {
+                    rawMap.dogRunVideo = cleanPath;
+                    changed = true;
+                  }
+                } else if (bKey === 'dance_stars') {
+                  if (!rawMap.danceStarsVideo) {
+                    rawMap.danceStarsVideo = cleanPath;
+                    changed = true;
+                  }
                 } else if (bKey.startsWith('idle_')) {
                   if (!idleVariants[bKey]) {
                     idleVariants[bKey] = cleanPath;
@@ -301,6 +322,58 @@ export default defineConfig(() => {
               }
             }
             rawMap.seductionAudioVariants = sedVariants;
+
+            // Discover bundled soundtrack MP3 files (> 200KB, excluding short voice clips)
+            const excludedMp3 = new Set(['seduction.mp3', 'seduction_6.mp3', 'thank_jan.mp3']);
+            const mp3Entries = fs
+              .readdirSync(aistudioDir, { withFileTypes: true })
+              .filter(
+                (e) =>
+                  e.isFile() &&
+                  /\.mp3$/i.test(e.name) &&
+                  !excludedMp3.has(e.name.toLowerCase()) &&
+                  !e.name.includes('.tmp'),
+              )
+              .sort((a, b) => {
+                const aQueen = a.name.toLowerCase().includes('a_beautiful_queen') ? 0 : 1;
+                const bQueen = b.name.toLowerCase().includes('a_beautiful_queen') ? 0 : 1;
+                return aQueen - bQueen || a.name.localeCompare(b.name);
+              });
+            const discoveredMusicTracks: Array<{ id: string; title: string; url: string }> = [];
+            for (const mp3 of mp3Entries) {
+              const stat = fs.statSync(path.join(aistudioDir, mp3.name));
+              if (stat.size < 200 * 1024) continue;
+              const lower = mp3.name.toLowerCase();
+              const title = lower.includes('a_beautiful_queen_and_her_infinite_re')
+                ? "Queen's Infinite Reign"
+                : lower.includes('chess_angle_rap') || lower.includes('chess_angel_rap')
+                  ? 'Chess Angel Rap'
+                  : mp3.name
+                      .replace(/\.mp3$/i, '')
+                      .replace(/_[0-9a-f]{8}$/i, '')
+                      .replace(/[_-]+/g, ' ')
+                      .replace(/\s+/g, ' ')
+                      .trim()
+                      .replace(/\b\w/g, (c) => c.toUpperCase())
+                      .slice(0, 48) || 'Chess Angel Track';
+              const id = mp3.name
+                .replace(/\.mp3$/i, '')
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '_')
+                .replace(/^_+|_+$/g, '');
+              discoveredMusicTracks.push({
+                id: id || 'chess_angel_track',
+                title,
+                url: `/assets/aistudio/${mp3.name}`,
+              });
+            }
+            if (
+              discoveredMusicTracks.length > 0 &&
+              JSON.stringify(rawMap.musicTracks || []) !== JSON.stringify(discoveredMusicTracks)
+            ) {
+              rawMap.musicTracks = discoveredMusicTracks;
+              changed = true;
+            }
 
             if (changed) {
               rawMap.idleVariants = idleVariants;

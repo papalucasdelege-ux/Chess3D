@@ -21,6 +21,7 @@ import {
 } from './services/gameArchive';
 import { EvalBar } from './components/EvalBar';
 import { TopBar, type DockTab } from './components/TopBar';
+import { TacticalTrainingHud, type TacticalRunStatus } from './components/TacticalTrainingHud';
 import { ControlDock } from './components/ControlDock';
 import { PromotionModal } from './components/PromotionModal';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton';
@@ -46,7 +47,11 @@ import {
 import {
   VOICE_CLIP_DURATION_SEC,
   extractCaseIdFromClip,
+  getAngelDanceStarsVideoUrl,
+  getAngelDogRunJumpSec,
+  getAngelDogRunVideoUrl,
   getAngelVideoOverridesSnapshot,
+  getVideoFileDurationSec,
   isStudioDeveloperUnlocked,
   logoutStudioDeveloperSession,
   prepareHumanCommentaryPlayback,
@@ -76,11 +81,13 @@ import {
   evaluateHumanMoveCommentary,
   getSpeakerName,
   inspectPostMoveForkState,
+  DEFAULT_MUSIC_TRACKS,
   opponentSpeech,
   resetGameCommentaryCounts,
   resolvePreviewConcernedFigures,
   resolvePreviewForkArrows,
   type AngelVoiceMode,
+  type MusicTrack,
   type OpponentMessage,
   type VoicePlaybackState,
 } from './chess/opponentVoice';
@@ -105,6 +112,22 @@ import {
   type SearchTreeEdge,
   type TimeControlId,
 } from './shared/types';
+import {
+  TACTICAL_PUZZLES,
+  evaluateTacticalMoveAttempt,
+  getPuzzleTimeLimitMs,
+  loadTacticalStats,
+  recordTacticalHintUsed,
+  recordTacticalMistakeOrReveal,
+  recordTacticalSolve,
+  resetTacticalStats,
+  uciToSanInPosition,
+  type TacticalDifficulty,
+  type TacticalPuzzle,
+  type TacticalSolveAward,
+  type TacticalTheme,
+  type TacticalTrainingStats,
+} from './chess/tacticalPuzzles';
 
 const INITIAL_FEN = new Chess().fen();
 const DEFAULT_SKIN: BoardSkinId = 'walnut-maple';
@@ -472,6 +495,18 @@ export default function App() {
   const [suppressTreeAndThreeMoves, setSuppressTreeAndThreeMoves] = useState(false);
   const [treeStatusMode, setTreeStatusMode] = useState<'idle' | 'developing' | 'holding'>('idle');
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [musicEnabled, setMusicEnabled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return window.localStorage.getItem('chess_angel_music_enabled_v1') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const musicEnabledRef = useRef<boolean>(musicEnabled);
+  musicEnabledRef.current = musicEnabled;
+  const [musicTracks, setMusicTracks] = useState<MusicTrack[]>([...DEFAULT_MUSIC_TRACKS]);
+  const [activeMusicTrackIndex, setActiveMusicTrackIndex] = useState<number>(0);
   const [angelVoice, setAngelVoice] = useState<AngelVoiceMode>('on');
   const [angelModalEnabled, setAngelModalEnabled] = useState<boolean>(true);
   const [angelVisible, setAngelVisible] = useState<boolean>(true);
@@ -586,6 +621,18 @@ export default function App() {
   const [videoStudioOpen, setVideoStudioOpen] = useState(false);
   const [idlePreviewNonce, setIdlePreviewNonce] = useState(0);
   const [previewIdleUrl, setPreviewIdleUrl] = useState<string | null>(null);
+  const [dogRunCueSec, setDogRunCueSec] = useState<number | null>(null);
+  const [danceStarsActive, setDanceStarsActive] = useState(false);
+  const dogJumpTimerRef = useRef<number | null>(null);
+  const dogRunCueCallbackRef = useRef<(() => void) | null>(null);
+  const dogVideoClearTimerRef = useRef<number | null>(null);
+  const dogEventActiveRef = useRef<boolean>(false);
+  const puppyIdleAccumMsRef = useRef<number>(0);
+  const lastPuppyAutoAtRef = useRef<number>(0);
+  const lastIdleCritterRef = useRef<'puppy' | 'hamsters' | 'dance_stars'>('hamsters');
+  const lastSpeechEndedAtRef = useRef<number>(0);
+  const prevPuppyActivitySigRef = useRef<string>('');
+  const frontalTreeViewOpenRef = useRef<boolean>(false);
   const [webglLost, setWebglLost] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(() => {
     if (typeof document === 'undefined') return false;
@@ -604,6 +651,14 @@ export default function App() {
     return () => {
       document.removeEventListener('fullscreenchange', syncFullscreen);
       document.removeEventListener('webkitfullscreenchange', syncFullscreen);
+      if (dogJumpTimerRef.current !== null) {
+        window.clearTimeout(dogJumpTimerRef.current);
+        dogJumpTimerRef.current = null;
+      }
+      if (dogVideoClearTimerRef.current !== null) {
+        window.clearTimeout(dogVideoClearTimerRef.current);
+        dogVideoClearTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -652,6 +707,84 @@ export default function App() {
     b: TIME_CONTROLS['10+0'].initialMs,
   });
   const [isThinkingAi, setIsThinkingAi] = useState(false);
+
+  // === Tactical Training State & Casual Session Snapshot ===
+  const [tacticalStats, setTacticalStats] = useState<TacticalTrainingStats>(() =>
+    loadTacticalStats(),
+  );
+  const [activePuzzleId, setActivePuzzleId] = useState<string>(() => TACTICAL_PUZZLES[0].id);
+  const [tacticalThemeFilter, setTacticalThemeFilter] = useState<TacticalTheme | 'all'>('all');
+  const [tacticalDifficultyFilter, setTacticalDifficultyFilter] = useState<
+    TacticalDifficulty | 'all'
+  >('all');
+  const [tacticalStepIdx, setTacticalStepIdx] = useState<number>(0);
+  const [tacticalStatus, setTacticalStatus] = useState<TacticalRunStatus>('solving');
+  const [tacticalFeedback, setTacticalFeedback] = useState<string | null>(null);
+  const [tacticalHintStage, setTacticalHintStage] = useState<0 | 1 | 2>(0);
+  const [tacticalLastDelta, setTacticalLastDelta] = useState<number | null>(null);
+  const [tacticalLastSolveAward, setTacticalLastSolveAward] =
+    useState<TacticalSolveAward | null>(null);
+  const [tacticalRemainingMs, setTacticalRemainingMs] = useState<number>(() =>
+    getPuzzleTimeLimitMs(TACTICAL_PUZZLES[0]),
+  );
+  const tacticalRemainingMsRef = useRef<number>(getPuzzleTimeLimitMs(TACTICAL_PUZZLES[0]));
+  const tacticalElapsedMsRef = useRef<number>(0);
+  const tacticalTimedOutChimedRef = useRef<boolean>(false);
+  const tacticalHadMistakeRef = useRef<boolean>(false);
+  const tacticalUsedHintRef = useRef<boolean>(false);
+  const tacticalTimerIdsRef = useRef<number[]>([]);
+  const casualSessionSnapshotRef = useRef<{
+    mode: 'engine' | 'local';
+    fen: string;
+    moves: MoveRecord[];
+    result: RoomResult | null;
+    clocks: { w: number; b: number };
+    moveEvalMeta: Record<number, AnalyzedMoveMeta>;
+    engineLevel: EngineLevel;
+    humanColorActual: PieceColor;
+    humanColorPref: PieceColor | 'random';
+    timeControl: TimeControlId;
+  } | null>(null);
+
+  const activePuzzle: TacticalPuzzle = useMemo(
+    () => TACTICAL_PUZZLES.find((p) => p.id === activePuzzleId) || TACTICAL_PUZZLES[0],
+    [activePuzzleId],
+  );
+  const activePuzzleTimeLimitMs = useMemo(
+    () => getPuzzleTimeLimitMs(activePuzzle),
+    [activePuzzle],
+  );
+
+  // Independent 100ms countdown ticker for Tactical Training (pauses during opponent auto-replies & non-tactical modes)
+  useEffect(() => {
+    if (gameMode !== 'tactical') return;
+    if (tacticalStatus !== 'solving' && tacticalStatus !== 'wrong') return;
+
+    let lastTickAt = performance.now();
+    const intervalId = window.setInterval(() => {
+      const now = performance.now();
+      const dt = Math.min(500, Math.max(0, now - lastTickAt));
+      lastTickAt = now;
+
+      tacticalElapsedMsRef.current += dt;
+      const prevRem = tacticalRemainingMsRef.current;
+      const nextRem = Math.max(0, prevRem - dt);
+      tacticalRemainingMsRef.current = nextRem;
+
+      if (prevRem > 0 && nextRem === 0 && !tacticalTimedOutChimedRef.current) {
+        tacticalTimedOutChimedRef.current = true;
+        if (soundEnabledRef.current) {
+          soundEngine.playCheck();
+        }
+      }
+
+      setTacticalRemainingMs(nextRem);
+    }, 100);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [gameMode, tacticalStatus, activePuzzleId]);
 
   // === Board Selection & Promotion ===
   const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
@@ -748,6 +881,58 @@ export default function App() {
   angelVoiceRef.current = angelVoice;
   const soundEnabledRef = useRef<boolean>(true);
   soundEnabledRef.current = soundEnabled;
+
+  useEffect(() => {
+    const unsub = opponentSpeech.subscribeMusicState((snap) => {
+      setMusicTracks(snap.tracks);
+      setActiveMusicTrackIndex(snap.trackIndex);
+    });
+    if (musicEnabledRef.current && soundEnabledRef.current) {
+      opponentSpeech.setBackgroundMusicEnabled(true, true);
+    }
+    return unsub;
+  }, []);
+
+  const handleToggleMusic = useCallback(() => {
+    const nextMusic = !musicEnabledRef.current;
+    musicEnabledRef.current = nextMusic;
+    setMusicEnabled(nextMusic);
+    try {
+      window.localStorage.setItem('chess_angel_music_enabled_v1', nextMusic ? '1' : '0');
+    } catch {
+      // ignore storage errors
+    }
+    if (nextMusic) {
+      if (!soundEnabledRef.current) {
+        soundEnabledRef.current = true;
+        setSoundEnabled(true);
+        soundEngine.enabled = true;
+      }
+      opponentSpeech.unlock();
+      opponentSpeech.setBackgroundMusicEnabled(true, true);
+    } else {
+      opponentSpeech.setBackgroundMusicEnabled(false, soundEnabledRef.current);
+    }
+  }, []);
+
+  const handleSelectMusicTrack = useCallback((index: number) => {
+    if (!soundEnabledRef.current) {
+      soundEnabledRef.current = true;
+      setSoundEnabled(true);
+      soundEngine.enabled = true;
+    }
+    if (!musicEnabledRef.current) {
+      musicEnabledRef.current = true;
+      setMusicEnabled(true);
+      try {
+        window.localStorage.setItem('chess_angel_music_enabled_v1', '1');
+      } catch {
+        // ignore storage errors
+      }
+    }
+    opponentSpeech.unlock();
+    opponentSpeech.selectBackgroundMusicTrack(index, true);
+  }, []);
   const opponentMessageRef = useRef<OpponentMessage | null>(opponentMessage);
   opponentMessageRef.current = opponentMessage;
   const voiceStateRef = useRef<VoicePlaybackState>(voiceState);
@@ -787,9 +972,11 @@ export default function App() {
   const isViewingLatest = clampedViewPly === activeMoves.length;
 
   const displayedFen = useMemo(() => {
-    if (clampedViewPly === 0) return INITIAL_FEN;
+    if (clampedViewPly === 0) {
+      return gameMode === 'tactical' ? activePuzzle.fen : INITIAL_FEN;
+    }
     return activeMoves[clampedViewPly - 1]?.fen ?? localFen;
-  }, [clampedViewPly, activeMoves, localFen]);
+  }, [clampedViewPly, activeMoves, localFen, gameMode, activePuzzle.fen]);
 
   const displayedChess = useMemo(() => new Chess(displayedFen), [displayedFen]);
   const displayedTurn = displayedChess.turn() as PieceColor;
@@ -821,6 +1008,7 @@ export default function App() {
     dockCollapsed,
     videoStudioOpen,
     angelModalEnabled,
+    angelVisible,
     selectedSquare,
     treeBrowserOpen: treeBrowser !== null,
   });
@@ -841,6 +1029,7 @@ export default function App() {
     dockCollapsed,
     videoStudioOpen,
     angelModalEnabled,
+    angelVisible,
     selectedSquare,
     treeBrowserOpen: treeBrowser !== null,
   };
@@ -878,7 +1067,8 @@ export default function App() {
 
   const activeTimeControl: TimeControlId =
     gameMode === 'multiplayer' && activeRoom ? activeRoom.timeControl : timeControl;
-  const isTimed = !isReplayMode && TIME_CONTROLS[activeTimeControl].initialMs > 0;
+  const isTimed =
+    !isReplayMode && gameMode !== 'tactical' && TIME_CONTROLS[activeTimeControl].initialMs > 0;
   const whiteClockMs =
     gameMode === 'multiplayer' && activeRoom ? displayRoomClocks.w : localClocks.w;
   const blackClockMs =
@@ -886,6 +1076,12 @@ export default function App() {
 
   const canInteractWithBoard = useMemo(() => {
     if (isReplayMode || !isViewingLatest || activeResult || calcPreview !== null) return false;
+    if (gameMode === 'tactical') {
+      return (
+        (tacticalStatus === 'solving' || tacticalStatus === 'wrong') &&
+        displayedTurn === activePuzzle.solverColor
+      );
+    }
     if (gameMode === 'multiplayer') {
       if (!activeRoom || activeRoom.status !== 'active') return false;
       if (myRoomRole !== 'w' && myRoomRole !== 'b') return false;
@@ -901,6 +1097,8 @@ export default function App() {
     activeResult,
     calcPreview,
     gameMode,
+    tacticalStatus,
+    activePuzzle.solverColor,
     activeRoom,
     myRoomRole,
     isThinkingAi,
@@ -971,7 +1169,7 @@ export default function App() {
         blackName,
         resultLabel,
         reason: res?.reason || 'in-progress',
-        mode: gameMode === 'replay' ? 'local' : gameMode,
+        mode: gameMode === 'replay' || gameMode === 'tactical' ? 'local' : gameMode,
         skinId: DEFAULT_SKIN,
         timeControl: activeTimeControl,
         dateIso,
@@ -1019,7 +1217,7 @@ export default function App() {
 
   const saveCurrentGameToArchive = useCallback(
     (overrideResult?: RoomResult | null, isAutoSave = false) => {
-      if (isReplayMode) return;
+      if (isReplayMode || gameMode === 'tactical') return;
       if (isAutoSave && activeMoves.length === 0) return;
 
       const entry = buildCurrentSavedGameSnapshot(overrideResult);
@@ -1040,6 +1238,7 @@ export default function App() {
     },
     [
       isReplayMode,
+      gameMode,
       activeMoves.length,
       buildCurrentSavedGameSnapshot,
       savedGameFingerprints,
@@ -1049,20 +1248,27 @@ export default function App() {
   );
 
   const handleExportCurrentGame = useCallback(() => {
-    if (isReplayMode) return;
+    if (isReplayMode || gameMode === 'tactical') return;
     const entry = buildCurrentSavedGameSnapshot();
     saveCurrentGameToArchive();
     exportSavedGameJson(entry);
-  }, [isReplayMode, buildCurrentSavedGameSnapshot, saveCurrentGameToArchive]);
+  }, [isReplayMode, gameMode, buildCurrentSavedGameSnapshot, saveCurrentGameToArchive]);
 
   // Auto-save completed games to archive
   useEffect(() => {
-    if (!activeResult || isReplayMode || activeMoves.length < 2) return;
+    if (!activeResult || isReplayMode || gameMode === 'tactical' || activeMoves.length < 2) return;
     const key = `${currentFingerprint}|${activeResult.reason}`;
     if (autoSavedSessionRef.current === key) return;
     autoSavedSessionRef.current = key;
     saveCurrentGameToArchive(activeResult, true);
-  }, [activeResult, isReplayMode, activeMoves.length, currentFingerprint, saveCurrentGameToArchive]);
+  }, [
+    activeResult,
+    isReplayMode,
+    gameMode,
+    activeMoves.length,
+    currentFingerprint,
+    saveCurrentGameToArchive,
+  ]);
 
   // === Execute Local or Engine Move ===
   const commitLocalMove = useCallback(
@@ -1227,8 +1433,11 @@ export default function App() {
                 goodMoveStreakRef.current = 0;
                 awaitingDistractionModalRef.current = false;
                 const seductionVideoHold = prep.playToEnd ? prep.videoSec : 0;
+                const seductionAudioFallback =
+                  seductionVideoHold > 0 ? 0 : Math.min(prep.audioSec, 12);
                 const seductionHoldMs =
-                  Math.round(Math.max(prep.audioSec, seductionVideoHold, 4.5) * 1000) + 450;
+                  Math.round(Math.max(seductionVideoHold, seductionAudioFallback, 4.5) * 1000) +
+                  450;
                 holdBotUntilRef.current = performance.now() + seductionHoldMs;
               } else if (msg.action?.kind === 'undo-offer' && !over && angelVisibleRef.current) {
                 awaitingDistractionModalRef.current = false;
@@ -1332,9 +1541,208 @@ export default function App() {
     ],
   );
 
-  // === Submit Move (routes to Multiplayer Server or Local/Engine) ===
+  const clearTacticalTimers = useCallback(() => {
+    tacticalTimerIdsRef.current.forEach((id) => window.clearTimeout(id));
+    tacticalTimerIdsRef.current = [];
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      tacticalTimerIdsRef.current.forEach((id) => window.clearTimeout(id));
+      tacticalTimerIdsRef.current = [];
+    };
+  }, []);
+
+  const showPuzzleMotifArrows = useCallback((puzzle: TacticalPuzzle) => {
+    if (!puzzle.motifArrows || puzzle.motifArrows.length === 0) {
+      setCoachArrows([]);
+      return;
+    }
+    setCoachArrows(
+      puzzle.motifArrows.map((a) => ({
+        from: a.from,
+        to: a.to,
+        kind: a.kind,
+      })),
+    );
+  }, []);
+
+  const submitTacticalMove = useCallback(
+    (from: string, to: string, promotion?: PieceType) => {
+      if (tacticalStatus !== 'solving' && tacticalStatus !== 'wrong') return;
+      clearTacticalTimers();
+      clearForkArrowsTimer();
+      setCoachArrows([]);
+      setSelectedSquare(null);
+      setTacticalHintStage(0);
+
+      const preFen = localFen;
+      const preMoves = localMoves;
+      const evalRes = evaluateTacticalMoveAttempt(
+        preFen,
+        from,
+        to,
+        promotion,
+        activePuzzle,
+        tacticalStepIdx,
+      );
+      if (!evalRes.legal) return;
+
+      const parsedPiece = new Chess(preFen).get(from as Square);
+      const moverRecord: MoveRecord = {
+        ply: preMoves.length + 1,
+        san: evalRes.san,
+        uci: evalRes.uci,
+        from,
+        to,
+        color: activePuzzle.solverColor,
+        piece: (parsedPiece?.type || 'p') as PieceType,
+        captured: evalRes.captured,
+        promotion,
+        fen: evalRes.nextFen,
+        timestamp: Date.now(),
+      };
+
+      lastMoveAnimHintRef.current = { from, to };
+      const afterSolverMoves = [...preMoves, moverRecord];
+      setLocalMoves(afterSolverMoves);
+      setLocalFen(evalRes.nextFen);
+      setViewPly(afterSolverMoves.length);
+
+      if (!evalRes.correct) {
+        soundEngine.playMove();
+        setTacticalStatus('wrong');
+        setTacticalFeedback(`${evalRes.san} lets the opponent defend — try a stronger forcing move.`);
+
+        if (!tacticalHadMistakeRef.current) {
+          tacticalHadMistakeRef.current = true;
+          const { next, ratingDelta } = recordTacticalMistakeOrReveal(tacticalStats, activePuzzle);
+          setTacticalStats(next);
+          setTacticalLastDelta(ratingDelta);
+        }
+
+        const snapbackTimer = window.setTimeout(() => {
+          setLocalMoves(preMoves);
+          setLocalFen(preFen);
+          setViewPly(preMoves.length);
+          setSelectedSquare(null);
+        }, 680);
+        tacticalTimerIdsRef.current.push(snapbackTimer);
+        return;
+      }
+
+      // Correct solver move!
+      if (evalRes.completedPuzzle) {
+        if (evalRes.isCheckmate) {
+          soundEngine.playGameOver();
+        } else if (evalRes.inCheck) {
+          soundEngine.playCheck();
+        } else if (evalRes.captured) {
+          soundEngine.playCapture();
+        } else {
+          soundEngine.playMove();
+        }
+
+        const { next, ratingDelta, award } = recordTacticalSolve(tacticalStats, activePuzzle, {
+          hadMistake: tacticalHadMistakeRef.current,
+          usedHint: tacticalUsedHintRef.current,
+          solveMs: tacticalElapsedMsRef.current,
+          remainingMs: tacticalRemainingMsRef.current,
+          timeLimitMs: activePuzzleTimeLimitMs,
+        });
+        setTacticalStats(next);
+        setTacticalLastDelta(ratingDelta);
+        setTacticalLastSolveAward(award);
+        setTacticalStatus('solved');
+        setTacticalFeedback(null);
+        showPuzzleMotifArrows(activePuzzle);
+        return;
+      }
+
+      // Correct intermediate move — play sound and schedule opponent's forced reply
+      if (evalRes.inCheck) {
+        soundEngine.playCheck();
+      } else if (evalRes.captured) {
+        soundEngine.playCapture();
+      } else {
+        soundEngine.playMove();
+      }
+
+      const opponentReplyUci = activePuzzle.solutionUci[tacticalStepIdx + 1];
+      if (!opponentReplyUci || opponentReplyUci.length < 4) {
+        setTacticalStatus('solved');
+        return;
+      }
+
+      setTacticalStatus('opponent-replying');
+      setTacticalFeedback(null);
+
+      const replyTimer = window.setTimeout(() => {
+        try {
+          const replyChess = new Chess(evalRes.nextFen);
+          const repFrom = opponentReplyUci.slice(0, 2);
+          const repTo = opponentReplyUci.slice(2, 4);
+          const repPromo = (opponentReplyUci.slice(4, 5) || undefined) as PieceType | undefined;
+          const repRes = replyChess.move({ from: repFrom, to: repTo, promotion: repPromo });
+          if (!repRes) {
+            setTacticalStatus('solving');
+            return;
+          }
+
+          const nextFenAfterReply = replyChess.fen();
+          const replyRecord: MoveRecord = {
+            ply: afterSolverMoves.length + 1,
+            san: repRes.san,
+            uci: `${repRes.from}${repRes.to}${repRes.promotion || ''}`,
+            from: repRes.from,
+            to: repRes.to,
+            color: repRes.color as PieceColor,
+            piece: repRes.piece as PieceType,
+            captured: repRes.captured as PieceType | undefined,
+            promotion: repRes.promotion as PieceType | undefined,
+            fen: nextFenAfterReply,
+            timestamp: Date.now(),
+          };
+
+          lastMoveAnimHintRef.current = { from: repRes.from, to: repRes.to };
+          const combinedMoves = [...afterSolverMoves, replyRecord];
+          setLocalMoves(combinedMoves);
+          setLocalFen(nextFenAfterReply);
+          setViewPly(combinedMoves.length);
+          setTacticalStepIdx(tacticalStepIdx + 2);
+          setTacticalStatus('solving');
+          setTacticalFeedback('Sharp move — now finish the combination!');
+
+          if (replyChess.inCheck()) soundEngine.playCheck();
+          else if (repRes.captured) soundEngine.playCapture();
+          else soundEngine.playMove();
+        } catch {
+          setTacticalStatus('solving');
+        }
+      }, 460);
+      tacticalTimerIdsRef.current.push(replyTimer);
+    },
+    [
+      tacticalStatus,
+      clearTacticalTimers,
+      clearForkArrowsTimer,
+      localFen,
+      localMoves,
+      activePuzzle,
+      activePuzzleTimeLimitMs,
+      tacticalStepIdx,
+      tacticalStats,
+      showPuzzleMotifArrows,
+    ],
+  );
+
+  // === Submit Move (routes to Multiplayer Server, Tactical Trainer, or Local/Engine) ===
   const submitMove = useCallback(
     (from: string, to: string, promotion?: PieceType) => {
+      if (gameMode === 'tactical') {
+        submitTacticalMove(from, to, promotion);
+        return;
+      }
       if (gameMode === 'multiplayer' && activeRoom) {
         lastMoveAnimHintRef.current = { from, to };
         setSelectedSquare(null);
@@ -1343,7 +1751,7 @@ export default function App() {
       }
       commitLocalMove(from, to, promotion || 'q', null);
     },
-    [gameMode, activeRoom, commitLocalMove],
+    [gameMode, activeRoom, submitTacticalMove, commitLocalMove],
   );
 
   // === Click Handler from 3D Raycaster ===
@@ -1432,7 +1840,22 @@ export default function App() {
   useEffect(() => {
     const prev = prevVoiceStateForHighlightRef.current;
     prevVoiceStateForHighlightRef.current = voiceState;
+    if (voiceState === 'speaking') {
+      if (dogJumpTimerRef.current !== null) {
+        window.clearTimeout(dogJumpTimerRef.current);
+        dogJumpTimerRef.current = null;
+      }
+      dogRunCueCallbackRef.current = null;
+      setDogRunCueSec(null);
+      if (dogVideoClearTimerRef.current !== null) {
+        window.clearTimeout(dogVideoClearTimerRef.current);
+        dogVideoClearTimerRef.current = null;
+      }
+      dogEventActiveRef.current = false;
+      setDanceStarsActive(false);
+    }
     if (prev === 'speaking' && voiceState !== 'speaking') {
+      lastSpeechEndedAtRef.current = performance.now();
       setSpeechHighlightWindowOpen(false);
     }
   }, [voiceState]);
@@ -1557,6 +1980,222 @@ export default function App() {
     showCoordinates,
   ]);
 
+  const handleForcedIdleCueReached = useCallback(() => {
+    const cb = dogRunCueCallbackRef.current;
+    dogRunCueCallbackRef.current = null;
+    setDogRunCueSec(null);
+    cb?.();
+  }, []);
+
+  const triggerFluffyPuppyEvent = useCallback(
+    ({ playVideo, fromStudio = false }: { playVideo: boolean; fromStudio?: boolean }) => {
+      if (dogJumpTimerRef.current !== null) {
+        window.clearTimeout(dogJumpTimerRef.current);
+        dogJumpTimerRef.current = null;
+      }
+      dogRunCueCallbackRef.current = null;
+      setDogRunCueSec(null);
+      if (dogVideoClearTimerRef.current !== null) {
+        window.clearTimeout(dogVideoClearTimerRef.current);
+        dogVideoClearTimerRef.current = null;
+      }
+
+      if (fromStudio) {
+        if (angelModalOffTimerRef.current !== null) {
+          window.clearTimeout(angelModalOffTimerRef.current);
+          angelModalOffTimerRef.current = null;
+        }
+        if (calcShowingTimerRef.current !== null) {
+          window.clearTimeout(calcShowingTimerRef.current);
+          calcShowingTimerRef.current = null;
+        }
+        setFrontalTreeViewOpen(false);
+        setCalcShowingPending(false);
+        sceneRef.current?.stopCalculationPreview(true);
+        sceneRef.current?.stopSearchTreeThinLines();
+        treeActiveOnScreenRef.current = false;
+        setTreeStatusMode('idle');
+        setTreeBrowser(null);
+        setCalcPreview(null);
+        setCoachArrows([]);
+        setAngelModalEnabled(true);
+        setAngelVisible(true);
+        opponentSpeech.stop();
+        soundEngine.unlock();
+      }
+
+      const snap = getAngelVideoOverridesSnapshot();
+      const dogUrl = getAngelDogRunVideoUrl(snap);
+      const jumpSec = getAngelDogRunJumpSec(snap);
+      const shouldPlayVideo = Boolean(playVideo && dogUrl);
+
+      dogEventActiveRef.current = true;
+      setDanceStarsActive(false);
+      puppyIdleAccumMsRef.current = 0;
+
+      const launch3DPuppy = () => {
+        const modalEl = document.querySelector('[data-angel-portrait-modal="true"]');
+        const rect = modalEl ? modalEl.getBoundingClientRect() : null;
+        sceneRef.current?.triggerWildDogRun(rect, soundEnabledRef.current);
+      };
+
+      if (shouldPlayVideo && dogUrl) {
+        const clipSec = getVideoFileDurationSec(dogUrl, snap) ?? Math.max(6, jumpSec + 3.2);
+        const remainingClipSec = Math.max(0.8, clipSec - jumpSec);
+
+        // Fire the 3D puppy strictly when the <video>'s live currentTime reaches jumpSec (e.g. 4.2s)
+        dogRunCueCallbackRef.current = () => {
+          launch3DPuppy();
+          if (dogVideoClearTimerRef.current !== null) {
+            window.clearTimeout(dogVideoClearTimerRef.current);
+          }
+          const postLaunchClearMs = Math.max(4200, Math.round((remainingClipSec + 0.6) * 1000));
+          dogVideoClearTimerRef.current = window.setTimeout(() => {
+            dogVideoClearTimerRef.current = null;
+            dogEventActiveRef.current = false;
+            setPreviewIdleUrl(null);
+          }, postLaunchClearMs);
+        };
+        setDogRunCueSec(jumpSec);
+        setPreviewIdleUrl(dogUrl);
+        setOpponentMessage(null);
+        setIdlePreviewNonce((n) => n + 1);
+
+        // Safety watchdog only if video never loads/reaches cue (generous buffer so it never cuts early)
+        const safetyMs = Math.max(12000, Math.round((clipSec + 8.0) * 1000));
+        dogVideoClearTimerRef.current = window.setTimeout(() => {
+          dogVideoClearTimerRef.current = null;
+          dogRunCueCallbackRef.current = null;
+          setDogRunCueSec(null);
+          dogEventActiveRef.current = false;
+          setPreviewIdleUrl(null);
+        }, safetyMs);
+      } else {
+        // Allow one brief frame if Angel modal just mounted so its DOMRect is measured accurately
+        dogJumpTimerRef.current = window.setTimeout(() => {
+          dogJumpTimerRef.current = null;
+          launch3DPuppy();
+        }, 100);
+        dogVideoClearTimerRef.current = window.setTimeout(() => {
+          dogVideoClearTimerRef.current = null;
+          dogEventActiveRef.current = false;
+        }, 5600);
+      }
+    },
+    [],
+  );
+  const triggerFluffyPuppyEventRef = useRef(triggerFluffyPuppyEvent);
+  triggerFluffyPuppyEventRef.current = triggerFluffyPuppyEvent;
+
+  const triggerHamsterChaseEvent = useCallback(({ fromStudio = false }: { fromStudio?: boolean } = {}) => {
+    if (dogJumpTimerRef.current !== null) {
+      window.clearTimeout(dogJumpTimerRef.current);
+      dogJumpTimerRef.current = null;
+    }
+    dogRunCueCallbackRef.current = null;
+    setDogRunCueSec(null);
+    if (dogVideoClearTimerRef.current !== null) {
+      window.clearTimeout(dogVideoClearTimerRef.current);
+      dogVideoClearTimerRef.current = null;
+    }
+    if (fromStudio) {
+      setFrontalTreeViewOpen(false);
+      setCalcShowingPending(false);
+      sceneRef.current?.stopCalculationPreview(true);
+      sceneRef.current?.stopSearchTreeThinLines();
+      treeActiveOnScreenRef.current = false;
+      setTreeStatusMode('idle');
+      setTreeBrowser(null);
+      setCalcPreview(null);
+      setCoachArrows([]);
+      soundEngine.unlock();
+    }
+    puppyIdleAccumMsRef.current = 0;
+    dogEventActiveRef.current = true;
+    setDanceStarsActive(false);
+    const startChase = () => {
+      sceneRef.current?.triggerHamsterChase(soundEnabledRef.current);
+    };
+    if (fromStudio) {
+      dogJumpTimerRef.current = window.setTimeout(() => {
+        dogJumpTimerRef.current = null;
+        startChase();
+      }, 80);
+    } else {
+      startChase();
+    }
+    dogVideoClearTimerRef.current = window.setTimeout(() => {
+      dogVideoClearTimerRef.current = null;
+      dogEventActiveRef.current = false;
+    }, 7600);
+  }, []);
+  const triggerHamsterChaseEventRef = useRef(triggerHamsterChaseEvent);
+  triggerHamsterChaseEventRef.current = triggerHamsterChaseEvent;
+
+  const triggerDanceWithStarsEvent = useCallback(({ fromStudio = false }: { fromStudio?: boolean } = {}) => {
+    if (dogJumpTimerRef.current !== null) {
+      window.clearTimeout(dogJumpTimerRef.current);
+      dogJumpTimerRef.current = null;
+    }
+    dogRunCueCallbackRef.current = null;
+    setDogRunCueSec(null);
+    if (dogVideoClearTimerRef.current !== null) {
+      window.clearTimeout(dogVideoClearTimerRef.current);
+      dogVideoClearTimerRef.current = null;
+    }
+
+    if (fromStudio) {
+      if (angelModalOffTimerRef.current !== null) {
+        window.clearTimeout(angelModalOffTimerRef.current);
+        angelModalOffTimerRef.current = null;
+      }
+      if (calcShowingTimerRef.current !== null) {
+        window.clearTimeout(calcShowingTimerRef.current);
+        calcShowingTimerRef.current = null;
+      }
+      setFrontalTreeViewOpen(false);
+      setCalcShowingPending(false);
+      sceneRef.current?.stopCalculationPreview(true);
+      sceneRef.current?.stopSearchTreeThinLines();
+      treeActiveOnScreenRef.current = false;
+      setTreeStatusMode('idle');
+      setTreeBrowser(null);
+      setCalcPreview(null);
+      setCoachArrows([]);
+      setAngelModalEnabled(true);
+      setAngelVisible(true);
+      opponentSpeech.stop();
+    }
+
+    const snap = getAngelVideoOverridesSnapshot();
+    const danceUrl =
+      getAngelDanceStarsVideoUrl(snap) ||
+      snap.cases?.seduction_6 ||
+      snap.cases?.seduction ||
+      null;
+
+    dogEventActiveRef.current = true;
+    puppyIdleAccumMsRef.current = 0;
+    setDanceStarsActive(true);
+
+    if (danceUrl) {
+      setPreviewIdleUrl(danceUrl);
+      setOpponentMessage(null);
+      setIdlePreviewNonce((n) => n + 1);
+    }
+
+    const clipSec = getVideoFileDurationSec(danceUrl || undefined, snap) ?? 10.0;
+    const clearMs = Math.max(5500, Math.round((clipSec + 0.4) * 1000));
+    dogVideoClearTimerRef.current = window.setTimeout(() => {
+      dogVideoClearTimerRef.current = null;
+      dogEventActiveRef.current = false;
+      setDanceStarsActive(false);
+      setPreviewIdleUrl(null);
+    }, clearMs);
+  }, []);
+  const triggerDanceWithStarsEventRef = useRef(triggerDanceWithStarsEvent);
+  triggerDanceWithStarsEventRef.current = triggerDanceWithStarsEvent;
+
   // === Independent 100ms Simulation Loop (Decoupled from requestAnimationFrame & React Render Tree) ===
   useEffect(() => {
     let prevTick = performance.now();
@@ -1583,6 +2222,7 @@ export default function App() {
       // 2. Local / Engine Chess Clock Simulation (only triggers React state on whole-second changes)
       if (
         snap.gameMode !== 'multiplayer' &&
+        snap.gameMode !== 'tactical' &&
         !snap.isReplayMode &&
         !snap.localResult &&
         snap.localMovesLen > 0 &&
@@ -1700,6 +2340,98 @@ export default function App() {
         }
       } else {
         turnStartedAtRef.current = now;
+      }
+
+      // 5. Fluffy White Puppy Idle Event — triggers naturally when waiting for a match (~32s)
+      //    or waiting long during a match (~75s) while Chess Angel is visible & quiet.
+      const activitySig = `${snap.gameMode}|${snap.localFen}|${snap.activeRoom?.id || ''}|${snap.activeRoom?.status || ''}|${snap.activeRoom?.moves.length ?? 0}|${snap.selectedSquare || ''}|${snap.localResult?.reason || ''}`;
+      if (activitySig !== prevPuppyActivitySigRef.current) {
+        prevPuppyActivitySigRef.current = activitySig;
+        puppyIdleAccumMsRef.current = 0;
+        // If a move or new match started before the puppy jumped out, cancel the pending jump cleanly
+        if ((dogJumpTimerRef.current !== null || dogRunCueCallbackRef.current !== null) && !snap.videoStudioOpen) {
+          if (dogJumpTimerRef.current !== null) {
+            window.clearTimeout(dogJumpTimerRef.current);
+            dogJumpTimerRef.current = null;
+          }
+          dogRunCueCallbackRef.current = null;
+          setDogRunCueSec(null);
+          if (dogVideoClearTimerRef.current !== null) {
+            window.clearTimeout(dogVideoClearTimerRef.current);
+            dogVideoClearTimerRef.current = null;
+          }
+          dogEventActiveRef.current = false;
+          setPreviewIdleUrl(null);
+        }
+      }
+
+      const isTabHidden = typeof document !== 'undefined' && document.hidden;
+      const canRunAutoPuppy =
+        !isTabHidden &&
+        !snap.videoStudioOpen &&
+        !frontalTreeViewOpenRef.current &&
+        !snap.treeBrowserOpen &&
+        !snap.isReplayMode &&
+        snap.gameMode !== 'tactical' &&
+        !snap.isThinkingAi &&
+        !isPausedForShowcaseOrModal &&
+        !dogEventActiveRef.current;
+
+      if (canRunAutoPuppy) {
+        const isWaitingForMatch =
+          (snap.gameMode === 'multiplayer' &&
+            (!snap.activeRoom ||
+              snap.activeRoom.status === 'waiting' ||
+              snap.activeRoom.status === 'finished')) ||
+          ((snap.gameMode === 'engine' || snap.gameMode === 'local') &&
+            (snap.localMovesLen === 0 || snap.localResult !== null));
+
+        const isWaitingLongInMatch =
+          !isWaitingForMatch &&
+          snap.isViewingLatest &&
+          ((snap.gameMode === 'multiplayer' && snap.activeRoom?.status === 'active') ||
+            ((snap.gameMode === 'engine' || snap.gameMode === 'local') &&
+              snap.localMovesLen > 0 &&
+              !snap.localResult));
+
+        if (isWaitingForMatch || isWaitingLongInMatch) {
+          // Pause (don't reset) while Chess Angel briefly speaks; only count quiet time
+          if (voiceStateRef.current !== 'speaking') {
+            puppyIdleAccumMsRef.current += dtMs;
+            const thresholdMs = isWaitingForMatch ? 32_000 : 75_000;
+            const cooldownOk =
+              lastPuppyAutoAtRef.current === 0 || now - lastPuppyAutoAtRef.current >= 110_000;
+            const quietSinceSpeechOk = now - lastSpeechEndedAtRef.current >= 4_500;
+            const canPlayPuppy =
+              snap.angelModalEnabled &&
+              snap.angelVisible &&
+              Boolean(getAngelDogRunVideoUrl());
+            const canPlayDanceStars =
+              snap.angelModalEnabled &&
+              snap.angelVisible &&
+              Boolean(getAngelDanceStarsVideoUrl());
+
+            if (cooldownOk && quietSinceSpeechOk && puppyIdleAccumMsRef.current >= thresholdMs) {
+              lastPuppyAutoAtRef.current = now;
+              puppyIdleAccumMsRef.current = 0;
+              // Rotate playfully through Fluffy White Puppy, 3D Mini Hamsters Chase, and Dance with Stars
+              if (canPlayDanceStars && lastIdleCritterRef.current === 'hamsters') {
+                lastIdleCritterRef.current = 'dance_stars';
+                triggerDanceWithStarsEventRef.current({ fromStudio: false });
+              } else if (canPlayPuppy && lastIdleCritterRef.current !== 'puppy') {
+                lastIdleCritterRef.current = 'puppy';
+                triggerFluffyPuppyEventRef.current({ playVideo: true, fromStudio: false });
+              } else {
+                lastIdleCritterRef.current = 'hamsters';
+                triggerHamsterChaseEventRef.current({ fromStudio: false });
+              }
+            }
+          }
+        } else {
+          puppyIdleAccumMsRef.current = 0;
+        }
+      } else if (snap.videoStudioOpen || snap.isReplayMode || snap.gameMode === 'tactical') {
+        puppyIdleAccumMsRef.current = 0;
       }
     }, 100);
 
@@ -1940,7 +2672,12 @@ export default function App() {
     const moveRec = activeMoves[ply - 1];
     if (!moveRec || moveRec.fen !== analysis.fen) return;
 
-    const prevFen = ply === 1 ? INITIAL_FEN : activeMoves[ply - 2]?.fen;
+    const prevFen =
+      ply === 1
+        ? gameMode === 'tactical'
+          ? activePuzzle.fen
+          : INITIAL_FEN
+        : activeMoves[ply - 2]?.fen;
     const prevScore = prevFen ? prevEvalByFenRef.current.get(prevFen) : undefined;
     const postScore = analysis.lines[0].scoreCp;
 
@@ -2327,7 +3064,12 @@ export default function App() {
         setSoundEnabled((prev) => {
           const next = !prev;
           soundEngine.enabled = next;
-          if (!next) opponentSpeech.stop();
+          if (!next) {
+            opponentSpeech.stop();
+            opponentSpeech.setBackgroundMusicEnabled(musicEnabledRef.current, false);
+          } else if (musicEnabledRef.current) {
+            opponentSpeech.setBackgroundMusicEnabled(true, true);
+          }
           return next;
         });
       } else if (treeBrowser) {
@@ -2374,6 +3116,8 @@ export default function App() {
   // === Game & Interactive Coach Handlers ===
   const resetLocalState = useCallback(
     (tc: TimeControlId) => {
+      clearTacticalTimers();
+      casualSessionSnapshotRef.current = null;
       botReqIdRef.current++;
       flushPendingBotMove(false);
       resetGameCommentaryCounts();
@@ -2417,7 +3161,7 @@ export default function App() {
       };
       setLocalClocks({ w: ms, b: ms });
     },
-    [flushPendingBotMove],
+    [clearTacticalTimers, clearForkArrowsTimer, flushPendingBotMove],
   );
 
   const handleStartEngineGame = useCallback(
@@ -2657,6 +3401,7 @@ export default function App() {
   }, []);
 
   const [frontalTreeViewOpen, setFrontalTreeViewOpen] = useState(false);
+  frontalTreeViewOpenRef.current = frontalTreeViewOpen;
   const frontalTreeCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const handleToggleFrontalTreeView = useCallback(() => {
@@ -3368,6 +4113,8 @@ export default function App() {
         window.history.replaceState({}, '', url.toString());
       }
 
+      clearTacticalTimers();
+      casualSessionSnapshotRef.current = null;
       botReqIdRef.current++;
       flushPendingBotMove(false);
       awaitingDistractionModalRef.current = false;
@@ -3477,7 +4224,7 @@ export default function App() {
       }
       setBotHoldEpoch((n) => n + 1);
     },
-    [activeRoom, flushPendingBotMove, announceControlEvent],
+    [activeRoom, clearTacticalTimers, flushPendingBotMove, announceControlEvent],
   );
 
   const handleImportSaveFile = useCallback(
@@ -3505,6 +4252,7 @@ export default function App() {
 
   const handleLoadReplay = useCallback(
     (game: SavedGame) => {
+      clearTacticalTimers();
       botReqIdRef.current++;
       flushPendingBotMove(false);
       awaitingDistractionModalRef.current = false;
@@ -3521,7 +4269,7 @@ export default function App() {
       setCameraPreset('white');
       sceneRef.current?.setCameraPreset('white');
     },
-    [flushPendingBotMove],
+    [clearTacticalTimers, flushPendingBotMove],
   );
 
   const handleExitReplay = useCallback(() => {
@@ -3553,9 +4301,333 @@ export default function App() {
     sceneRef.current?.setCameraPreset(preset);
   }, []);
 
+  // === Tactical Training Mode & Casual Play Session Switchers ===
+  const loadPuzzleOntoBoard = useCallback(
+    (puzzle: TacticalPuzzle) => {
+      clearTacticalTimers();
+      clearForkArrowsTimer();
+      botReqIdRef.current++;
+      flushPendingBotMove(false);
+      awaitingDistractionModalRef.current = false;
+      holdBotUntilRef.current = 0;
+      sceneRef.current?.stopCalculationPreview(false);
+      sceneRef.current?.stopSearchTreeThinLines();
+      treeActiveOnScreenRef.current = false;
+      setTreeStatusMode('idle');
+      setTreeBrowser(null);
+      setCalcPreview(null);
+      setCoachArrows([]);
+      setOpponentMessage(null);
+      opponentSpeech.stop();
+
+      const limitMs = getPuzzleTimeLimitMs(puzzle);
+      setActivePuzzleId(puzzle.id);
+      setTacticalStepIdx(0);
+      setTacticalStatus('solving');
+      setTacticalFeedback(null);
+      setTacticalHintStage(0);
+      setTacticalLastDelta(null);
+      setTacticalLastSolveAward(null);
+      setTacticalRemainingMs(limitMs);
+      tacticalRemainingMsRef.current = limitMs;
+      tacticalElapsedMsRef.current = 0;
+      tacticalTimedOutChimedRef.current = false;
+      tacticalHadMistakeRef.current = false;
+      tacticalUsedHintRef.current = false;
+
+      setLocalMoves([]);
+      setLocalFen(puzzle.fen);
+      setLocalResult(null);
+      setMoveEvalMeta({});
+      setViewPly(0);
+      setSelectedSquare(null);
+      setPendingPromotion(null);
+
+      const cam: CameraPreset = puzzle.solverColor === 'b' ? 'black' : 'white';
+      setCameraPreset(cam);
+      sceneRef.current?.setCameraPreset(cam);
+    },
+    [clearTacticalTimers, clearForkArrowsTimer, flushPendingBotMove],
+  );
+
+  const getFilteredTacticalPuzzles = useCallback(
+    (themeFilter = tacticalThemeFilter, diffFilter = tacticalDifficultyFilter) => {
+      const list = TACTICAL_PUZZLES.filter((p) => {
+        if (themeFilter !== 'all' && p.theme !== themeFilter) return false;
+        if (diffFilter !== 'all' && p.difficulty !== diffFilter) return false;
+        return true;
+      });
+      return list.length > 0 ? list : TACTICAL_PUZZLES;
+    },
+    [tacticalThemeFilter, tacticalDifficultyFilter],
+  );
+
+  const handleStartTacticalTraining = useCallback(
+    (puzzleId?: string) => {
+      // Snapshot active Casual Play session so switching back restores exact board & clocks
+      if (gameMode === 'engine' || gameMode === 'local') {
+        casualSessionSnapshotRef.current = {
+          mode: gameMode,
+          fen: localFen,
+          moves: [...localMoves],
+          result: localResult,
+          clocks: { w: localClockMsRef.current.w, b: localClockMsRef.current.b },
+          moveEvalMeta: { ...moveEvalMeta },
+          engineLevel,
+          humanColorActual,
+          humanColorPref,
+          timeControl,
+        };
+      }
+      if (activeRoom) {
+        mpClientRef.current?.leaveRoom();
+        setActiveRoom(null);
+        setMyRoomRole(null);
+        const url = new URL(window.location.href);
+        url.searchParams.delete('room');
+        window.history.replaceState({}, '', url.toString());
+      }
+
+      let targetPuzzle: TacticalPuzzle | undefined;
+      if (puzzleId) {
+        targetPuzzle = TACTICAL_PUZZLES.find((p) => p.id === puzzleId);
+      }
+      if (!targetPuzzle) {
+        const pool = getFilteredTacticalPuzzles();
+        const firstUnsolved = pool.find((p) => !tacticalStats.puzzleRecords[p.id]?.solved);
+        targetPuzzle = firstUnsolved || activePuzzle || pool[0];
+      }
+
+      setActiveReplayGame(null);
+      setReplayPlaying(false);
+      setGameMode('tactical');
+      loadPuzzleOntoBoard(targetPuzzle);
+      setDockCollapsed(true);
+    },
+    [
+      gameMode,
+      localFen,
+      localMoves,
+      localResult,
+      moveEvalMeta,
+      engineLevel,
+      humanColorActual,
+      humanColorPref,
+      timeControl,
+      activeRoom,
+      getFilteredTacticalPuzzles,
+      tacticalStats.puzzleRecords,
+      activePuzzle,
+      loadPuzzleOntoBoard,
+    ],
+  );
+
+  const handleReturnToCasualPlay = useCallback(() => {
+    clearTacticalTimers();
+    clearForkArrowsTimer();
+    setCoachArrows([]);
+    setSelectedSquare(null);
+    setPendingPromotion(null);
+
+    const snap = casualSessionSnapshotRef.current;
+    if (snap) {
+      setEngineLevel(snap.engineLevel);
+      setHumanColorActual(snap.humanColorActual);
+      setHumanColorPref(snap.humanColorPref);
+      setTimeControl(snap.timeControl);
+      localClockMsRef.current = { ...snap.clocks };
+      lastRenderedLocalSecRef.current = {
+        w: Math.ceil(snap.clocks.w / 1000),
+        b: Math.ceil(snap.clocks.b / 1000),
+      };
+      setLocalClocks({ ...snap.clocks });
+      setLocalMoves([...snap.moves]);
+      setLocalFen(snap.fen);
+      setLocalResult(snap.result);
+      setMoveEvalMeta({ ...snap.moveEvalMeta });
+      setViewPly(snap.moves.length);
+      setGameMode(snap.mode);
+      setActiveTab('play');
+      setDockCollapsed(true);
+
+      const cam: CameraPreset =
+        snap.mode === 'engine' && snap.humanColorActual === 'b' ? 'black' : 'white';
+      setCameraPreset(cam);
+      sceneRef.current?.setCameraPreset(cam);
+      return;
+    }
+
+    setActiveTab('play');
+    handleStartEngineGame(engineLevel, humanColorPref, timeControl, 'none');
+  }, [
+    clearTacticalTimers,
+    clearForkArrowsTimer,
+    handleStartEngineGame,
+    engineLevel,
+    humanColorPref,
+    timeControl,
+  ]);
+
+  const handleTacticalNextPuzzle = useCallback(() => {
+    const pool = getFilteredTacticalPuzzles();
+    const curIdx = pool.findIndex((p) => p.id === activePuzzle.id);
+    // Prefer next unsolved in pool, otherwise sequential wrap-around
+    for (let offset = 1; offset <= pool.length; offset++) {
+      const candidate = pool[(Math.max(0, curIdx) + offset) % pool.length];
+      if (!tacticalStats.puzzleRecords[candidate.id]?.solved) {
+        loadPuzzleOntoBoard(candidate);
+        return;
+      }
+    }
+    const nextSequential = pool[(Math.max(0, curIdx) + 1) % pool.length];
+    loadPuzzleOntoBoard(nextSequential);
+  }, [getFilteredTacticalPuzzles, activePuzzle.id, tacticalStats.puzzleRecords, loadPuzzleOntoBoard]);
+
+  const handleTacticalPrevPuzzle = useCallback(() => {
+    const pool = getFilteredTacticalPuzzles();
+    const curIdx = pool.findIndex((p) => p.id === activePuzzle.id);
+    const prevIdx = curIdx <= 0 ? pool.length - 1 : curIdx - 1;
+    loadPuzzleOntoBoard(pool[prevIdx]);
+  }, [getFilteredTacticalPuzzles, activePuzzle.id, loadPuzzleOntoBoard]);
+
+  const handleTacticalRetry = useCallback(() => {
+    loadPuzzleOntoBoard(activePuzzle);
+  }, [activePuzzle, loadPuzzleOntoBoard]);
+
+  const handleTacticalHint = useCallback(() => {
+    if (tacticalStatus !== 'solving' && tacticalStatus !== 'wrong') return;
+    const expectedUci = activePuzzle.solutionUci[tacticalStepIdx];
+    if (!expectedUci || expectedUci.length < 4) return;
+
+    if (!tacticalUsedHintRef.current) {
+      tacticalUsedHintRef.current = true;
+      setTacticalStats((prev) => recordTacticalHintUsed(prev));
+    }
+
+    const fromSq = expectedUci.slice(0, 2);
+    const toSq = expectedUci.slice(2, 4);
+
+    if (tacticalHintStage === 0) {
+      setSelectedSquare(fromSq);
+      setTacticalHintStage(1);
+      setTacticalStatus('solving');
+      setTacticalFeedback(`Hint: Look for a forcing move with the piece on ${fromSq}.`);
+    } else {
+      const san = uciToSanInPosition(localFen, expectedUci);
+      setSelectedSquare(fromSq);
+      setCoachArrows([
+        {
+          from: fromSq,
+          to: toSq,
+          kind: activePuzzle.theme === 'fork' ? 'fork' : 'primary',
+        },
+      ]);
+      setTacticalHintStage(2);
+      setTacticalStatus('solving');
+      setTacticalFeedback(`Winning move: ${san}`);
+
+      if (angelVoiceRef.current === 'on') {
+        const hintMsg = createHintShownMessage(san);
+        if (hintMsg) {
+          setOpponentMessage(hintMsg);
+          opponentSpeech.unlock();
+          opponentSpeech.playClip(hintMsg.clipId, 'on', soundEnabledRef.current);
+        }
+      }
+    }
+  }, [tacticalStatus, activePuzzle, tacticalStepIdx, tacticalHintStage, localFen]);
+
+  const handleTacticalShowSolution = useCallback(() => {
+    if (tacticalStatus === 'solved' || tacticalStatus === 'solution-shown') return;
+    clearTacticalTimers();
+    setSelectedSquare(null);
+    setCoachArrows([]);
+
+    if (!tacticalHadMistakeRef.current) {
+      tacticalHadMistakeRef.current = true;
+      const { next, ratingDelta } = recordTacticalMistakeOrReveal(tacticalStats, activePuzzle);
+      setTacticalStats(next);
+      setTacticalLastDelta(ratingDelta);
+    }
+
+    const remainingUcis = activePuzzle.solutionUci.slice(tacticalStepIdx);
+    if (remainingUcis.length === 0) {
+      setTacticalStatus('solution-shown');
+      showPuzzleMotifArrows(activePuzzle);
+      return;
+    }
+
+    setTacticalStatus('opponent-replying');
+    let stepFen = localFen;
+    let stepMoves = [...localMoves];
+
+    remainingUcis.forEach((uci, idx) => {
+      const timerId = window.setTimeout(() => {
+        try {
+          const chess = new Chess(stepFen);
+          const from = uci.slice(0, 2);
+          const to = uci.slice(2, 4);
+          const promotion = (uci.slice(4, 5) || undefined) as PieceType | undefined;
+          const res = chess.move({ from, to, promotion });
+          if (!res) return;
+
+          const nextFen = chess.fen();
+          const rec: MoveRecord = {
+            ply: stepMoves.length + 1,
+            san: res.san,
+            uci: `${res.from}${res.to}${res.promotion || ''}`,
+            from: res.from,
+            to: res.to,
+            color: res.color as PieceColor,
+            piece: res.piece as PieceType,
+            captured: res.captured as PieceType | undefined,
+            promotion: res.promotion as PieceType | undefined,
+            fen: nextFen,
+            timestamp: Date.now(),
+          };
+
+          stepFen = nextFen;
+          stepMoves = [...stepMoves, rec];
+          lastMoveAnimHintRef.current = { from: res.from, to: res.to };
+          setLocalMoves([...stepMoves]);
+          setLocalFen(nextFen);
+          setViewPly(stepMoves.length);
+
+          if (chess.isCheckmate()) soundEngine.playGameOver();
+          else if (chess.inCheck()) soundEngine.playCheck();
+          else if (res.captured) soundEngine.playCapture();
+          else soundEngine.playMove();
+
+          if (idx === remainingUcis.length - 1) {
+            setTacticalStepIdx(activePuzzle.solutionUci.length - 1);
+            setTacticalStatus('solution-shown');
+            setTacticalFeedback(null);
+            showPuzzleMotifArrows(activePuzzle);
+          }
+        } catch {
+          setTacticalStatus('solution-shown');
+        }
+      }, idx * 580 + 120);
+      tacticalTimerIdsRef.current.push(timerId);
+    });
+  }, [
+    tacticalStatus,
+    clearTacticalTimers,
+    tacticalStats,
+    activePuzzle,
+    tacticalStepIdx,
+    localFen,
+    localMoves,
+    showPuzzleMotifArrows,
+  ]);
+
   const handlePrimaryHeaderAction = useCallback(() => {
     if (isReplayMode) {
       handleExitReplay();
+      return;
+    }
+    if (gameMode === 'tactical') {
+      handleTacticalNextPuzzle();
       return;
     }
     if (gameMode === 'multiplayer' && activeRoom) {
@@ -3571,6 +4643,7 @@ export default function App() {
     isReplayMode,
     handleExitReplay,
     gameMode,
+    handleTacticalNextPuzzle,
     activeRoom,
     handleLeaveMultiplayer,
     handleStartLocalGame,
@@ -3678,34 +4751,58 @@ export default function App() {
         </div>
       )}
 
-      {/* Top Edge Transparent Chess Clock, Player Names & Chess Angel Candidate Strip */}
-      <TopBar
-        whiteName={whiteName}
-        blackName={blackName}
-        whiteClockMs={whiteClockMs}
-        blackClockMs={blackClockMs}
-        isTimed={isTimed}
-        turn={displayedTurn}
-        materialDiff={materialDiff}
-        isCheck={displayedIsCheck}
-        gameResult={activeResult}
-        statusNote={statusNote}
-        angelCandidate={angelCandidate}
-        isThinkingAi={isThinkingAi}
-        treeHoldLabel={treeHoldLabel}
-        onSkipTreeHold={
-          treeStatusMode !== 'idle'
-            ? handleContinueFromTree
-            : undefined
-        }
-        isReplayMode={isReplayMode}
-        replayTitle={activeReplayGame?.title}
-        onPrimaryAction={handlePrimaryHeaderAction}
-        onSaveCurrentGame={() => saveCurrentGameToArchive()}
-        onOpenReplayCurrent={handleOpenReplayCurrent}
-        canSaveCurrent={activeMoves.length > 0 && !isReplayMode}
-        alreadySaved={Boolean(currentFingerprint && savedGameFingerprints.has(currentFingerprint))}
-      />
+      {/* Top Edge HUD: Tactical Training Bar in 'tactical' mode, or Transparent Clock & Player Strip in Casual Play */}
+      {gameMode === 'tactical' ? (
+        <TacticalTrainingHud
+          puzzle={activePuzzle}
+          status={tacticalStatus}
+          solverStepNumber={Math.floor(tacticalStepIdx / 2) + 1}
+          totalSolverSteps={Math.ceil(activePuzzle.solutionUci.length / 2)}
+          feedbackText={tacticalFeedback}
+          lastRatingDelta={tacticalLastDelta}
+          lastSolveAward={tacticalLastSolveAward}
+          timeLimitMs={activePuzzleTimeLimitMs}
+          remainingMs={tacticalRemainingMs}
+          hintStage={tacticalHintStage}
+          stats={tacticalStats}
+          angelVisible={angelVisible}
+          onPrevPuzzle={handleTacticalPrevPuzzle}
+          onNextPuzzle={handleTacticalNextPuzzle}
+          onRetryPuzzle={handleTacticalRetry}
+          onRequestHint={handleTacticalHint}
+          onShowSolution={handleTacticalShowSolution}
+          onOpenTrainingDeck={() => {
+            setActiveTab('training');
+            setDockCollapsed(false);
+          }}
+          onSwitchToCasualPlay={handleReturnToCasualPlay}
+        />
+      ) : (
+        <TopBar
+          whiteName={whiteName}
+          blackName={blackName}
+          whiteClockMs={whiteClockMs}
+          blackClockMs={blackClockMs}
+          isTimed={isTimed}
+          turn={displayedTurn}
+          materialDiff={materialDiff}
+          isCheck={displayedIsCheck}
+          gameResult={activeResult}
+          statusNote={statusNote}
+          angelCandidate={angelCandidate}
+          isThinkingAi={isThinkingAi}
+          treeHoldLabel={treeHoldLabel}
+          onSkipTreeHold={treeStatusMode !== 'idle' ? handleContinueFromTree : undefined}
+          isReplayMode={isReplayMode}
+          replayTitle={activeReplayGame?.title}
+          onPrimaryAction={handlePrimaryHeaderAction}
+          onSaveCurrentGame={() => saveCurrentGameToArchive()}
+          onOpenReplayCurrent={handleOpenReplayCurrent}
+          canSaveCurrent={activeMoves.length > 0 && !isReplayMode}
+          alreadySaved={Boolean(currentFingerprint && savedGameFingerprints.has(currentFingerprint))}
+          onEnterTacticalTraining={() => handleStartTacticalTraining()}
+        />
+      )}
 
       {/* Transparent Bottom-Left Full Screen / Reduce Button + Prominent Version Mark */}
       <div
@@ -3739,12 +4836,12 @@ export default function App() {
         <button
           type="button"
           onClick={handleTriggerCreatorTribute}
-          aria-label="ChessAngel 3D v3.3"
-          title="ChessAngel 3D v3.3"
+          aria-label="ChessAngel 3D v4.0"
+          title="ChessAngel 3D v4.0"
           className="pointer-events-auto inline-flex items-baseline px-1.5 py-0.5 rounded-md bg-transparent font-display text-sm sm:text-base font-medium tracking-tight text-[#f5f0e6]/85 hover:text-[#f3d38b] [text-shadow:0_1px_6px_rgba(0,0,0,0.95)] transition-colors cursor-pointer whitespace-nowrap focus-visible:outline-2 focus-visible:outline-[#e3be78]"
         >
           <span className="hidden sm:inline">ChessAngel 3D&nbsp;</span>
-          <span>v3.3</span>
+          <span>v4.0</span>
         </button>
       </div>
 
@@ -3790,13 +4887,27 @@ export default function App() {
           const next = !soundEnabled;
           setSoundEnabled(next);
           soundEngine.enabled = next;
-          if (!next) opponentSpeech.stop();
+          if (!next) {
+            opponentSpeech.stop();
+            opponentSpeech.setBackgroundMusicEnabled(musicEnabledRef.current, false);
+          } else if (musicEnabledRef.current) {
+            opponentSpeech.unlock();
+            opponentSpeech.setBackgroundMusicEnabled(true, true);
+          }
         }}
+        musicEnabled={musicEnabled}
+        onToggleMusic={handleToggleMusic}
+        musicTracks={musicTracks}
+        activeMusicTrackIndex={activeMusicTrackIndex}
+        onSelectMusicTrack={handleSelectMusicTrack}
         angelVoice={angelVoice}
         onChangeAngelVoice={(mode) => {
           setAngelVoice(mode);
           if (mode === 'off') {
             opponentSpeech.stop();
+            if (!musicEnabledRef.current) {
+              opponentSpeech.stopBackgroundMusic();
+            }
             setOpponentMessage(null);
             if (awaitingDistractionModalRef.current || holdBotUntilRef.current > 0) {
               awaitingDistractionModalRef.current = false;
@@ -3828,10 +4939,16 @@ export default function App() {
         onToggleSearchTree={handleToggleSearchTree}
         onReplaySearchTree={() => handleShowFullSearchTree()}
         onExportTreeJpg={handleOpenFrontalTreeView}
-        canUndo={gameMode !== 'multiplayer' && !isReplayMode && localMoves.length > 0}
+        canUndo={
+          gameMode !== 'multiplayer' &&
+          gameMode !== 'tactical' &&
+          !isReplayMode &&
+          localMoves.length > 0
+        }
         onUndo={handleUndoLocal}
         onResignLocal={() => {
-          if (localResult || gameMode === 'multiplayer' || isReplayMode) return;
+          if (localResult || gameMode === 'multiplayer' || gameMode === 'tactical' || isReplayMode)
+            return;
           botReqIdRef.current++;
           flushPendingBotMove(false);
           awaitingDistractionModalRef.current = false;
@@ -3848,7 +4965,7 @@ export default function App() {
           soundEngine.playGameOver();
           announceControlEvent(createResignMessage(winner));
         }}
-        isGameActive={!activeResult && !isReplayMode}
+        isGameActive={!activeResult && !isReplayMode && gameMode !== 'tactical'}
         analysisEnabled={analysisEnabled}
         onToggleAnalysis={() => setAnalysisEnabled((v) => !v)}
         showBestMoveArrow={showBestMoveArrow}
@@ -3900,11 +5017,24 @@ export default function App() {
             handleExitReplay();
           }
         }}
-        canSaveCurrent={!isReplayMode}
+        canSaveCurrent={!isReplayMode && gameMode !== 'tactical'}
         justSaved={justSaved}
         onOpenLoadDrawer={() => announceControlEvent(createLoadGameMessage())}
         onSecretStudioTrigger={handleSecretStudioTrigger}
         onTitleTribute={handleTriggerCreatorTribute}
+        onStartTacticalTraining={handleStartTacticalTraining}
+        onReturnToCasualPlay={handleReturnToCasualPlay}
+        activePuzzle={activePuzzle}
+        tacticalStats={tacticalStats}
+        tacticalThemeFilter={tacticalThemeFilter}
+        onChangeTacticalThemeFilter={setTacticalThemeFilter}
+        tacticalDifficultyFilter={tacticalDifficultyFilter}
+        onChangeTacticalDifficultyFilter={setTacticalDifficultyFilter}
+        onResetTacticalStats={() => setTacticalStats(resetTacticalStats())}
+        onTacticalHint={handleTacticalHint}
+        onTacticalRetry={handleTacticalRetry}
+        onTacticalShowSolution={handleTacticalShowSolution}
+        onTacticalNextPuzzle={handleTacticalNextPuzzle}
       />
 
       {/* Pawn Promotion Chooser Modal */}
@@ -3933,6 +5063,9 @@ export default function App() {
         treeBrowser={treeBrowser}
         idlePreviewNonce={idlePreviewNonce}
         forcedIdleUrl={previewIdleUrl}
+        forcedIdleCueAtSec={dogRunCueSec}
+        onForcedIdleCueReached={handleForcedIdleCueReached}
+        danceWithStarsActive={danceStarsActive}
         onSelectTreeSimulation={handleSelectTreeSimulation}
         onStepTreeSimulation={handleStepTreeSimulation}
         onToggleTreeOnlyTopThree={handleToggleTreeOnlyTopThree}
@@ -4261,6 +5394,15 @@ export default function App() {
               setPreviewIdleUrl(specificIdleUrl || null);
               setOpponentMessage(null);
               setIdlePreviewNonce((n) => n + 1);
+            }}
+            onTriggerDogEvent={({ playVideo }) => {
+              triggerFluffyPuppyEvent({ playVideo, fromStudio: true });
+            }}
+            onTriggerHamsterChase={() => {
+              triggerHamsterChaseEvent({ fromStudio: true });
+            }}
+            onTriggerDanceStarsEvent={() => {
+              triggerDanceWithStarsEvent({ fromStudio: true });
             }}
           />
         </Suspense>

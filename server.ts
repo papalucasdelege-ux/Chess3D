@@ -33,6 +33,8 @@ interface ConnectedClient {
   clientId: string;
   name: string;
   roomId: string | null;
+  msgWindowStart: number;
+  msgCount: number;
 }
 
 interface InternalRoom {
@@ -81,6 +83,10 @@ function sanitizeName(raw: unknown): string {
 }
 
 const MAX_ACTIVE_ROOMS = 500;
+const MAX_WS_CLIENTS = 1000;
+const MAX_MATCHMAKING_QUEUE = 200;
+const WS_RATE_WINDOW_MS = 5_000;
+const WS_RATE_MAX_MSGS = 50;
 
 function isSafeMapKey(key: string): boolean {
   if (!/^[a-z0-9_]{1,40}$/.test(key)) return false;
@@ -481,6 +487,10 @@ function handleMessage(ws: WebSocket, raw: string): void {
       );
 
       if (matchIdx !== -1) {
+        if (rooms.size >= MAX_ACTIVE_ROOMS) {
+          send(ws, { type: 'room:error', message: 'Server room capacity reached. Try again shortly.' });
+          return;
+        }
         const opponent = matchmakingQueue.splice(matchIdx, 1)[0];
         const room = createRoomInstance(tc, opponent.skinId || skin, false);
         const swap = Math.random() < 0.5;
@@ -514,6 +524,10 @@ function handleMessage(ws: WebSocket, raw: string): void {
         send(whiteEntry.ws, { type: 'room:joined', room: snapshot, role: 'w' });
         send(blackEntry.ws, { type: 'room:joined', room: snapshot, role: 'b' });
       } else {
+        if (matchmakingQueue.length >= MAX_MATCHMAKING_QUEUE) {
+          send(ws, { type: 'room:error', message: 'Matchmaking queue is full. Try again shortly.' });
+          return;
+        }
         matchmakingQueue.push({
           ws,
           clientId: client.clientId,
@@ -767,6 +781,10 @@ async function startServer(): Promise<void> {
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader(
+      'Permissions-Policy',
+      'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+    );
     const scriptPolicy = IS_PROD
       ? "script-src 'self' 'unsafe-inline'"
       : "script-src 'self' 'unsafe-inline' 'unsafe-eval'";
@@ -795,6 +813,8 @@ async function startServer(): Promise<void> {
       lowerPath === '/server.ts' ||
       lowerPath === '/package.json' ||
       lowerPath === '/package-lock.json' ||
+      lowerPath === '/bun.lock' ||
+      lowerPath === '/bun.lockb' ||
       lowerPath === '/tsconfig.json' ||
       lowerPath === '/vite.config.ts' ||
       lowerPath.startsWith('/.env') ||
@@ -859,7 +879,7 @@ async function startServer(): Promise<void> {
   app.use(
     '/voices',
     express.static(resolvedVoicesDir, {
-      maxAge: '7d',
+      maxAge: IS_PROD ? '7d' : 0,
       acceptRanges: true,
       fallthrough: true,
       setHeaders: (res) => {
@@ -970,9 +990,9 @@ async function startServer(): Promise<void> {
 
   // Serve public media assets (including Chess Angel 3:4 portrait MP4 videos, guaranteed audio-free) with HTTP 206 Range support
   app.use('/assets', (req, _res, next) => {
-    // Transparent fallback: if /assets/aistudio/angel_(case|idle|escape)_<key>.mp4 is requested
+    // Transparent fallback: if /assets/aistudio/angel_(case|idle|escape|default|special)_<key>.mp4 is requested
     // when only builtin_<key>.mp4 exists on disk, rewrite cleanly to the builtin file so <video> never 404s
-    const mReq = /^\/aistudio\/angel_(case|idle|escape|default)_([a-z0-9_]+)\.mp4$/i.exec(req.path);
+    const mReq = /^\/aistudio\/angel_(case|idle|escape|default|special)_([a-z0-9_]+)\.mp4$/i.exec(req.path);
     if (mReq) {
       const requestedAbs = path.resolve(publicAssetsDir, '.' + req.path);
       if (
@@ -1006,7 +1026,7 @@ async function startServer(): Promise<void> {
   app.use(
     '/assets',
     express.static(publicAssetsDir, {
-      maxAge: '7d',
+      maxAge: IS_PROD ? '7d' : 0,
       acceptRanges: true,
       fallthrough: true,
       setHeaders: (res) => {
@@ -1039,6 +1059,9 @@ async function startServer(): Promise<void> {
     mouseIdleWake?: string;
     mouseIdleTimeoutSec?: number;
     mouseIdleHoldSec?: Record<string, number>;
+    dogRunVideo?: string;
+    dogRunJumpSec?: number;
+    danceStarsVideo?: string;
     defaultSpeaking?: string;
     groups: Record<string, string>;
     cases: Record<string, string>;
@@ -1067,8 +1090,72 @@ async function startServer(): Promise<void> {
     seductionTriggerMode?: 'balanced' | 'frequent' | 'dominant' | 'tactical';
     thankJanAudioUrl?: string;
     thankJanAudioDuration?: number;
+    musicTracks?: Array<{ id: string; title: string; url: string }>;
   }
   const seductionAssetMp3Path = path.join(aistudioAssetsDir, 'seduction.mp3');
+
+  const formatMusicTrackTitle = (filename: string): string => {
+    const lower = filename.toLowerCase();
+    if (lower.includes('a_beautiful_queen_and_her_infinite_re')) {
+      return "Queen's Infinite Reign";
+    }
+    if (lower.includes('chess_angle_rap') || lower.includes('chess_angel_rap')) {
+      return 'Chess Angel Rap';
+    }
+    const base = filename
+      .replace(/\.mp3$/i, '')
+      .replace(/_[0-9a-f]{8}$/i, '')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!base) return 'Chess Angel Track';
+    return base.replace(/\b\w/g, (c) => c.toUpperCase()).slice(0, 48);
+  };
+
+  const discoverMusicTracks = (): Array<{ id: string; title: string; url: string }> => {
+    const tracks: Array<{ id: string; title: string; url: string }> = [];
+    const seenUrls = new Set<string>();
+    const excluded = new Set(['seduction.mp3', 'seduction_6.mp3', 'thank_jan.mp3']);
+    try {
+      if (fs.existsSync(aistudioAssetsDir)) {
+        const mp3Entries = fs
+          .readdirSync(aistudioAssetsDir, { withFileTypes: true })
+          .filter(
+            (e) =>
+              e.isFile() &&
+              /\.mp3$/i.test(e.name) &&
+              !excluded.has(e.name.toLowerCase()) &&
+              !e.name.includes('.tmp'),
+          )
+          .sort((a, b) => {
+            const aQueen = a.name.toLowerCase().includes('a_beautiful_queen') ? 0 : 1;
+            const bQueen = b.name.toLowerCase().includes('a_beautiful_queen') ? 0 : 1;
+            return aQueen - bQueen || a.name.localeCompare(b.name);
+          });
+        for (const entry of mp3Entries) {
+          const full = path.join(aistudioAssetsDir, entry.name);
+          const stat = fs.statSync(full);
+          if (stat.size < 200 * 1024) continue;
+          const url = `/assets/aistudio/${entry.name}`;
+          if (seenUrls.has(url)) continue;
+          seenUrls.add(url);
+          const id = entry.name
+            .replace(/\.mp3$/i, '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '_')
+            .replace(/^_+|_+$/g, '');
+          tracks.push({
+            id: id || 'chess_angel_track',
+            title: formatMusicTrackTitle(entry.name),
+            url,
+          });
+        }
+      }
+    } catch {
+      // ignore discovery errors
+    }
+    return tracks;
+  };
   const execFileAsync = promisify(execFile);
 
   const presetToCrf = (preset: AngelCompressionPreset | undefined): number | null => {
@@ -1619,6 +1706,7 @@ async function startServer(): Promise<void> {
       idleVariants: {},
       mouseIdleTimeoutSec: 20,
       mouseIdleHoldSec: {},
+      dogRunJumpSec: 4.2,
       groups: {},
       cases: {},
       escapes: {},
@@ -1655,19 +1743,20 @@ async function startServer(): Promise<void> {
           fs.readFileSync(angelVideoMapPath, 'utf8'),
         ) as Partial<StoredAngelVideoMap>;
         if (isSafeLocalMediaUrl(parsed.idle)) {
-          result.idle = parsed.idle;
-          result.idleVariants.idle_1 = parsed.idle;
+          const clean = parsed.idle.split('?')[0];
+          result.idle = clean;
+          result.idleVariants.idle_1 = clean;
         }
         if (parsed.idleVariants && typeof parsed.idleVariants === 'object') {
           for (const [k, v] of Object.entries(parsed.idleVariants)) {
-            if (isSafeMapKey(k) && isSafeLocalMediaUrl(v)) result.idleVariants[k] = v;
+            if (isSafeMapKey(k) && isSafeLocalMediaUrl(v)) result.idleVariants[k] = v.split('?')[0];
           }
         }
         if (isSafeLocalMediaUrl(parsed.mouseIdle)) {
-          result.mouseIdle = parsed.mouseIdle;
+          result.mouseIdle = parsed.mouseIdle.split('?')[0];
         }
         if (isSafeLocalMediaUrl(parsed.mouseIdleWake)) {
-          result.mouseIdleWake = parsed.mouseIdleWake;
+          result.mouseIdleWake = parsed.mouseIdleWake.split('?')[0];
         }
         if (
           typeof parsed.mouseIdleTimeoutSec === 'number' &&
@@ -1684,26 +1773,40 @@ async function startServer(): Promise<void> {
         ) {
           for (const [k, v] of Object.entries(parsed.mouseIdleHoldSec)) {
             if (isSafeLocalMediaUrl(k) && typeof v === 'number' && Number.isFinite(v) && v > 0) {
-              result.mouseIdleHoldSec[k] = v;
+              result.mouseIdleHoldSec[k.split('?')[0]] = v;
             }
           }
         }
+        if (isSafeLocalMediaUrl(parsed.dogRunVideo)) {
+          result.dogRunVideo = parsed.dogRunVideo.split('?')[0];
+        }
+        if (isSafeLocalMediaUrl(parsed.danceStarsVideo)) {
+          result.danceStarsVideo = parsed.danceStarsVideo.split('?')[0];
+        }
+        if (
+          typeof parsed.dogRunJumpSec === 'number' &&
+          Number.isFinite(parsed.dogRunJumpSec) &&
+          parsed.dogRunJumpSec >= 0 &&
+          parsed.dogRunJumpSec <= 30
+        ) {
+          result.dogRunJumpSec = Math.round(parsed.dogRunJumpSec * 10) / 10;
+        }
         if (isSafeLocalMediaUrl(parsed.defaultSpeaking)) {
-          result.defaultSpeaking = parsed.defaultSpeaking;
+          result.defaultSpeaking = parsed.defaultSpeaking.split('?')[0];
         }
         if (parsed.groups && typeof parsed.groups === 'object') {
           for (const [k, v] of Object.entries(parsed.groups)) {
-            if (isSafeMapKey(k) && isSafeLocalMediaUrl(v)) result.groups[k] = v;
+            if (isSafeMapKey(k) && isSafeLocalMediaUrl(v)) result.groups[k] = v.split('?')[0];
           }
         }
         if (parsed.cases && typeof parsed.cases === 'object') {
           for (const [k, v] of Object.entries(parsed.cases)) {
-            if (isSafeMapKey(k) && isSafeLocalMediaUrl(v)) result.cases[k] = v;
+            if (isSafeMapKey(k) && isSafeLocalMediaUrl(v)) result.cases[k] = v.split('?')[0];
           }
         }
         if (parsed.escapes && typeof parsed.escapes === 'object') {
           for (const [k, v] of Object.entries(parsed.escapes)) {
-            if (isSafeMapKey(k) && isSafeLocalMediaUrl(v)) result.escapes[k] = v;
+            if (isSafeMapKey(k) && isSafeLocalMediaUrl(v)) result.escapes[k] = v.split('?')[0];
           }
         }
         if (parsed.escapeEnabled && typeof parsed.escapeEnabled === 'object') {
@@ -1768,7 +1871,7 @@ async function startServer(): Promise<void> {
         if (parsed.videoMaxPlays && typeof parsed.videoMaxPlays === 'object' && result.videoMaxPlays) {
           for (const [k, v] of Object.entries(parsed.videoMaxPlays)) {
             if (
-              /^(idle|mouse_idle|default|group|case|escape):[a-z0-9_]{1,40}$/.test(k) &&
+              /^(idle|mouse_idle|special|default|group|case|escape):[a-z0-9_]{1,40}$/.test(k) &&
               !k.endsWith(':__proto__') &&
               !k.endsWith(':constructor') &&
               !k.endsWith(':prototype') &&
@@ -1783,7 +1886,7 @@ async function startServer(): Promise<void> {
         if (parsed.videoPlayToEnd && typeof parsed.videoPlayToEnd === 'object' && result.videoPlayToEnd) {
           for (const [k, v] of Object.entries(parsed.videoPlayToEnd)) {
             if (
-              /^(idle|mouse_idle|default|group|case|escape):[a-z0-9_]{1,40}$/.test(k) &&
+              /^(idle|mouse_idle|special|default|group|case|escape):[a-z0-9_]{1,40}$/.test(k) &&
               !k.endsWith(':__proto__') &&
               !k.endsWith(':constructor') &&
               !k.endsWith(':prototype') &&
@@ -1869,18 +1972,33 @@ async function startServer(): Promise<void> {
       // Fall back to disk discovery
     }
 
-    // Discover seduction.mp3 & seduction_<N>.mp3 durations & cache-busted URLs from /public/voices/female/
+    // Discover seduction audio duration & canonical URL (prefer uploaded MP3 in /assets/aistudio/)
     try {
-      if (fs.existsSync(seductionVoiceMp3Path)) {
-        const sStat = fs.statSync(seductionVoiceMp3Path);
+      const uploadedSeductionUrl =
+        '/assets/aistudio/Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3';
+      const uploadedSeductionPath = path.join(
+        aistudioAssetsDir,
+        'Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3',
+      );
+      if (!result.seductionAudioUrl) {
+        result.seductionAudioUrl = fs.existsSync(uploadedSeductionPath)
+          ? uploadedSeductionUrl
+          : '/voices/female/seduction.mp3';
+      } else {
+        result.seductionAudioUrl = result.seductionAudioUrl.split('?')[0];
+      }
+
+      const activeSedDiskPath = result.seductionAudioUrl.startsWith('/assets/aistudio/')
+        ? path.join(aistudioAssetsDir, path.basename(result.seductionAudioUrl))
+        : seductionVoiceMp3Path;
+
+      if (fs.existsSync(activeSedDiskPath)) {
+        const sStat = fs.statSync(activeSedDiskPath);
         if (!IS_PROD || !result.seductionAudioDuration) {
-          const sDur = getVideoDurationSec(seductionVoiceMp3Path, sStat.mtimeMs);
+          const sDur = getVideoDurationSec(activeSedDiskPath, sStat.mtimeMs);
           if (sDur !== null) {
             result.seductionAudioDuration = sDur;
           }
-        }
-        if (!result.seductionAudioUrl) {
-          result.seductionAudioUrl = `/voices/female/seduction.mp3?v=${Math.floor(sStat.mtimeMs)}`;
         }
       }
       const voicesFemaleDir = path.dirname(seductionVoiceMp3Path);
@@ -1896,7 +2014,7 @@ async function startServer(): Promise<void> {
           const vStat = fs.statSync(fullMp3);
           const existingUrl = result.seductionAudioVariants[variantKey];
           if (!existingUrl || (!IS_PROD && stripQueryFromAssetUrl(existingUrl) === entry.name)) {
-            result.seductionAudioVariants[variantKey] = `/voices/female/${entry.name}?v=${Math.floor(vStat.mtimeMs)}`;
+            result.seductionAudioVariants[variantKey] = `/voices/female/${entry.name}`;
           }
           if (!IS_PROD || !result.seductionAudioDurations[variantKey]) {
             const vDur = getVideoDurationSec(fullMp3, vStat.mtimeMs);
@@ -1915,7 +2033,9 @@ async function startServer(): Promise<void> {
             }
           }
           if (!result.thankJanAudioUrl) {
-            result.thankJanAudioUrl = `/voices/female/thank_jan.mp3?v=${Math.floor(tStat.mtimeMs)}`;
+            result.thankJanAudioUrl = '/voices/female/thank_jan.mp3';
+          } else {
+            result.thankJanAudioUrl = result.thankJanAudioUrl.split('?')[0];
           }
         }
       }
@@ -1974,30 +2094,30 @@ async function startServer(): Promise<void> {
             }
           }
 
-          const m = /^angel_(idle|mouse_idle|default|group|case|escape)_([a-z0-9_]+)\.mp4$/i.exec(
+          const m = /^angel_(idle|mouse_idle|special|default|group|case|escape)_([a-z0-9_]+)\.mp4$/i.exec(
             entry.name,
           );
           if (!m) continue;
           const kind = m[1].toLowerCase();
           const key = m[2].toLowerCase();
-          const versionedUrl = `${cleanPublicPath}?v=${Math.floor(stat.mtimeMs)}`;
+          const canonicalUrl = cleanPublicPath;
 
           if (kind === 'idle') {
             const normKey = key === 'idle_listening' ? 'idle_1' : key;
             const existing = result.idleVariants[normKey];
             if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
-              result.idleVariants[normKey] = versionedUrl;
+              result.idleVariants[normKey] = canonicalUrl;
             }
           } else if (kind === 'mouse_idle') {
             if (key === 'wake') {
               const existing = result.mouseIdleWake;
               if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
-                result.mouseIdleWake = versionedUrl;
+                result.mouseIdleWake = canonicalUrl;
               }
             } else {
               const existing = result.mouseIdle;
               if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
-                result.mouseIdle = versionedUrl;
+                result.mouseIdle = canonicalUrl;
               }
               if (!IS_PROD || result.mouseIdleHoldSec?.[cleanPublicPath] === undefined) {
                 const holdSec = getMouseIdleSleepHoldSec(full, stat.mtimeMs);
@@ -2010,25 +2130,37 @@ async function startServer(): Promise<void> {
                 }
               }
             }
+          } else if (kind === 'special') {
+            if (key === 'dog_run') {
+              const existing = result.dogRunVideo;
+              if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
+                result.dogRunVideo = canonicalUrl;
+              }
+            } else if (key === 'dance_stars') {
+              const existing = result.danceStarsVideo;
+              if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
+                result.danceStarsVideo = canonicalUrl;
+              }
+            }
           } else if (kind === 'default') {
             const existing = result.defaultSpeaking;
             if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
-              result.defaultSpeaking = versionedUrl;
+              result.defaultSpeaking = canonicalUrl;
             }
           } else if (kind === 'group') {
             const existing = result.groups[key];
             if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
-              result.groups[key] = versionedUrl;
+              result.groups[key] = canonicalUrl;
             }
           } else if (kind === 'case') {
             const existing = result.cases[key];
             if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
-              result.cases[key] = versionedUrl;
+              result.cases[key] = canonicalUrl;
             }
           } else if (kind === 'escape') {
             const existing = result.escapes[key];
             if (!existing || (!IS_PROD && stripQueryFromAssetUrl(existing) === entry.name)) {
-              result.escapes[key] = versionedUrl;
+              result.escapes[key] = canonicalUrl;
             }
             if (!IS_PROD || result.escapeApexes?.[cleanPublicPath] === undefined) {
               const apex = getEscapeGestureApexSec(full, stat.mtimeMs);
@@ -2060,6 +2192,18 @@ async function startServer(): Promise<void> {
       const base = stripQueryFromAssetUrl(result.mouseIdleWake);
       if (base && base.startsWith('angel_') && !fs.existsSync(path.join(aistudioAssetsDir, base))) {
         delete result.mouseIdleWake;
+      }
+    }
+    if (result.dogRunVideo) {
+      const base = stripQueryFromAssetUrl(result.dogRunVideo);
+      if (base && base.startsWith('angel_') && !fs.existsSync(path.join(aistudioAssetsDir, base))) {
+        delete result.dogRunVideo;
+      }
+    }
+    if (result.danceStarsVideo) {
+      const base = stripQueryFromAssetUrl(result.danceStarsVideo);
+      if (base && base.startsWith('angel_') && !fs.existsSync(path.join(aistudioAssetsDir, base))) {
+        delete result.danceStarsVideo;
       }
     }
     if (result.defaultSpeaking) {
@@ -2114,6 +2258,10 @@ async function startServer(): Promise<void> {
             if (!result.mouseIdle) result.mouseIdle = cleanPublicPath;
           } else if (bKey === 'mouse_wake_up') {
             if (!result.mouseIdleWake) result.mouseIdleWake = cleanPublicPath;
+          } else if (bKey === 'dog_run') {
+            if (!result.dogRunVideo) result.dogRunVideo = cleanPublicPath;
+          } else if (bKey === 'dance_stars') {
+            if (!result.danceStarsVideo) result.danceStarsVideo = cleanPublicPath;
           } else if (bKey.startsWith('idle_')) {
             if (!result.idleVariants[bKey]) result.idleVariants[bKey] = cleanPublicPath;
           } else if (bKey.startsWith('escape_')) {
@@ -2147,6 +2295,11 @@ async function startServer(): Promise<void> {
       delete result.idle;
     }
 
+    const discoveredMusic = discoverMusicTracks();
+    if (discoveredMusic.length > 0) {
+      result.musicTracks = discoveredMusic;
+    }
+
     return result;
   };
 
@@ -2159,6 +2312,10 @@ async function startServer(): Promise<void> {
       mouseIdleTimeoutSec:
         typeof data.mouseIdleTimeoutSec === 'number' ? data.mouseIdleTimeoutSec : 20,
       mouseIdleHoldSec: data.mouseIdleHoldSec || {},
+      dogRunVideo: data.dogRunVideo,
+      dogRunJumpSec:
+        typeof data.dogRunJumpSec === 'number' ? data.dogRunJumpSec : 4.2,
+      danceStarsVideo: data.danceStarsVideo,
       defaultSpeaking: data.defaultSpeaking,
       groups: data.groups,
       cases: data.cases,
@@ -2187,6 +2344,7 @@ async function startServer(): Promise<void> {
       seductionTriggerMode: data.seductionTriggerMode || 'balanced',
       thankJanAudioUrl: data.thankJanAudioUrl,
       thankJanAudioDuration: data.thankJanAudioDuration,
+      musicTracks: data.musicTracks || discoverMusicTracks(),
     };
     fs.mkdirSync(aistudioAssetsDir, { recursive: true });
     fs.writeFileSync(angelVideoMapPath, JSON.stringify(toDisk, null, 2), 'utf8');
@@ -2202,39 +2360,61 @@ async function startServer(): Promise<void> {
   }
 
   // ============================================================================
-  // Video Studio Cross-Site Request Guard (No Password Prompt; 5-Tap Title Unlock)
+  // Video Studio Production Lock & Cross-Site Request Guard (Dev-Only)
   // ============================================================================
   const requireStudioDeveloperAuth = (
     req: express.Request,
     res: express.Response,
   ): boolean => {
+    // Video Studio mutations, file uploads, FFmpeg transcodes, and deletes are strictly disabled
+    // in production builds and on shared public preview hosts (`ais-pre-*`).
+    if (IS_PROD) {
+      res.status(403).json({ error: 'Video Studio is read-only in production builds.' });
+      return false;
+    }
+
+    const forwardedHost = String(req.headers['x-forwarded-host'] || '')
+      .split(',')[0]
+      .trim()
+      .toLowerCase();
+    const directHost = String(req.headers.host || '').trim().toLowerCase();
+    const activeHost = forwardedHost || directHost;
+    if (activeHost.startsWith('ais-pre-')) {
+      res.status(403).json({ error: 'Video Studio is disabled on shared preview hosts.' });
+      return false;
+    }
+
     const requestedWith = String(req.headers['x-requested-with'] || '');
     if (requestedWith !== 'ChessAngelVideoStudio') {
       res.status(403).json({ error: 'Forbidden cross-origin Studio request.' });
       return false;
     }
 
-    const originHeader = req.headers.origin;
-    if (typeof originHeader === 'string' && originHeader.length > 0) {
-      try {
-        const originHost = new URL(originHeader).host.toLowerCase();
-        const forwardedHost = String(req.headers['x-forwarded-host'] || '')
-          .split(',')[0]
-          .trim()
-          .toLowerCase();
-        const directHost = String(req.headers.host || '').trim().toLowerCase();
-        if (
-          originHost &&
-          ((forwardedHost && originHost !== forwardedHost && originHost !== directHost) ||
-            (!forwardedHost && directHost && originHost !== directHost))
-        ) {
-          res.status(403).json({ error: 'Cross-origin Studio mutation blocked.' });
-          return false;
-        }
-      } catch {
-        res.status(403).json({ error: 'Invalid Origin header.' });
+    // Require a valid same-origin Origin or Referer header on all Studio mutations
+    const originSource =
+      (typeof req.headers.origin === 'string' && req.headers.origin.length > 0
+        ? req.headers.origin
+        : typeof req.headers.referer === 'string' && req.headers.referer.length > 0
+          ? req.headers.referer
+          : '');
+    if (!originSource) {
+      res.status(403).json({ error: 'Missing Origin header for Studio mutation.' });
+      return false;
+    }
+
+    try {
+      const originHost = new URL(originSource).host.toLowerCase();
+      if (
+        !originHost ||
+        (forwardedHost && originHost !== forwardedHost && originHost !== directHost) ||
+        (!forwardedHost && directHost && originHost !== directHost)
+      ) {
+        res.status(403).json({ error: 'Cross-origin Studio mutation blocked.' });
         return false;
       }
+    } catch {
+      res.status(403).json({ error: 'Invalid Origin header.' });
+      return false;
     }
 
     return true;
@@ -2364,7 +2544,7 @@ async function startServer(): Promise<void> {
     const slotSuffix = slotId.split(':')[1] || '';
     const rawMax = Number(body.maxPlays);
     if (
-      !/^(idle|mouse_idle|default|group|case|escape):[a-z0-9_]{1,40}$/.test(slotId) ||
+      !/^(idle|mouse_idle|special|default|group|case|escape):[a-z0-9_]{1,40}$/.test(slotId) ||
       !isSafeMapKey(slotSuffix) ||
       !Number.isFinite(rawMax) ||
       rawMax < -1 ||
@@ -2408,7 +2588,7 @@ async function startServer(): Promise<void> {
     const slotId = String(body.slotId || '');
     const slotSuffix = slotId.split(':')[1] || '';
     if (
-      !/^(idle|mouse_idle|default|group|case|escape):[a-z0-9_]{1,40}$/.test(slotId) ||
+      !/^(idle|mouse_idle|special|default|group|case|escape):[a-z0-9_]{1,40}$/.test(slotId) ||
       !isSafeMapKey(slotSuffix) ||
       typeof body.playToEnd !== 'boolean'
     ) {
@@ -2436,6 +2616,19 @@ async function startServer(): Promise<void> {
     }
     const map = readAngelVideoMap();
     map.mouseIdleTimeoutSec = Math.round(raw);
+    writeAngelVideoMap(map);
+    res.json({ ok: true, map });
+  });
+
+  app.put('/api/angel-videos/dog-run-jump', express.json(), (req, res) => {
+    if (!requireStudioDeveloperAuth(req, res)) return;
+    const raw = Number((req.body || {}).jumpSec);
+    if (!Number.isFinite(raw) || raw < 0 || raw > 30) {
+      res.status(400).json({ error: 'Invalid dog jump-out timing.' });
+      return;
+    }
+    const map = readAngelVideoMap();
+    map.dogRunJumpSec = Math.round(raw * 10) / 10;
     writeAngelVideoMap(map);
     res.json({ ok: true, map });
   });
@@ -2711,7 +2904,7 @@ async function startServer(): Promise<void> {
       const rawKey = String(req.params.key || '');
       const key = kind === 'idle' && rawKey === 'idle_listening' ? 'idle_1' : rawKey;
       if (
-        !['idle', 'mouse_idle', 'default', 'group', 'case', 'escape'].includes(kind) ||
+        !['idle', 'mouse_idle', 'special', 'default', 'group', 'case', 'escape'].includes(kind) ||
         !isSafeMapKey(key)
       ) {
         res.status(400).json({ error: 'Invalid video slot key.' });
@@ -2866,6 +3059,12 @@ async function startServer(): Promise<void> {
                 delete map.mouseIdleHoldSec[cleanUploadedPath];
               }
             }
+          } else if (kind === 'special') {
+            if (key === 'dog_run') {
+              map.dogRunVideo = publicUrl;
+            } else if (key === 'dance_stars') {
+              map.danceStarsVideo = publicUrl;
+            }
           } else if (kind === 'default') {
             map.defaultSpeaking = publicUrl;
           } else if (kind === 'group') {
@@ -2928,6 +3127,12 @@ async function startServer(): Promise<void> {
           } else {
             map.mouseIdle = publicUrl;
           }
+        } else if (kind === 'special') {
+          if (key === 'dog_run') {
+            map.dogRunVideo = publicUrl;
+          } else if (key === 'dance_stars') {
+            map.danceStarsVideo = publicUrl;
+          }
         } else if (kind === 'default') {
           map.defaultSpeaking = publicUrl;
         } else if (kind === 'group') {
@@ -2967,13 +3172,59 @@ async function startServer(): Promise<void> {
     },
   );
 
+  // All bundled / locked-in portrait videos are protected on disk against accidental unlink
+  const LOCKED_AISTUDIO_VIDEOS = new Set<string>([
+    'angel_case_angel_modal_off.mp4',
+    'angel_case_angel_modal_on.mp4',
+    'angel_case_calc_offer.mp4',
+    'angel_case_calc_pure.mp4',
+    'angel_case_calc_showing.mp4',
+    'angel_case_castled.mp4',
+    'angel_case_checkmate_win.mp4',
+    'angel_case_draw.mp4',
+    'angel_case_intro.mp4',
+    'angel_case_lost_queen.mp4',
+    'angel_case_new_match.mp4',
+    'angel_case_seduction.mp4',
+    'angel_case_seduction_2.mp4',
+    'angel_case_seduction_3.mp4',
+    'angel_case_stalemate.mp4',
+    'angel_case_tree_browse.mp4',
+    'angel_case_trial_confirm_1.mp4',
+    'angel_case_trial_confirm_2.mp4',
+    'angel_case_undo_done.mp4',
+    'angel_case_warn_double.mp4',
+    'angel_case_warn_fork_2step.mp4',
+    'angel_case_warn_fork_2step_2.mp4',
+    'angel_case_warn_king_file.mp4',
+    'angel_case_warn_pawn_promo.mp4',
+    'angel_case_watch_bishop.mp4',
+    'angel_default_speaking_default.mp4',
+    'angel_escape_point_me.mp4',
+    'angel_escape_point_me_2.mp4',
+    'angel_escape_point_me_3.mp4',
+    'angel_escape_point_you.mp4',
+    'angel_escape_point_you_2.mp4',
+    'angel_escape_point_you_3.mp4',
+    'angel_escape_point_you_5.mp4',
+    'angel_escape_point_you_6.mp4',
+    'angel_escape_push_button.mp4',
+    'angel_escape_push_button_2.mp4',
+    'angel_idle_idle_2.mp4',
+    'angel_idle_idle_3.mp4',
+    'angel_idle_idle_4.mp4',
+    'angel_idle_idle_5.mp4',
+    'angel_idle_idle_6.mp4',
+    'angel_idle_idle_7.mp4',
+  ]);
+
   app.delete('/api/angel-videos/:kind/:key', (req, res) => {
     if (!requireStudioDeveloperAuth(req, res)) return;
     const kind = String(req.params.kind || '');
     const rawKey = String(req.params.key || '');
     const key = kind === 'idle' && rawKey === 'idle_listening' ? 'idle_1' : rawKey;
     if (
-      !['idle', 'mouse_idle', 'default', 'group', 'case', 'escape'].includes(kind) ||
+      !['idle', 'mouse_idle', 'special', 'default', 'group', 'case', 'escape'].includes(kind) ||
       !isSafeMapKey(key)
     ) {
       res.status(400).json({ error: 'Invalid video slot key.' });
@@ -2981,6 +3232,11 @@ async function startServer(): Promise<void> {
     }
 
     const fileName = `angel_${kind}_${key}.mp4`;
+    if (LOCKED_AISTUDIO_VIDEOS.has(fileName)) {
+      res.json({ ok: true, locked: true, map: readAngelVideoMap() });
+      return;
+    }
+
     const cleanDeletedPath = `/assets/aistudio/${fileName}`;
     const destAbs = path.join(aistudioAssetsDir, fileName);
     if (destAbs.startsWith(aistudioAssetsDir + path.sep) && fs.existsSync(destAbs)) {
@@ -3015,6 +3271,12 @@ async function startServer(): Promise<void> {
         if (map.mouseIdleHoldSec) {
           delete map.mouseIdleHoldSec[cleanDeletedPath];
         }
+      }
+    } else if (kind === 'special') {
+      if (key === 'dog_run') {
+        delete map.dogRunVideo;
+      } else if (key === 'dance_stars') {
+        delete map.danceStarsVideo;
       }
     } else if (kind === 'default') {
       delete map.defaultSpeaking;
@@ -3124,9 +3386,48 @@ async function startServer(): Promise<void> {
   });
 
   server.on('upgrade', (request, socket, head) => {
-    const pathname = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`).pathname;
+    let pathname = '/';
+    try {
+      pathname = new URL(request.url || '/', 'http://localhost').pathname;
+    } catch {
+      socket.destroy();
+      return;
+    }
+
     const proto = String(request.headers['sec-websocket-protocol'] || '');
     if (pathname === '/ws') {
+      if (clients.size >= MAX_WS_CLIENTS) {
+        socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+
+      // Guard against Cross-Site WebSocket Hijacking by validating Origin when present
+      const originHeader = request.headers.origin;
+      if (typeof originHeader === 'string' && originHeader.length > 0) {
+        try {
+          const originHost = new URL(originHeader).host.toLowerCase();
+          const forwardedHost = String(request.headers['x-forwarded-host'] || '')
+            .split(',')[0]
+            .trim()
+            .toLowerCase();
+          const directHost = String(request.headers.host || '').trim().toLowerCase();
+          if (
+            !originHost ||
+            (forwardedHost && originHost !== forwardedHost && originHost !== directHost) ||
+            (!forwardedHost && directHost && originHost !== directHost)
+          ) {
+            socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+            socket.destroy();
+            return;
+          }
+        } catch {
+          socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+      }
+
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
@@ -3147,11 +3448,25 @@ async function startServer(): Promise<void> {
       clientId: tempId,
       name: 'Player',
       roomId: null,
+      msgWindowStart: Date.now(),
+      msgCount: 0,
     });
 
     broadcastLobbyUpdates();
 
     ws.on('message', (data) => {
+      const client = clients.get(ws);
+      if (!client) return;
+      const now = Date.now();
+      if (now - client.msgWindowStart > WS_RATE_WINDOW_MS) {
+        client.msgWindowStart = now;
+        client.msgCount = 0;
+      }
+      client.msgCount += 1;
+      if (client.msgCount > WS_RATE_MAX_MSGS) {
+        send(ws, { type: 'room:error', message: 'Too many requests. Please slow down.' });
+        return;
+      }
       handleMessage(ws, typeof data === 'string' ? data : data.toString('utf8'));
     });
 
