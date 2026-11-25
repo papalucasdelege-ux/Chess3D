@@ -8,6 +8,7 @@ import {
   Film,
   GitBranch,
   Lightbulb,
+  LogOut,
   Maximize2,
   Play,
   RotateCcw,
@@ -2917,6 +2918,8 @@ interface OpponentSpeechBannerProps {
   onTurnOffAngel?: () => void;
   onOpenVideoStudio?: () => void;
   powerSaveMode?: boolean;
+  inTacticalTraining?: boolean;
+  onExitTacticalTraining?: () => void;
 }
 
 const TONE_TAG_COLOR: Record<OpponentMessage['tone'], string> = {
@@ -2967,6 +2970,8 @@ export function OpponentSpeechBanner({
   onTurnOffAngel,
   onOpenVideoStudio,
   powerSaveMode = false,
+  inTacticalTraining = false,
+  onExitTacticalTraining,
 }: OpponentSpeechBannerProps) {
   const asideRef = useRef<HTMLElement | null>(null);
   const portraitCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -3172,6 +3177,18 @@ export function OpponentSpeechBanner({
           >
             <EyeOff className={`${footerBtnIconClass} text-[#fda4af] shrink-0`} />
             <span>Lines Off</span>
+          </button>
+        )}
+
+        {inTacticalTraining && onExitTacticalTraining && (
+          <button
+            type="button"
+            onClick={onExitTacticalTraining}
+            title="Exit Tactical Training and return to casual play"
+            className={`inline-flex items-center ${padClass} bg-[#241016] hover:bg-[#341620] border border-[#fb7185]/80 font-semibold text-[#fecdd3] transition-colors cursor-pointer text-left leading-tight`}
+          >
+            <LogOut className={`${footerBtnIconClass} text-[#fda4af] shrink-0`} />
+            <span>{isRoomy ? 'Exit Training' : 'Exit'}</span>
           </button>
         )}
       </div>

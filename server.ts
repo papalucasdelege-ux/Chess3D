@@ -1139,6 +1139,9 @@ async function startServer(): Promise<void> {
     if (lower.includes('chess_angle_rap') || lower.includes('chess_angel_rap')) {
       return 'Chess Angel Rap';
     }
+    if (lower.includes('angle_45923f8a') || /^angle_[0-9a-f]{8}\.mp3$/.test(lower)) {
+      return 'Chess Angel';
+    }
     const base = filename
       .replace(/\.mp3$/i, '')
       .replace(/_[0-9a-f]{8}$/i, '')
@@ -1147,6 +1150,14 @@ async function startServer(): Promise<void> {
       .trim();
     if (!base) return 'Chess Angel Track';
     return base.replace(/\b\w/g, (c) => c.toUpperCase()).slice(0, 48);
+  };
+
+  const musicTrackSortRank = (filename: string): number => {
+    const lower = filename.toLowerCase();
+    if (lower.includes('a_beautiful_queen')) return 0;
+    if (lower.includes('chess_angle_rap') || lower.includes('chess_angel_rap')) return 1;
+    if (lower.includes('angle_45923f8a') || /^angle_[0-9a-f]{8}\.mp3$/.test(lower)) return 2;
+    return 3;
   };
 
   const discoverMusicTracks = (): Array<{ id: string; title: string; url: string }> => {
@@ -1165,9 +1176,8 @@ async function startServer(): Promise<void> {
               !e.name.includes('.tmp'),
           )
           .sort((a, b) => {
-            const aQueen = a.name.toLowerCase().includes('a_beautiful_queen') ? 0 : 1;
-            const bQueen = b.name.toLowerCase().includes('a_beautiful_queen') ? 0 : 1;
-            return aQueen - bQueen || a.name.localeCompare(b.name);
+            const rankDiff = musicTrackSortRank(a.name) - musicTrackSortRank(b.name);
+            return rankDiff !== 0 ? rankDiff : a.name.localeCompare(b.name);
           });
         for (const entry of mp3Entries) {
           const full = path.join(aistudioAssetsDir, entry.name);

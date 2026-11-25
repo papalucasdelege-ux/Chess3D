@@ -479,11 +479,14 @@ export function ControlDock(props: ControlDockProps) {
               >
                 {props.musicTracks.map((track, idx) => {
                   const isActive = props.musicEnabled && props.activeMusicTrackIndex === idx;
-                  const shortLabel = track.title.toLowerCase().includes('rap')
+                  const lowerTitle = track.title.toLowerCase();
+                  const shortLabel = lowerTitle.includes('rap')
                     ? 'Rap'
-                    : track.title.toLowerCase().includes('queen')
+                    : lowerTitle.includes('queen')
                       ? 'Queen'
-                      : track.title;
+                      : lowerTitle.includes('angel') || lowerTitle.includes('angle')
+                        ? 'Angel'
+                        : track.title;
                   return (
                     <button
                       key={track.id}

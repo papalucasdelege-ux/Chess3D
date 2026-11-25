@@ -332,9 +332,14 @@ export default defineConfig(() => {
                   !e.name.includes('.tmp'),
               )
               .sort((a, b) => {
-                const aQueen = a.name.toLowerCase().includes('a_beautiful_queen') ? 0 : 1;
-                const bQueen = b.name.toLowerCase().includes('a_beautiful_queen') ? 0 : 1;
-                return aQueen - bQueen || a.name.localeCompare(b.name);
+                const rank = (name: string) => {
+                  const l = name.toLowerCase();
+                  if (l.includes('a_beautiful_queen')) return 0;
+                  if (l.includes('chess_angle_rap') || l.includes('chess_angel_rap')) return 1;
+                  if (l.includes('angle_45923f8a') || /^angle_[0-9a-f]{8}\.mp3$/.test(l)) return 2;
+                  return 3;
+                };
+                return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
               });
             const discoveredMusicTracks: Array<{ id: string; title: string; url: string }> = [];
             for (const mp3 of mp3Entries) {
@@ -345,14 +350,16 @@ export default defineConfig(() => {
                 ? "Queen's Infinite Reign"
                 : lower.includes('chess_angle_rap') || lower.includes('chess_angel_rap')
                   ? 'Chess Angel Rap'
-                  : mp3.name
-                      .replace(/\.mp3$/i, '')
-                      .replace(/_[0-9a-f]{8}$/i, '')
-                      .replace(/[_-]+/g, ' ')
-                      .replace(/\s+/g, ' ')
-                      .trim()
-                      .replace(/\b\w/g, (c) => c.toUpperCase())
-                      .slice(0, 48) || 'Chess Angel Track';
+                  : lower.includes('angle_45923f8a') || /^angle_[0-9a-f]{8}\.mp3$/.test(lower)
+                    ? 'Chess Angel'
+                    : mp3.name
+                        .replace(/\.mp3$/i, '')
+                        .replace(/_[0-9a-f]{8}$/i, '')
+                        .replace(/[_-]+/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .replace(/\b\w/g, (c) => c.toUpperCase())
+                        .slice(0, 48) || 'Chess Angel Track';
               const id = mp3.name
                 .replace(/\.mp3$/i, '')
                 .toLowerCase()

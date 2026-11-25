@@ -5205,6 +5205,8 @@ export default function App() {
         soundEnabled={soundEnabled}
         voiceState={voiceState}
         powerSaveMode={powerSaveMode}
+        inTacticalTraining={gameMode === 'tactical'}
+        onExitTacticalTraining={handleReturnToCasualPlay}
         calcPreview={calcPreview}
         treeBrowser={treeBrowser}
         idlePreviewNonce={idlePreviewNonce}

@@ -49,11 +49,11 @@ function createCampbellFurTextures(variant: MiniHamsterVariant): {
 
           const idx = (py * size + px) * 4;
           const grain = (rand() - 0.5) * 12;
-          // Rich medium-grey plush coat all over so he reads unmistakably grey with a crisp dark-grey back line
+          // Deeper medium-dark slate-grey plush coat all over so he reads unmistakably grey with a crisp dark back line
           const bellyShade = THREE.MathUtils.clamp((dTop - 0.24) / 0.26, 0, 1);
-          const r = 128 + bellyShade * 10 + grain;
-          const g = 133 + bellyShade * 10 + grain;
-          const b = 141 + bellyShade * 10 + grain;
+          const r = 90 + bellyShade * 10 + grain;
+          const g = 95 + bellyShade * 10 + grain;
+          const b = 104 + bellyShade * 10 + grain;
 
           data[idx] = Math.round(THREE.MathUtils.clamp(r, 0, 255));
           data[idx + 1] = Math.round(THREE.MathUtils.clamp(g, 0, 255));
@@ -71,8 +71,8 @@ function createCampbellFurTextures(variant: MiniHamsterVariant): {
         const alpha = 0.06 + rand() * 0.1;
         ctx.strokeStyle =
           rand() > 0.48
-            ? `rgba(182, 188, 198, ${alpha.toFixed(3)})`
-            : `rgba(70, 76, 86, ${alpha.toFixed(3)})`;
+            ? `rgba(138, 144, 155, ${alpha.toFixed(3)})`
+            : `rgba(48, 53, 62, ${alpha.toFixed(3)})`;
         ctx.lineWidth = 0.9 + rand() * 0.9;
         ctx.beginPath();
         ctx.moveTo(x, y);
@@ -96,14 +96,14 @@ function createCampbellFurTextures(variant: MiniHamsterVariant): {
         const v = 1 - py / (size - 1); // 0 = rump, 1 = front shoulders
         if (v > 0.9) continue;
         const shoulderFade = v > 0.78 ? THREE.MathUtils.clamp((0.9 - v) / 0.12, 0, 1) : 1;
-        const halfW = (0.025 + Math.sin(v * Math.PI) * 0.01) * size * shoulderFade;
+        const halfW = (0.026 + Math.sin(v * Math.PI) * 0.01) * size * shoulderFade;
         if (halfW < 1) continue;
         const gStripe = ctx.createLinearGradient(stripeX - halfW * 1.4, 0, stripeX + halfW * 1.4, 0);
-        gStripe.addColorStop(0, 'rgba(26, 29, 36, 0)');
-        gStripe.addColorStop(0.24, `rgba(26, 29, 36, ${(0.96 * shoulderFade).toFixed(3)})`);
-        gStripe.addColorStop(0.5, `rgba(18, 20, 26, ${(1.0 * shoulderFade).toFixed(3)})`);
-        gStripe.addColorStop(0.76, `rgba(26, 29, 36, ${(0.96 * shoulderFade).toFixed(3)})`);
-        gStripe.addColorStop(1, 'rgba(26, 29, 36, 0)');
+        gStripe.addColorStop(0, 'rgba(14, 16, 22, 0)');
+        gStripe.addColorStop(0.24, `rgba(14, 16, 22, ${(0.97 * shoulderFade).toFixed(3)})`);
+        gStripe.addColorStop(0.5, `rgba(10, 12, 16, ${(1.0 * shoulderFade).toFixed(3)})`);
+        gStripe.addColorStop(0.76, `rgba(14, 16, 22, ${(0.97 * shoulderFade).toFixed(3)})`);
+        gStripe.addColorStop(1, 'rgba(14, 16, 22, 0)');
         ctx.fillStyle = gStripe;
         ctx.fillRect(stripeX - halfW * 1.4, py, halfW * 2.8, 1.5);
       }
@@ -470,9 +470,9 @@ export class MiniHamsterActor {
         bumpMap: this.furBumpTex,
         bumpScale: 0.012,
         color: 0xffffff,
-        emissive: isGrey ? 0x14171c : 0x262930,
-        emissiveIntensity: isGrey ? 0.14 : 0.2,
-        roughness: 0.89,
+        emissive: isGrey ? 0x0b0d11 : 0x262930,
+        emissiveIntensity: isGrey ? 0.08 : 0.2,
+        roughness: 0.9,
         metalness: 0.01,
       }),
     );
@@ -485,24 +485,24 @@ export class MiniHamsterActor {
             bumpMap: this.furBumpTex,
             bumpScale: 0.012,
             color: 0xffffff,
-            emissive: 0x14171c,
-            emissiveIntensity: 0.14,
-            roughness: 0.89,
+            emissive: 0x0b0d11,
+            emissiveIntensity: 0.08,
+            roughness: 0.9,
             metalness: 0.01,
           }),
         )
       : coatMat;
 
     // Matching solid coat fur for chest ruff, whisker pads, chin, tail & hairy Phodopus feet:
-    // rich grey for the grey hamster, crisp snowy white for the spotted white hamster!
+    // darker slate-grey for the grey hamster, crisp snowy white for the spotted white hamster!
     const creamFurMat = this.trackMat(
       new THREE.MeshStandardMaterial({
         bumpMap: this.furBumpTex,
         bumpScale: 0.008,
-        color: isGrey ? 0x828892 : 0xf0f3f8,
-        emissive: isGrey ? 0x14171c : 0x262930,
-        emissiveIntensity: isGrey ? 0.14 : 0.18,
-        roughness: 0.9,
+        color: isGrey ? 0x5c626c : 0xf0f3f8,
+        emissive: isGrey ? 0x0b0d11 : 0x262930,
+        emissiveIntensity: isGrey ? 0.08 : 0.18,
+        roughness: 0.91,
         metalness: 0.0,
       }),
     );
@@ -512,10 +512,10 @@ export class MiniHamsterActor {
           new THREE.MeshStandardMaterial({
             bumpMap: this.furBumpTex,
             bumpScale: 0.006,
-            color: 0x1d2027,
-            emissive: 0x050608,
-            emissiveIntensity: 0.1,
-            roughness: 0.84,
+            color: 0x111318,
+            emissive: 0x030406,
+            emissiveIntensity: 0.08,
+            roughness: 0.86,
             metalness: 0.02,
           }),
         )
@@ -523,19 +523,19 @@ export class MiniHamsterActor {
 
     const earOuterMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: isGrey ? 0x6f7580 : 0xdde2ea,
-        emissive: isGrey ? 0x12141a : 0x22252c,
-        emissiveIntensity: 0.14,
-        roughness: 0.84,
+        color: isGrey ? 0x4f5560 : 0xdde2ea,
+        emissive: isGrey ? 0x0a0c10 : 0x22252c,
+        emissiveIntensity: isGrey ? 0.09 : 0.14,
+        roughness: 0.85,
         metalness: 0.0,
       }),
     );
 
     const earInnerMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: isGrey ? 0x848088 : 0xffaac2,
-        emissive: isGrey ? 0x141316 : 0x3f1422,
-        emissiveIntensity: 0.2,
+        color: isGrey ? 0x67646c : 0xffaac2,
+        emissive: isGrey ? 0x0e0d10 : 0x3f1422,
+        emissiveIntensity: isGrey ? 0.14 : 0.2,
         roughness: 0.72,
         metalness: 0.0,
       }),
@@ -543,9 +543,9 @@ export class MiniHamsterActor {
 
     const pinkNoseMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: isGrey ? 0x7d747a : 0xff6294,
-        emissive: isGrey ? 0x161215 : 0x5c122a,
-        emissiveIntensity: isGrey ? 0.14 : 0.38,
+        color: isGrey ? 0x625a60 : 0xff6294,
+        emissive: isGrey ? 0x100d10 : 0x5c122a,
+        emissiveIntensity: isGrey ? 0.1 : 0.38,
         roughness: 0.2,
         metalness: 0.05,
       }),

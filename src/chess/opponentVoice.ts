@@ -2358,6 +2358,10 @@ export const CHESS_ANGEL_RAP_MUSIC_URL = withAssetBuildVersion(
   '/assets/aistudio/Chess_Angle_RAP.mp3',
 );
 
+export const CHESS_ANGEL_THEME_MUSIC_URL = withAssetBuildVersion(
+  '/assets/aistudio/Angle_45923f8a.mp3',
+);
+
 export const DEFAULT_MUSIC_TRACKS: readonly MusicTrack[] = [
   {
     id: 'queen_infinite_reign',
@@ -2368,6 +2372,11 @@ export const DEFAULT_MUSIC_TRACKS: readonly MusicTrack[] = [
     id: 'chess_angel_rap',
     title: 'Chess Angel Rap',
     url: CHESS_ANGEL_RAP_MUSIC_URL,
+  },
+  {
+    id: 'chess_angel_theme',
+    title: 'Chess Angel',
+    url: CHESS_ANGEL_THEME_MUSIC_URL,
   },
 ];
 
@@ -2401,19 +2410,18 @@ class OpponentSpeechController {
   private activeSource: AudioBufferSourceNode | null = null;
   private activeHtmlAudio: HTMLAudioElement | null = null;
   private activeAbort: AbortController | null = null;
+  private bgMusicElement: HTMLAudioElement | null = null;
   private bgMusicAudio: HTMLAudioElement | null = null;
   private bgMusicUrl: string | null = null;
   private pendingGestureBgMusicUrl: string | null = null;
   private bgMusicFadeRaf: number | null = null;
+  private bgMusicStallTimer: number | null = null;
   private musicTracks: MusicTrack[] = [...DEFAULT_MUSIC_TRACKS];
   private musicTrackIndex = 0;
   private musicPlaylistEnabled = false;
   private musicSoundAllowed = true;
   private musicStateListeners = new Set<MusicStateListener>();
   private preloadedMusicBlobUrls = new Map<string, string>();
-  private preloadedMusicAudio = new Map<string, HTMLAudioElement>();
-  private preloadingMusicUrls = new Set<string>();
-  private musicPreloadRunning = false;
   private bgMusicSeq = 0;
   private rawBytesCache = new Map<string, ArrayBuffer>();
   private bufferCache = new Map<string, AudioBuffer>();
@@ -2437,9 +2445,6 @@ class OpponentSpeechController {
       window.setTimeout(() => {
         this.preloadCoreClips();
       }, 60);
-      window.setTimeout(() => {
-        this.preloadBackgroundMusicTracks();
-      }, 180);
     }
   }
 
@@ -2455,49 +2460,34 @@ class OpponentSpeechController {
     return false;
   }
 
-  public preloadBackgroundMusicTracks(): void {
-    if (typeof window === 'undefined' || this.musicPreloadRunning) return;
-    const urls = this.musicTracks
-      .map((t) => t.url)
-      .filter((u): u is string => Boolean(u) && !this.preloadedMusicBlobUrls.has(u));
-    if (urls.length === 0) return;
-
-    this.musicPreloadRunning = true;
-    void (async () => {
-      try {
-        // Fetch each untouched MP3 sequentially into verified Blob URLs so neither track competes
-        // for bandwidth or triggers Range-request deadlocks on installed Android/desktop PWAs.
-        for (const url of urls) {
-          if (this.preloadedMusicBlobUrls.has(url) || this.preloadingMusicUrls.has(url)) continue;
-          this.preloadingMusicUrls.add(url);
-          try {
-            const res = await fetch(url, { credentials: 'same-origin' });
-            if (!res.ok) continue;
-            const ct = (res.headers.get('content-type') || '').toLowerCase();
-            if (ct.includes('text/html')) continue;
-            const bytes = await res.arrayBuffer();
-            if (!this.isValidMp3Buffer(bytes)) continue;
-
-            const blob = new Blob([bytes], { type: 'audio/mpeg' });
-            const objUrl = URL.createObjectURL(blob);
-            this.preloadedMusicBlobUrls.set(url, objUrl);
-
-            // Warm a dedicated blob-backed audio element for instant zero-latency start
-            const warmEl = new Audio(objUrl);
-            warmEl.preload = 'auto';
-            warmEl.loop = false;
-            warmEl.load();
-            this.preloadedMusicAudio.set(url, warmEl);
-          } catch {
-            // Keep direct URL streaming fallback
-          } finally {
-            this.preloadingMusicUrls.delete(url);
-          }
-        }
-      } finally {
-        this.musicPreloadRunning = false;
+  /**
+   * Returns a single persistent, DOM-attached HTMLAudioElement for background music.
+   * Reusing one unlocked element preserves user-gesture activation across track switches
+   * (Queen <-> Rap) and async fallback retries on Windows Chrome, Android Chrome, iOS/macOS Safari & Firefox.
+   */
+  private ensureBgMusicElement(): HTMLAudioElement | null {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return null;
+    if (!this.bgMusicElement) {
+      const el = document.createElement('audio');
+      el.preload = 'auto';
+      el.loop = false;
+      el.setAttribute('playsinline', '');
+      el.setAttribute('webkit-playsinline', 'true');
+      el.setAttribute('aria-hidden', 'true');
+      el.style.display = 'none';
+      if (document.body) {
+        document.body.appendChild(el);
       }
-    })();
+      this.bgMusicElement = el;
+    } else if (!this.bgMusicElement.isConnected && document.body) {
+      document.body.appendChild(this.bgMusicElement);
+    }
+    return this.bgMusicElement;
+  }
+
+  public preloadBackgroundMusicTracks(): void {
+    // Untouched soundtrack MP3s stream immediately via native HTTP 206 Range requests
+    // without downloading 9.5MB up front and saturating the browser connection pool.
   }
 
   public subscribe(listener: StateListener): () => void {
@@ -2665,7 +2655,6 @@ class OpponentSpeechController {
   public selectBackgroundMusicTrack(index: number, soundEnabled: boolean): void {
     if (this.musicTracks.length === 0) return;
     const safeIdx = ((index % this.musicTracks.length) + this.musicTracks.length) % this.musicTracks.length;
-    const changedTrack = safeIdx !== this.musicTrackIndex;
     this.musicTrackIndex = safeIdx;
     this.musicPlaylistEnabled = true;
     this.musicSoundAllowed = soundEnabled;
@@ -2676,10 +2665,22 @@ class OpponentSpeechController {
     }
     const track = this.musicTracks[safeIdx];
     if (track) {
-      if (changedTrack) {
+      const sameTrackPlaying = Boolean(
+        this.bgMusicAudio &&
+          !this.bgMusicAudio.paused &&
+          !this.bgMusicAudio.ended &&
+          !this.bgMusicAudio.error &&
+          this.bgMusicAudio.readyState >= 2 &&
+          this.bgMusicAudio.currentTime > 0.05 &&
+          this.bgMusicUrl &&
+          stripAssetQuery(this.bgMusicUrl) === stripAssetQuery(track.url),
+      );
+      if (!sameTrackPlaying) {
         this.stopBackgroundMusicInternal(false);
+        this.startBackgroundMusicUrl(track.url, 'direct');
+      } else {
+        this.updateBgMusicDucking(this.playbackState === 'speaking');
       }
-      this.startBackgroundMusicUrl(track.url);
     }
     this.emitMusicState();
   }
@@ -2696,26 +2697,60 @@ class OpponentSpeechController {
     }
   }
 
-  private evictBrokenMusicBlob(url: string): void {
-    const blobUrl = this.preloadedMusicBlobUrls.get(url);
+  private clearBgMusicStallTimer(): void {
+    if (this.bgMusicStallTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(this.bgMusicStallTimer);
+      this.bgMusicStallTimer = null;
+    }
+  }
+
+  private evictBrokenMusicBlob(cleanKey: string): void {
+    const blobUrl = this.preloadedMusicBlobUrls.get(cleanKey);
     if (blobUrl) {
-      this.preloadedMusicBlobUrls.delete(url);
+      this.preloadedMusicBlobUrls.delete(cleanKey);
       try {
         URL.revokeObjectURL(blobUrl);
       } catch {
         // ignore
       }
     }
-    this.preloadedMusicAudio.delete(url);
   }
 
-  private startBackgroundMusicUrl(url: string, allowDirectFallback = true): void {
-    // If the same song is already playing in the background, let it continue uninterrupted
+  private async fetchMusicBlobUrl(url: string): Promise<string | null> {
+    const cleanKey = stripAssetQuery(url);
+    const existing = this.preloadedMusicBlobUrls.get(cleanKey);
+    if (existing) return existing;
+    try {
+      const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}musicblob=1`;
+      const res = await fetch(fetchUrl, { credentials: 'same-origin' });
+      if (!res.ok) return null;
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      if (ct.includes('text/html')) return null;
+      const bytes = await res.arrayBuffer();
+      if (!this.isValidMp3Buffer(bytes)) return null;
+      const objUrl = URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }));
+      this.preloadedMusicBlobUrls.set(cleanKey, objUrl);
+      return objUrl;
+    } catch {
+      return null;
+    }
+  }
+
+  private startBackgroundMusicUrl(
+    url: string,
+    mode: 'direct' | 'blob' | 'direct-bust' = 'direct',
+  ): void {
+    const cleanTarget = stripAssetQuery(url);
+    // If the same song is already actively advancing in the background, keep it playing smoothly
     if (
       this.bgMusicAudio &&
       !this.bgMusicAudio.paused &&
       !this.bgMusicAudio.ended &&
-      this.bgMusicUrl === url
+      !this.bgMusicAudio.error &&
+      this.bgMusicAudio.readyState >= 2 &&
+      this.bgMusicAudio.currentTime > 0.05 &&
+      this.bgMusicUrl &&
+      stripAssetQuery(this.bgMusicUrl) === cleanTarget
     ) {
       this.updateBgMusicDucking(this.playbackState === 'speaking');
       this.emitMusicState();
@@ -2725,48 +2760,116 @@ class OpponentSpeechController {
     this.stopBackgroundMusicInternal(false);
     const seq = ++this.bgMusicSeq;
 
-    const cachedBlobUrl = allowDirectFallback ? this.preloadedMusicBlobUrls.get(url) : undefined;
-    let audio: HTMLAudioElement | undefined;
-    let usingBlob = false;
+    const audio = this.ensureBgMusicElement() || new Audio();
+    const cachedBlobUrl = this.preloadedMusicBlobUrls.get(cleanTarget);
 
-    if (cachedBlobUrl) {
-      const warm = this.preloadedMusicAudio.get(url);
-      if (warm && !warm.error && warm.src === cachedBlobUrl) {
-        audio = warm;
+    // Prefer already-verified Blob URL if present; otherwise stream untouched MP3 directly via HTTP 206
+    let playSrc = url;
+    let usingBlob = false;
+    if (mode === 'blob') {
+      if (cachedBlobUrl) {
+        playSrc = cachedBlobUrl;
         usingBlob = true;
       } else {
-        audio = new Audio(cachedBlobUrl);
-        usingBlob = true;
+        // Fetch the full untouched MP3 into a Blob URL (bypasses any OS/SW HTTP Range quirk)
+        this.bgMusicAudio = audio;
+        this.bgMusicUrl = url;
+        void this.fetchMusicBlobUrl(url).then((blobUrl) => {
+          if (this.bgMusicSeq !== seq) return;
+          if (blobUrl) {
+            this.startBackgroundMusicUrl(url, 'blob');
+          } else {
+            this.startBackgroundMusicUrl(url, 'direct-bust');
+          }
+        });
+        return;
       }
-    } else {
-      // Stream directly from the untouched MP3 file (with cache-bust retry when recovering from a SW/blob glitch)
-      const streamUrl = allowDirectFallback ? url : `${url}${url.includes('?') ? '&' : '?'}direct=1`;
-      audio = new Audio(streamUrl);
+    } else if (mode === 'direct' && cachedBlobUrl) {
+      playSrc = cachedBlobUrl;
+      usingBlob = true;
+    } else if (mode === 'direct-bust') {
+      playSrc = `${url}${url.includes('?') ? '&' : '?'}direct=1`;
     }
 
+    audio.onended = null;
+    audio.onerror = null;
+    audio.oncanplay = null;
+    audio.onplaying = null;
+    audio.onstalled = null;
+    audio.loop = false;
+    audio.muted = false;
+    audio.preload = 'auto';
+    audio.volume = this.getMusicTargetVolume(this.playbackState === 'speaking');
+
     try {
-      if (audio.readyState >= 1) {
-        audio.currentTime = 0;
-      }
+      audio.pause();
+    } catch {
+      // ignore
+    }
+    audio.src = playSrc;
+    try {
+      audio.currentTime = 0;
     } catch {
       // ignore if metadata not yet ready
     }
-    // Playlist mode advances/loops on ended; seduction one-shot plays until natural end
-    audio.loop = false;
-    audio.preload = 'auto';
-    audio.volume = this.getMusicTargetVolume(this.playbackState === 'speaking');
+    audio.load();
+
     this.bgMusicAudio = audio;
     this.bgMusicUrl = url;
 
+    const triggerFallback = () => {
+      if (this.bgMusicSeq !== seq || this.bgMusicAudio !== audio) return;
+      this.clearBgMusicStallTimer();
+      if (usingBlob) {
+        this.evictBrokenMusicBlob(cleanTarget);
+        if (mode !== 'direct-bust') {
+          this.startBackgroundMusicUrl(url, 'direct-bust');
+          return;
+        }
+      } else if (mode === 'direct') {
+        this.startBackgroundMusicUrl(url, 'blob');
+        return;
+      }
+      this.bgMusicAudio = null;
+      this.bgMusicUrl = null;
+      this.emitMusicState();
+    };
+
+    audio.onplaying = () => {
+      if (this.bgMusicSeq !== seq || this.bgMusicAudio !== audio) return;
+      this.clearBgMusicStallTimer();
+      this.pendingGestureBgMusicUrl = null;
+      this.updateBgMusicDucking(this.playbackState === 'speaking');
+      this.emitMusicState();
+    };
+
+    audio.oncanplay = () => {
+      if (this.bgMusicSeq !== seq || this.bgMusicAudio !== audio) return;
+      if (audio.paused && !audio.ended && !audio.error && this.musicSoundAllowed) {
+        const retryP = audio.play();
+        if (retryP !== undefined) {
+          retryP.catch(() => {});
+        }
+      }
+    };
+
+    audio.onstalled = () => {
+      if (this.bgMusicSeq !== seq || this.bgMusicAudio !== audio) return;
+      if (audio.currentTime < 0.05 && mode === 'direct') {
+        triggerFallback();
+      }
+    };
+
     audio.onended = () => {
       if (this.bgMusicSeq !== seq || this.bgMusicAudio !== audio) return;
+      this.clearBgMusicStallTimer();
       this.bgMusicAudio = null;
       this.bgMusicUrl = null;
       if (this.musicPlaylistEnabled && this.musicSoundAllowed && this.musicTracks.length > 0) {
         this.musicTrackIndex = (this.musicTrackIndex + 1) % this.musicTracks.length;
         const nextTrack = this.musicTracks[this.musicTrackIndex];
         if (nextTrack) {
-          this.startBackgroundMusicUrl(nextTrack.url);
+          this.startBackgroundMusicUrl(nextTrack.url, 'direct');
           return;
         }
       }
@@ -2775,56 +2878,66 @@ class OpponentSpeechController {
 
     audio.onerror = () => {
       if (this.bgMusicSeq !== seq || this.bgMusicAudio !== audio) return;
-      this.bgMusicAudio = null;
-      this.bgMusicUrl = null;
-      if (usingBlob && allowDirectFallback) {
-        this.evictBrokenMusicBlob(url);
-        this.startBackgroundMusicUrl(url, false);
-        return;
-      }
-      if (allowDirectFallback) {
-        this.startBackgroundMusicUrl(url, false);
-        return;
-      }
-      this.emitMusicState();
+      triggerFallback();
     };
 
-    const playPromise = audio.play();
-    if (playPromise !== undefined) {
-      playPromise
-        .then(() => {
-          if (this.bgMusicSeq === seq && this.bgMusicAudio === audio) {
-            this.pendingGestureBgMusicUrl = null;
-            this.emitMusicState();
-          }
-        })
-        .catch((err) => {
-          if (this.bgMusicSeq !== seq) return;
-          if (this.bgMusicAudio === audio) {
-            this.bgMusicAudio = null;
-            this.bgMusicUrl = null;
-          }
-          const isAutoplayBlocked =
-            err instanceof DOMException && err.name === 'NotAllowedError';
-          if (isAutoplayBlocked) {
-            this.pendingGestureBgMusicUrl = url;
-            this.emitMusicState();
-            return;
-          }
-          if (usingBlob && allowDirectFallback) {
-            this.evictBrokenMusicBlob(url);
-            this.startBackgroundMusicUrl(url, false);
-            return;
-          }
-          if (allowDirectFallback) {
-            this.startBackgroundMusicUrl(url, false);
-            return;
-          }
-          this.emitMusicState();
-        });
-    } else {
-      this.emitMusicState();
+    // Startup stall watchdog: if native direct HTTP streaming doesn't start advancing within 4.5s,
+    // automatically switch to verified Blob-URL playback on the same unlocked audio element.
+    if (typeof window !== 'undefined' && mode === 'direct') {
+      this.clearBgMusicStallTimer();
+      this.bgMusicStallTimer = window.setTimeout(() => {
+        this.bgMusicStallTimer = null;
+        if (this.bgMusicSeq !== seq || this.bgMusicAudio !== audio) return;
+        if (audio.paused || audio.readyState < 2 || audio.currentTime < 0.02) {
+          triggerFallback();
+        }
+      }, 4500);
     }
+
+    const attemptPlay = (allowAbortRetry: boolean) => {
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            if (this.bgMusicSeq === seq && this.bgMusicAudio === audio) {
+              this.pendingGestureBgMusicUrl = null;
+              this.emitMusicState();
+            }
+          })
+          .catch((err) => {
+            if (this.bgMusicSeq !== seq) return;
+            const errName =
+              err && typeof err === 'object' && 'name' in err
+                ? String((err as { name?: unknown }).name)
+                : '';
+            if (errName === 'NotAllowedError') {
+              this.clearBgMusicStallTimer();
+              if (this.bgMusicAudio === audio) {
+                this.bgMusicAudio = null;
+                this.bgMusicUrl = null;
+              }
+              this.pendingGestureBgMusicUrl = url;
+              this.emitMusicState();
+              return;
+            }
+            if (errName === 'AbortError' && allowAbortRetry && typeof window !== 'undefined') {
+              // Switching tracks rapidly (pause + src swap + load + play) can throw AbortError on Chrome:
+              // retry once cleanly on the same unlocked element.
+              window.setTimeout(() => {
+                if (this.bgMusicSeq === seq && this.bgMusicAudio === audio && !audio.error) {
+                  attemptPlay(false);
+                }
+              }, 120);
+              return;
+            }
+            triggerFallback();
+          });
+      } else {
+        this.emitMusicState();
+      }
+    };
+
+    attemptPlay(true);
   }
 
   private playSeductionBackgroundMusic(url: string): void {
@@ -2838,14 +2951,17 @@ class OpponentSpeechController {
       this.updateBgMusicDucking(this.playbackState === 'speaking');
       return;
     }
-    const matchedIdx = this.musicTracks.findIndex((t) => t.url === url);
+    const cleanUrl = stripAssetQuery(url);
+    const matchedIdx = this.musicTracks.findIndex((t) => stripAssetQuery(t.url) === cleanUrl);
     if (matchedIdx >= 0) {
       this.musicTrackIndex = matchedIdx;
     }
-    this.startBackgroundMusicUrl(url);
+    this.startBackgroundMusicUrl(url, 'direct');
   }
 
   private stopBackgroundMusicInternal(clearPlaylist: boolean): void {
+    this.bgMusicSeq++;
+    this.clearBgMusicStallTimer();
     if (clearPlaylist) {
       this.musicPlaylistEnabled = false;
     }
@@ -2858,8 +2974,13 @@ class OpponentSpeechController {
       try {
         this.bgMusicAudio.onended = null;
         this.bgMusicAudio.onerror = null;
+        this.bgMusicAudio.oncanplay = null;
+        this.bgMusicAudio.onplaying = null;
+        this.bgMusicAudio.onstalled = null;
         this.bgMusicAudio.pause();
-        this.bgMusicAudio.currentTime = 0;
+        if (this.bgMusicAudio.readyState >= 1) {
+          this.bgMusicAudio.currentTime = 0;
+        }
       } catch {
         // ignore
       }
@@ -2877,12 +2998,16 @@ class OpponentSpeechController {
     if (this.gestureListenersAttached || typeof window === 'undefined') return;
     this.gestureListenersAttached = true;
 
-    const handleActivation = () => {
+    const handleActivation = (ev: Event) => {
       this.unlock();
-      if (this.pendingGestureBgMusicUrl && this.musicSoundAllowed) {
+      const targetEl = ev.target instanceof Element ? ev.target : null;
+      const isMusicSelectorClick = Boolean(
+        targetEl?.closest('[aria-label="Select background song"]'),
+      );
+      if (this.pendingGestureBgMusicUrl && this.musicSoundAllowed && !isMusicSelectorClick) {
         const queuedMusicUrl = this.pendingGestureBgMusicUrl;
         this.pendingGestureBgMusicUrl = null;
-        this.startBackgroundMusicUrl(queuedMusicUrl);
+        this.startBackgroundMusicUrl(queuedMusicUrl, 'direct');
       }
       if (this.pendingGestureClip) {
         const queued = this.pendingGestureClip;
