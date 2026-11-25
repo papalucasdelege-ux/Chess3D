@@ -839,8 +839,10 @@ function notifyStudioAuthListeners(): void {
   });
 }
 
+let studioBearerToken: string | null = null;
+
 export function isStudioDeveloperUnlocked(): boolean {
-  return IS_VIDEO_STUDIO_DEV_ENV && studioSessionUnlocked;
+  return IS_VIDEO_STUDIO_DEV_ENV && studioSessionUnlocked && Boolean(studioBearerToken);
 }
 
 export function subscribeStudioDeveloperAuth(listener: () => void): () => void {
@@ -850,18 +852,107 @@ export function subscribeStudioDeveloperAuth(listener: () => void): () => void {
   };
 }
 
-export function unlockStudioDeveloperSession(): void {
+export function unlockStudioDeveloperSession(token?: string): void {
   if (!IS_VIDEO_STUDIO_DEV_ENV) return;
-  if (!studioSessionUnlocked) {
+  if (typeof token === 'string' && token.length >= 32) {
+    studioBearerToken = token;
+  }
+  if (studioBearerToken && !studioSessionUnlocked) {
     studioSessionUnlocked = true;
     notifyStudioAuthListeners();
   }
 }
 
 export function logoutStudioDeveloperSession(): void {
+  const tokenToRevoke = studioBearerToken;
+  studioBearerToken = null;
   if (studioSessionUnlocked) {
     studioSessionUnlocked = false;
     notifyStudioAuthListeners();
+  }
+  if (IS_VIDEO_STUDIO_DEV_ENV && tokenToRevoke) {
+    fetch('/api/studio-auth/logout', {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'ChessAngelVideoStudio',
+        Authorization: `Bearer ${tokenToRevoke}`,
+      },
+    }).catch(() => {});
+  }
+}
+
+export interface StudioAuthStatus {
+  configured: boolean;
+  source: 'env' | 'claimed' | 'unconfigured';
+  authenticated: boolean;
+}
+
+export async function fetchStudioAuthStatus(): Promise<StudioAuthStatus | null> {
+  if (!IS_VIDEO_STUDIO_DEV_ENV) return null;
+  try {
+    const res = await fetch('/api/studio-auth/status', {
+      method: 'GET',
+      cache: 'no-store',
+      headers: buildStudioAuthHeaders(),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as Partial<StudioAuthStatus>;
+    return {
+      configured: Boolean(data.configured),
+      source:
+        data.source === 'env' || data.source === 'claimed' || data.source === 'unconfigured'
+          ? data.source
+          : 'unconfigured',
+      authenticated: Boolean(data.authenticated),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function setupStudioDeveloperPassword(
+  password: string,
+): Promise<{ ok: true; token: string } | { ok: false; error: string }> {
+  if (!IS_VIDEO_STUDIO_DEV_ENV) {
+    return { ok: false, error: 'Developer mode is unavailable.' };
+  }
+  try {
+    const res = await fetch('/api/studio-auth/setup', {
+      method: 'POST',
+      headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ password }),
+    });
+    const data = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
+    if (!res.ok || !data.token) {
+      return { ok: false, error: data.error || 'Could not configure developer password.' };
+    }
+    unlockStudioDeveloperSession(data.token);
+    return { ok: true, token: data.token };
+  } catch {
+    return { ok: false, error: 'Network error while setting developer password.' };
+  }
+}
+
+export async function verifyStudioDeveloperPassword(
+  password: string,
+): Promise<{ ok: true; token: string } | { ok: false; error: string }> {
+  if (!IS_VIDEO_STUDIO_DEV_ENV) {
+    return { ok: false, error: 'Developer mode is unavailable.' };
+  }
+  try {
+    const res = await fetch('/api/studio-auth/login', {
+      method: 'POST',
+      headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ password }),
+    });
+    const data = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
+    if (!res.ok || !data.token) {
+      return { ok: false, error: data.error || 'Incorrect developer password.' };
+    }
+    unlockStudioDeveloperSession(data.token);
+    return { ok: true, token: data.token };
+  } catch {
+    return { ok: false, error: 'Network error while verifying developer password.' };
   }
 }
 
@@ -869,11 +960,16 @@ function buildStudioAuthHeaders(extra?: Record<string, string>): Record<string, 
   return {
     ...(extra || {}),
     'X-Requested-With': 'ChessAngelVideoStudio',
+    ...(studioBearerToken ? { Authorization: `Bearer ${studioBearerToken}` } : {}),
   };
 }
 
-function handleUnauthorizedStudioResponse(_res: Response): void {
-  // No password token expiration when unlocked via 5-tap title gesture
+function handleUnauthorizedStudioResponse(res: Response): void {
+  if (res.status === 401 && (studioSessionUnlocked || studioBearerToken)) {
+    studioBearerToken = null;
+    studioSessionUnlocked = false;
+    notifyStudioAuthListeners();
+  }
 }
 
 function readStoredLipSyncFallback(): AngelLipSyncConfig {
@@ -1176,8 +1272,8 @@ const lastGroupTriggerKey: Partial<Record<AngelExpressionGroup, string>> = {};
 // Per-game play counters for non-case video slots (secondary idles, escape slots, #1/#2 fork sub-slots)
 const gameSlotPlayCounts = new Map<string, number>();
 
-const SECONDARY_IDLE_GLOBAL_COOLDOWN_MS = 22_000;
-const SECONDARY_IDLE_PER_CLIP_COOLDOWN_MS = 65_000;
+const SECONDARY_IDLE_GLOBAL_COOLDOWN_MS = 8_000;
+const SECONDARY_IDLE_PER_CLIP_COOLDOWN_MS = 28_000;
 
 function notifyListeners(): void {
   for (const fn of listeners) {
@@ -1500,6 +1596,29 @@ export function resetGameVideoPlayCounts(): void {
   for (const g of Object.keys(lastGroupTriggerKey) as AngelExpressionGroup[]) {
     delete lastGroupTriggerKey[g];
   }
+}
+
+/**
+ * Full reset of all Chess Angel video play counts, idle/case/escape rotation cursors,
+ * cooldown maps, and trigger keys so every video and variant starts fresh from #1.
+ */
+export function resetAllAngelVideoState(): void {
+  gameSlotPlayCounts.clear();
+  idleRotationCursor = 0;
+  secondaryIdleLastPlayedAt.clear();
+  escapeRotationCursor.point_you = 0;
+  escapeRotationCursor.point_me = 0;
+  escapeRotationCursor.push_button = 0;
+  for (const k of Object.keys(caseRotationCursor) as CommentaryCaseId[]) {
+    delete caseRotationCursor[k];
+  }
+  for (const k of Object.keys(lastCaseTriggerKey) as CommentaryCaseId[]) {
+    delete lastCaseTriggerKey[k];
+  }
+  for (const g of Object.keys(lastGroupTriggerKey) as AngelExpressionGroup[]) {
+    delete lastGroupTriggerKey[g];
+  }
+  setNextSeductionPlaybackAudio(null);
 }
 
 /**
@@ -2405,68 +2524,85 @@ export function getAngelIdleVideoPool(map: AngelVideoMapPayload = runtimeOverrid
 }
 
 /**
- * Picks the next Idle / Quiet Listening video from the active pool while preventing
- * secondary gestures (`idle_2`, `idle_3`, `idle_4`... such as glancing at her wrist watch)
- * from playing back-to-back or repeating too quickly:
- * - Always interleaves calm primary quiet listening (`pool[0]`) after any secondary gesture.
- * - Enforces a 48s global cooldown between secondary idle clips and a 110s per-clip cooldown.
+ * Picks (or peeks without consuming cooldowns when `commit === false`) the next Idle / Quiet Listening
+ * video from the active pool so ALL idle clips (`idle_2`..`idle_8` and `idle_1`) play naturally across
+ * every OS and browser without preloading accidentally burning the rotation or cooldowns.
  */
-export function pickNextAngelIdleVideo(avoidUrl?: string): string {
+export function pickNextAngelIdleVideo(avoidUrl?: string, commit = true): string {
   const pool = getAngelIdleVideoPool();
   const primary = pool[0];
   if (pool.length <= 1) {
-    lastPickedIdleUrl = primary;
+    if (commit) lastPickedIdleUrl = primary;
     return primary;
   }
 
   const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const secondaries = pool.slice(1);
+  const avoidClean = avoidUrl ? stripAssetQuery(avoidUrl) : '';
+  const primaryClean = stripAssetQuery(primary);
 
-  // 1. If the previous idle was a secondary clip (e.g. wrist watch) OR global cooldown is active,
-  //    always settle back into calm primary listening (`idle_1`)!
-  const lastWasSecondary = lastPickedIdleUrl !== '' && lastPickedIdleUrl !== primary;
   const globalCooldownActive =
     lastSecondaryIdleAtMs > 0 && now - lastSecondaryIdleAtMs < SECONDARY_IDLE_GLOBAL_COOLDOWN_MS;
 
-  if (lastWasSecondary || globalCooldownActive) {
-    lastPickedIdleUrl = primary;
+  if (globalCooldownActive && avoidClean !== primaryClean) {
+    if (commit) lastPickedIdleUrl = primary;
     return primary;
   }
 
-  // 2. Otherwise pick the next secondary variation that isn't on per-clip cooldown or capped for this game
+  // Pick the next secondary variation that isn't on per-clip cooldown or capped for this game
   const variants = runtimeOverrides.idleVariants || {};
   const urlToIdleSlotId = new Map<string, string>();
   for (const [k, u] of Object.entries(variants)) {
     if (k !== 'idle_1' && u) {
-      urlToIdleSlotId.set(u, `idle:${k}`);
+      urlToIdleSlotId.set(stripAssetQuery(u), `idle:${k}`);
     }
   }
 
   for (let offset = 0; offset < secondaries.length; offset++) {
     const idx = (idleRotationCursor + offset) % secondaries.length;
     const candidate = secondaries[idx];
-    const idleSlotId = urlToIdleSlotId.get(candidate);
+    const candidateClean = stripAssetQuery(candidate);
+    const idleSlotId = urlToIdleSlotId.get(candidateClean);
     if (idleSlotId && !canPlayVideoSlotInGame(idleSlotId)) {
       continue;
     }
-    const lastClipAt = secondaryIdleLastPlayedAt.get(candidate) || 0;
+    const lastClipAt = secondaryIdleLastPlayedAt.get(candidateClean) || 0;
     const clipReady =
       lastClipAt === 0 || now - lastClipAt >= SECONDARY_IDLE_PER_CLIP_COOLDOWN_MS;
 
-    if (candidate !== avoidUrl && clipReady) {
-      idleRotationCursor = (idx + 1) % secondaries.length;
-      lastPickedIdleUrl = candidate;
-      lastSecondaryIdleAtMs = now;
-      secondaryIdleLastPlayedAt.set(candidate, now);
-      if (idleSlotId) {
-        recordVideoSlotPlayInGame(idleSlotId);
+    if (candidateClean !== avoidClean && clipReady) {
+      if (commit) {
+        idleRotationCursor = (idx + 1) % secondaries.length;
+        lastPickedIdleUrl = candidate;
+        lastSecondaryIdleAtMs = now;
+        secondaryIdleLastPlayedAt.set(candidateClean, now);
+        if (idleSlotId) {
+          recordVideoSlotPlayInGame(idleSlotId);
+        }
       }
       return candidate;
     }
   }
 
-  lastPickedIdleUrl = primary;
-  return primary;
+  // Fallback: if all secondaries are on short cooldown, pick the least-recently played one or primary
+  const fallbackCandidate =
+    avoidClean === primaryClean ? secondaries[idleRotationCursor % secondaries.length] : primary;
+  if (commit) {
+    lastPickedIdleUrl = fallbackCandidate;
+    if (stripAssetQuery(fallbackCandidate) !== primaryClean) {
+      idleRotationCursor = (idleRotationCursor + 1) % secondaries.length;
+      lastSecondaryIdleAtMs = now;
+      secondaryIdleLastPlayedAt.set(stripAssetQuery(fallbackCandidate), now);
+    }
+  }
+  return fallbackCandidate;
+}
+
+/**
+ * Pure read-only preview of the next Idle video URL for standby preloading (never mutates cursors or cooldowns).
+ */
+export function peekNextAngelIdleVideo(avoidUrl?: string): string {
+  return pickNextAngelIdleVideo(avoidUrl, false);
 }
 
 export function resolveAngelIdleVideo(): string {
@@ -3226,145 +3362,22 @@ export function prepareHumanCommentaryPlayback(
   return { videoUrl, videoSec, audioSec, playToEnd };
 }
 
-const warmedMediaUrls = new Set<string>();
 let backgroundPrewarmerStarted = false;
 
 /**
- * Gently warms a single `.mp4` or `.mp3` URL into the browser HTTP + Service Worker cache via
- * `fetch()` WITHOUT instantiating any `HTMLVideoElement` or Android hardware `MediaCodec`.
+ * Gently warms only lightweight non-streaming assets (small voice clips) without flooding the
+ * browser connection pool with dozens of megabytes of `.mp4` fetches that can starve live
+ * `<video>` Range requests on Android Chrome, Windows Chrome, and Safari.
  */
-export function warmAngelVideoUrlInCache(url?: string | null): void {
-  if (typeof window === 'undefined' || !url) return;
-  const clean = url.trim();
-  if (!clean || warmedMediaUrls.has(clean)) return;
-  const nav = navigator as Navigator & {
-    connection?: { saveData?: boolean };
-  };
-  if (nav.connection?.saveData) return;
-  warmedMediaUrls.add(clean);
-  fetch(clean, { method: 'GET', credentials: 'same-origin' })
-    .then((res) => {
-      if (!res.ok) {
-        warmedMediaUrls.delete(clean);
-        return;
-      }
-      // Consume body stream so Workbox CacheFirst persists the full 200 response for Range requests
-      return res.arrayBuffer().catch(() => {});
-    })
-    .catch(() => {
-      warmedMediaUrls.delete(clean);
-    });
+export function warmAngelVideoUrlInCache(_url?: string | null): void {
+  // All MP4 videos use faststart (moov-first) native HTTP 206 streaming directly in <video>.
 }
 
-/**
- * Sequential, single-request-at-a-time background media cache warmer for installed PWAs,
- * Android tablets, and non-Data-Saver connections. Ensures all Chess Angel portrait videos
- * (thank_jan, forks, seduction 1–5, escapes, idles, level clips) are locally cached for
- * instant playback with zero MediaCodec pressure.
- */
 export function startAngelMediaBackgroundPrewarmer(): void {
   if (typeof window === 'undefined' || backgroundPrewarmerStarted) return;
-  const nav = navigator as Navigator & {
-    standalone?: boolean;
-    connection?: { saveData?: boolean; effectiveType?: string };
-  };
-  if (nav.connection?.saveData) return;
-  const effType = nav.connection?.effectiveType || '';
-  if (effType === 'slow-2g' || effType === '2g') return;
-
-  const isInstalledPwa =
-    (typeof window.matchMedia === 'function' &&
-      window.matchMedia('(display-mode: standalone)').matches) ||
-    nav.standalone === true;
-  const shortestSide = Math.min(window.innerWidth || 1024, window.innerHeight || 768);
-  const isTabletOrDesktop = shortestSide >= 600;
-  // Always warm the full catalog for installed PWAs and tablets/desktops; on small non-installed phones warm core gameplay clips
-  const warmFullCatalog = isInstalledPwa || isTabletOrDesktop || effType === '4g' || effType === '';
-
   backgroundPrewarmerStarted = true;
-
-  const collectUrls = (): string[] => {
-    const ordered: string[] = [];
-    const push = (u?: string | null) => {
-      if (!u) return;
-      if (!ordered.includes(u)) ordered.push(u);
-    };
-
-    // High-priority clips first (intro, forks, thank_jan, seduction, tree_browse, escapes)
-    push(ANGEL_DEFAULT_SPEAKING_VIDEO_SRC);
-    push(runtimeOverrides.defaultSpeaking);
-    push(ANGEL_IDLE_LISTENING_VIDEO_SRC);
-    push(runtimeOverrides.cases?.intro);
-    push(runtimeOverrides.cases?.warn_double);
-    push(runtimeOverrides.cases?.warn_fork_2step);
-    push(runtimeOverrides.cases?.warn_fork_2step_2);
-    push(runtimeOverrides.cases?.undo_done);
-    push(runtimeOverrides.cases?.undo_done_2);
-    push(runtimeOverrides.cases?.thank_jan);
-    push(runtimeOverrides.cases?.opening);
-    push(runtimeOverrides.cases?.tree_browse);
-    push(runtimeOverrides.cases?.seduction);
-    push(runtimeOverrides.cases?.seduction_2);
-    push(runtimeOverrides.cases?.seduction_3);
-    push(runtimeOverrides.cases?.seduction_4);
-    push(runtimeOverrides.cases?.seduction_5);
-    push(runtimeOverrides.cases?.seduction_6);
-    for (const escUrl of Object.values(runtimeOverrides.escapes || {})) {
-      push(escUrl);
-    }
-
-    // Pre-warm both locked music tracks right away for instant playback
-    for (const track of DEFAULT_MUSIC_TRACKS) {
-      push(track.url);
-    }
-    for (const track of runtimeOverrides.musicTracks || []) {
-      push(track.url);
-    }
-
-    if (warmFullCatalog) {
-      push(runtimeOverrides.dogRunVideo || ANGEL_DOG_RUN_VIDEO_SRC);
-      push(runtimeOverrides.danceStarsVideo || ANGEL_DANCE_STARS_VIDEO_SRC);
-      for (const caseUrl of Object.values(runtimeOverrides.cases || {})) {
-        push(caseUrl);
-      }
-      for (const caseUrl of Object.values(ANGEL_CASE_VIDEO_MAP)) {
-        push(caseUrl);
-      }
-      for (const idleUrl of Object.values(runtimeOverrides.idleVariants || {})) {
-        push(idleUrl);
-      }
-      push(runtimeOverrides.thankJanAudioUrl);
-      push(runtimeOverrides.seductionAudioUrl);
-    }
-
-    return ordered;
-  };
-
-  window.setTimeout(() => {
-    const queue = collectUrls();
-    let idx = 0;
-    const pumpNext = () => {
-      if (idx >= queue.length) return;
-      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-        window.setTimeout(pumpNext, 5000);
-        return;
-      }
-      const url = queue[idx++];
-      if (warmedMediaUrls.has(url)) {
-        window.setTimeout(pumpNext, 40);
-        return;
-      }
-      warmedMediaUrls.add(url);
-      fetch(url, { method: 'GET', credentials: 'same-origin' })
-        .then((res) => (res.ok ? res.arrayBuffer() : Promise.resolve(null)))
-        .catch(() => {
-          warmedMediaUrls.delete(url);
-        })
-        .finally(() => {
-          window.setTimeout(pumpNext, isInstalledPwa ? 180 : 320);
-        });
-    };
-    pumpNext();
-  }, 2600);
+  // Intentionally do not flood 65MB of .mp4 fetches on page load so active <video> streams
+  // always have full bandwidth across Android, Windows Chrome, macOS, iOS, and Linux.
 }
+
 

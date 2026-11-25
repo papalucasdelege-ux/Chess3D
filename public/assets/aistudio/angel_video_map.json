@@ -799,12 +799,12 @@
   "thankJanAudioDuration": 8.9,
   "musicTracks": [
     {
-      "id": "queen_infinite_reign",
+      "id": "chess_angle_a_beautiful_queen_and_her_infinite_re_8a3d493b",
       "title": "Queen's Infinite Reign",
       "url": "/assets/aistudio/Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3"
     },
     {
-      "id": "chess_angel_rap",
+      "id": "chess_angle_rap",
       "title": "Chess Angel Rap",
       "url": "/assets/aistudio/Chess_Angle_RAP.mp3"
     }

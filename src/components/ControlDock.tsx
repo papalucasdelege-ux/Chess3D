@@ -149,8 +149,8 @@ interface ControlDockProps {
   canSaveCurrent: boolean;
   justSaved: boolean;
   onOpenLoadDrawer?: () => void;
-  onSecretStudioTrigger?: () => void;
   onTitleTribute?: () => void;
+  onResetAngelMessages: () => void;
 
   // Tactical Training & Performance Statistics
   onStartTacticalTraining: (puzzleId?: string) => void;
@@ -258,14 +258,14 @@ const TC_ORDER: TimeControlId[] = ['3+0', '5+3', '10+0', 'unlimited'];
 
 export function ControlDock(props: ControlDockProps) {
   const [emblemBroken, setEmblemBroken] = useState(false);
+  const [messagesJustReset, setMessagesJustReset] = useState(false);
+  const messagesResetTimerRef = useRef<number | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [replayListTab, setReplayListTab] = useState<'saved' | 'classics'>('saved');
   const [loadDrawerOpen, setLoadDrawerOpen] = useState(false);
   const [importNotice, setImportNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [confirmResetStats, setConfirmResetStats] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const secretTapTimesRef = useRef<number[]>([]);
-
   const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -281,15 +281,6 @@ export function ControlDock(props: ControlDockProps) {
   };
 
   const handleBrandSecretTap = () => {
-    const now = performance.now();
-    const recent = secretTapTimesRef.current.filter((t) => now - t <= 2800);
-    recent.push(now);
-    if (props.onSecretStudioTrigger && recent.length >= 5) {
-      secretTapTimesRef.current = [];
-      props.onSecretStudioTrigger();
-      return;
-    }
-    secretTapTimesRef.current = recent;
     props.onTitleTribute?.();
   };
 
@@ -512,6 +503,39 @@ export function ControlDock(props: ControlDockProps) {
                 })}
               </div>
             )}
+
+            <button
+              type="button"
+              onClick={() => {
+                props.onResetAngelMessages();
+                setMessagesJustReset(true);
+                if (messagesResetTimerRef.current !== null) {
+                  window.clearTimeout(messagesResetTimerRef.current);
+                }
+                messagesResetTimerRef.current = window.setTimeout(() => {
+                  setMessagesJustReset(false);
+                  messagesResetTimerRef.current = null;
+                }, 2000);
+              }}
+              title="Reset all Chess Angel messages, voice history, and video rotations to fresh"
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap focus-visible:outline-2 focus-visible:outline-[#e3be78] ${
+                messagesJustReset
+                  ? 'bg-[#172a20] border-[#34d399]/60 text-[#a7f3d0]'
+                  : 'bg-[#171c26] hover:bg-[#1f2634] border-white/10 text-[#cfd5e0] hover:text-white'
+              }`}
+            >
+              {messagesJustReset ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-[#34d399]" />
+                  Messages Reset
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="w-3.5 h-3.5 text-[#c89d54]" />
+                  Reset Messages
+                </>
+              )}
+            </button>
 
             <button
               type="button"

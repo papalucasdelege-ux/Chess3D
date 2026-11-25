@@ -13,6 +13,7 @@ export type MiniHamsterVariant = 'russian-grey' | 'snow-white';
  */
 function createCampbellFurTextures(variant: MiniHamsterVariant): {
   colorMap: THREE.CanvasTexture;
+  headColorMap: THREE.CanvasTexture | null;
   bumpMap: THREE.CanvasTexture;
 } {
   const size = 512;
@@ -20,6 +21,8 @@ function createCampbellFurTextures(variant: MiniHamsterVariant): {
   colorCanvas.width = size;
   colorCanvas.height = size;
   const ctx = colorCanvas.getContext('2d');
+
+  let headCanvas: HTMLCanvasElement | null = null;
 
   const bumpCanvas = document.createElement('canvas');
   bumpCanvas.width = size;
@@ -34,42 +37,23 @@ function createCampbellFurTextures(variant: MiniHamsterVariant): {
 
   if (ctx) {
     if (variant === 'russian-grey') {
-      // Totally grey Campbell's dwarf hamster: uniform plush medium-grey coat all over
-      // with a crisp dark-grey dorsal stripe running all the way along his back & head.
+      // Soft light-grey Campbell's dwarf hamster all over with a crisp dark-grey dorsal stripe
+      // strictly along his back (NOT on his head).
       const img = ctx.getImageData(0, 0, size, size);
       const data = img.data;
       for (let py = 0; py < size; py++) {
-        const v = py / (size - 1); // 0 = rump/tail base, 1 = shoulders/forehead
         for (let px = 0; px < size; px++) {
           const u = px / (size - 1);
-          // Angular distance from dorsal centerline (u = 0.25) wrapped onto [0, 0.5]
           let dTop = Math.abs(u - 0.25);
           if (dTop > 0.5) dTop = 1 - dTop;
 
           const idx = (py * size + px) * 4;
-          const grain = (rand() - 0.5) * 14;
-          // Subtle natural depth: medium-grey everywhere (slightly softer silver-grey on lower belly, never white)
-          const bellyShade = THREE.MathUtils.clamp((dTop - 0.22) / 0.28, 0, 1);
-          let r = 108 + bellyShade * 14 + grain;
-          let g = 112 + bellyShade * 14 + grain;
-          let b = 119 + bellyShade * 15 + grain;
-
-          // Continuous dark-grey dorsal stripe running ALL over his back from crown to tail!
-          const stripeWidth = 0.021 + Math.sin(v * Math.PI) * 0.008;
-          if (dTop < stripeWidth + 0.016) {
-            const sK = THREE.MathUtils.clamp(
-              1 - (dTop - stripeWidth * 0.48) / (stripeWidth * 0.92),
-              0,
-              1,
-            );
-            const sSmooth = sK * sK * (3 - 2 * sK);
-            const stripeR = 40 + (rand() - 0.5) * 8;
-            const stripeG = 43 + (rand() - 0.5) * 8;
-            const stripeB = 49 + (rand() - 0.5) * 8;
-            r = r * (1 - sSmooth) + stripeR * sSmooth;
-            g = g * (1 - sSmooth) + stripeG * sSmooth;
-            b = b * (1 - sSmooth) + stripeB * sSmooth;
-          }
+          const grain = (rand() - 0.5) * 12;
+          // Rich medium-grey plush coat all over so he reads unmistakably grey with a crisp dark-grey back line
+          const bellyShade = THREE.MathUtils.clamp((dTop - 0.24) / 0.26, 0, 1);
+          const r = 128 + bellyShade * 10 + grain;
+          const g = 133 + bellyShade * 10 + grain;
+          const b = 141 + bellyShade * 10 + grain;
 
           data[idx] = Math.round(THREE.MathUtils.clamp(r, 0, 255));
           data[idx + 1] = Math.round(THREE.MathUtils.clamp(g, 0, 255));
@@ -80,27 +64,55 @@ function createCampbellFurTextures(variant: MiniHamsterVariant): {
       ctx.putImageData(img, 0, 0);
 
       // Fine velvety grey short-coat fur micro-strokes flowing front-to-back
-      for (let i = 0; i < 2400; i++) {
+      for (let i = 0; i < 2200; i++) {
         const x = rand() * size;
         const y = rand() * size;
         const len = 5 + rand() * 11;
-        const alpha = 0.06 + rand() * 0.12;
+        const alpha = 0.06 + rand() * 0.1;
         ctx.strokeStyle =
           rand() > 0.48
-            ? `rgba(176, 182, 192, ${alpha.toFixed(3)})`
-            : `rgba(34, 37, 44, ${alpha.toFixed(3)})`;
+            ? `rgba(182, 188, 198, ${alpha.toFixed(3)})`
+            : `rgba(70, 76, 86, ${alpha.toFixed(3)})`;
         ctx.lineWidth = 0.9 + rand() * 0.9;
         ctx.beginPath();
         ctx.moveTo(x, y);
         ctx.lineTo(x + (rand() - 0.5) * 2.4, y - len);
         ctx.stroke();
       }
+
+      // Snapshot the pure unstriped grey coat for the head so his stripe stays ONLY on his back!
+      headCanvas = document.createElement('canvas');
+      headCanvas.width = size;
+      headCanvas.height = size;
+      const hCtx = headCanvas.getContext('2d');
+      if (hCtx) {
+        hCtx.drawImage(colorCanvas, 0, 0);
+      }
+
+      // Paint the dark-grey dorsal stripe ON TOP of the back fur strokes (only along his back,
+      // tapering off cleanly before the neck/head junction at v ≈ 0.88; note flipY=true -> v = 1 - py/size)
+      const stripeX = 0.25 * size;
+      for (let py = 0; py < size; py++) {
+        const v = 1 - py / (size - 1); // 0 = rump, 1 = front shoulders
+        if (v > 0.9) continue;
+        const shoulderFade = v > 0.78 ? THREE.MathUtils.clamp((0.9 - v) / 0.12, 0, 1) : 1;
+        const halfW = (0.025 + Math.sin(v * Math.PI) * 0.01) * size * shoulderFade;
+        if (halfW < 1) continue;
+        const gStripe = ctx.createLinearGradient(stripeX - halfW * 1.4, 0, stripeX + halfW * 1.4, 0);
+        gStripe.addColorStop(0, 'rgba(26, 29, 36, 0)');
+        gStripe.addColorStop(0.24, `rgba(26, 29, 36, ${(0.96 * shoulderFade).toFixed(3)})`);
+        gStripe.addColorStop(0.5, `rgba(18, 20, 26, ${(1.0 * shoulderFade).toFixed(3)})`);
+        gStripe.addColorStop(0.76, `rgba(26, 29, 36, ${(0.96 * shoulderFade).toFixed(3)})`);
+        gStripe.addColorStop(1, 'rgba(26, 29, 36, 0)');
+        ctx.fillStyle = gStripe;
+        ctx.fillRect(stripeX - halfW * 1.4, py, halfW * 2.8, 1.5);
+      }
     } else {
-      // Light-grey Campbell's dwarf hamster with several darker grey spots of different sizes
+      // Crisp snowy-white Campbell's dwarf hamster with several darker grey spots of different sizes
       const grad = ctx.createLinearGradient(0, 0, 0, size);
-      grad.addColorStop(0, '#c8ced7');
-      grad.addColorStop(0.5, '#d2d7e0');
-      grad.addColorStop(1, '#c5cbd5');
+      grad.addColorStop(0, '#eef1f6');
+      grad.addColorStop(0.5, '#f5f7fa');
+      grad.addColorStop(1, '#eaeef4');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, size, size);
 
@@ -125,13 +137,13 @@ function createCampbellFurTextures(variant: MiniHamsterVariant): {
           const rg = ctx.createRadialGradient(
             0,
             0,
-            Math.min(rx, ry) * 0.28,
+            Math.min(rx, ry) * 0.34,
             0,
             0,
             Math.max(rx, ry),
           );
           rg.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${opacity})`);
-          rg.addColorStop(0.7, `rgba(${r}, ${g}, ${b}, ${(opacity * 0.94).toFixed(3)})`);
+          rg.addColorStop(0.74, `rgba(${r}, ${g}, ${b}, ${(opacity * 0.96).toFixed(3)})`);
           rg.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
           ctx.fillStyle = rg;
           ctx.scale(1, ry / rx);
@@ -142,20 +154,21 @@ function createCampbellFurTextures(variant: MiniHamsterVariant): {
         }
       };
 
-      // Several darker grey spots of clearly different sizes across back, flanks, rump, shoulders & crown
+      // Several clearly distinct darker-grey spots of varied sizes across white back, flanks, rump, shoulders & crown
       // (u = 0.25 is dorsal centerline, u = 0.0 / 0.5 are lateral flanks; v = 0 rump -> v = 1 front/head)
-      paintSpot(0.18, 0.56, 62, 74, 0.28, [74, 80, 90], 0.94); // Large left dorsal saddle patch
-      paintSpot(0.35, 0.28, 52, 60, -0.34, [84, 90, 100], 0.92); // Large-medium right rump patch
-      paintSpot(0.41, 0.62, 40, 48, 0.22, [68, 74, 84], 0.92); // Medium right flank spot
-      paintSpot(0.24, 0.38, 34, 42, -0.22, [78, 84, 94], 0.9); // Medium mid-back oval spot
-      paintSpot(0.08, 0.42, 32, 36, 0.45, [90, 96, 106], 0.88); // Medium-small left flank spot
-      paintSpot(0.14, 0.22, 26, 30, -0.35, [72, 78, 88], 0.9); // Small left hip dot
-      paintSpot(0.31, 0.74, 24, 28, 0.18, [66, 72, 82], 0.9); // Small right shoulder spot
-      paintSpot(0.27, 0.52, 16, 18, -0.15, [62, 68, 78], 0.88); // Tiny upper-back freckle
-      paintSpot(0.45, 0.44, 18, 22, 0.3, [82, 88, 98], 0.86); // Small lower-right flank dot
-      // Head crown & cheek-side darker grey spots (keeping snout tip light grey so the pink nose pops!)
-      paintSpot(0.17, 0.81, 30, 34, 0.25, [72, 78, 88], 0.9); // Left crown/temple patch
-      paintSpot(0.36, 0.84, 20, 22, -0.28, [86, 92, 102], 0.86); // Small right temple spot
+      paintSpot(0.18, 0.56, 66, 78, 0.28, [56, 61, 70], 0.97); // Large left dorsal saddle patch
+      paintSpot(0.36, 0.26, 54, 64, -0.34, [64, 70, 80], 0.96); // Large-medium right rump patch
+      paintSpot(0.42, 0.62, 42, 50, 0.22, [52, 57, 66], 0.96); // Medium right flank spot
+      paintSpot(0.24, 0.37, 34, 42, -0.22, [60, 66, 76], 0.95); // Medium mid-back oval spot
+      paintSpot(0.08, 0.41, 32, 36, 0.45, [70, 76, 86], 0.94); // Medium-small left flank spot
+      paintSpot(0.14, 0.2, 26, 30, -0.35, [54, 60, 70], 0.95); // Small left hip dot
+      paintSpot(0.31, 0.74, 24, 28, 0.18, [50, 56, 66], 0.95); // Small right shoulder spot
+      paintSpot(0.27, 0.51, 16, 18, -0.15, [48, 54, 64], 0.94); // Tiny upper-back freckle
+      paintSpot(0.46, 0.43, 18, 22, 0.3, [64, 70, 80], 0.93); // Small lower-right flank dot
+      paintSpot(0.21, 0.14, 14, 16, 0.2, [58, 64, 74], 0.93); // Tiny rear rump dot
+      // Head crown & cheek-side darker grey spots (keeping snout tip white so the pink nose pops!)
+      paintSpot(0.16, 0.81, 32, 36, 0.25, [56, 62, 72], 0.95); // Left crown/temple patch
+      paintSpot(0.37, 0.84, 21, 23, -0.28, [68, 74, 84], 0.93); // Small right temple spot
 
       // Silky plush light-grey & silver fur micro-strokes
       for (let i = 0; i < 2200; i++) {
@@ -199,11 +212,19 @@ function createCampbellFurTextures(variant: MiniHamsterVariant): {
   colorMap.wrapS = THREE.RepeatWrapping;
   colorMap.wrapT = THREE.ClampToEdgeWrapping;
 
+  let headColorMap: THREE.CanvasTexture | null = null;
+  if (headCanvas) {
+    headColorMap = new THREE.CanvasTexture(headCanvas);
+    headColorMap.colorSpace = THREE.SRGBColorSpace;
+    headColorMap.wrapS = THREE.RepeatWrapping;
+    headColorMap.wrapT = THREE.ClampToEdgeWrapping;
+  }
+
   const bumpMap = new THREE.CanvasTexture(bumpCanvas);
   bumpMap.wrapS = THREE.RepeatWrapping;
   bumpMap.wrapT = THREE.RepeatWrapping;
 
-  return { colorMap, bumpMap };
+  return { colorMap, headColorMap, bumpMap };
 }
 
 /**
@@ -425,6 +446,7 @@ export class MiniHamsterActor {
   private readonly shadowMat: THREE.MeshBasicMaterial;
 
   private readonly furTex: THREE.CanvasTexture;
+  private readonly headFurTex: THREE.CanvasTexture | null;
   private readonly furBumpTex: THREE.CanvasTexture;
   private readonly shadowTex: THREE.CanvasTexture;
   private readonly geometries: THREE.BufferGeometry[] = [];
@@ -438,6 +460,7 @@ export class MiniHamsterActor {
 
     const furTextures = createCampbellFurTextures(variant);
     this.furTex = furTextures.colorMap;
+    this.headFurTex = furTextures.headColorMap;
     this.furBumpTex = furTextures.bumpMap;
     this.shadowTex = createHamsterShadowTexture();
 
@@ -447,31 +470,61 @@ export class MiniHamsterActor {
         bumpMap: this.furBumpTex,
         bumpScale: 0.012,
         color: 0xffffff,
-        emissive: isGrey ? 0x16181d : 0x1d2026,
-        emissiveIntensity: isGrey ? 0.15 : 0.16,
+        emissive: isGrey ? 0x14171c : 0x262930,
+        emissiveIntensity: isGrey ? 0.14 : 0.2,
         roughness: 0.89,
         metalness: 0.01,
       }),
     );
 
+    // Pure unstriped grey fur material for the grey hamster's head (dorsal stripe stays strictly on his back!)
+    const headCoatMat = this.headFurTex
+      ? this.trackMat(
+          new THREE.MeshStandardMaterial({
+            map: this.headFurTex,
+            bumpMap: this.furBumpTex,
+            bumpScale: 0.012,
+            color: 0xffffff,
+            emissive: 0x14171c,
+            emissiveIntensity: 0.14,
+            roughness: 0.89,
+            metalness: 0.01,
+          }),
+        )
+      : coatMat;
+
     // Matching solid coat fur for chest ruff, whisker pads, chin, tail & hairy Phodopus feet:
-    // totally grey for the grey hamster, soft light grey for the spotted light-grey hamster!
+    // rich grey for the grey hamster, crisp snowy white for the spotted white hamster!
     const creamFurMat = this.trackMat(
       new THREE.MeshStandardMaterial({
         bumpMap: this.furBumpTex,
         bumpScale: 0.008,
-        color: isGrey ? 0x70757d : 0xcbd1da,
-        emissive: isGrey ? 0x15171c : 0x1d2026,
-        emissiveIntensity: 0.14,
+        color: isGrey ? 0x828892 : 0xf0f3f8,
+        emissive: isGrey ? 0x14171c : 0x262930,
+        emissiveIntensity: isGrey ? 0.14 : 0.18,
         roughness: 0.9,
         metalness: 0.0,
       }),
     );
 
+    const darkGreyStripeMat = isGrey
+      ? this.trackMat(
+          new THREE.MeshStandardMaterial({
+            bumpMap: this.furBumpTex,
+            bumpScale: 0.006,
+            color: 0x1d2027,
+            emissive: 0x050608,
+            emissiveIntensity: 0.1,
+            roughness: 0.84,
+            metalness: 0.02,
+          }),
+        )
+      : null;
+
     const earOuterMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: isGrey ? 0x585d66 : 0xb4bbc6,
-        emissive: isGrey ? 0x101216 : 0x1a1d24,
+        color: isGrey ? 0x6f7580 : 0xdde2ea,
+        emissive: isGrey ? 0x12141a : 0x22252c,
         emissiveIntensity: 0.14,
         roughness: 0.84,
         metalness: 0.0,
@@ -480,7 +533,7 @@ export class MiniHamsterActor {
 
     const earInnerMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: isGrey ? 0x837f86 : 0xffaac2,
+        color: isGrey ? 0x848088 : 0xffaac2,
         emissive: isGrey ? 0x141316 : 0x3f1422,
         emissiveIntensity: 0.2,
         roughness: 0.72,
@@ -573,10 +626,37 @@ export class MiniHamsterActor {
     this.bodyPivot.position.set(0, 0.215, -0.02);
     this.root.add(this.bodyPivot);
 
-    // 1. Continuous sculpted Campbell's Dwarf Hamster pear-egg torso (with dorsal stripe & 3-arch flank texture)
+    // 1. Continuous sculpted Campbell's Dwarf Hamster pear-egg torso
     const bodyMesh = makeMesh(createCampbellBodyGeometry(), coatMat);
     bodyMesh.position.set(0, 0.015, -0.04);
     this.bodyPivot.add(bodyMesh);
+
+    // Unmistakable flush dark-grey dorsal stripe hugging ONLY his back from upper shoulders down to the tail!
+    if (isGrey && darkGreyStripeMat) {
+      const spinePts: THREE.Vector3[] = [];
+      for (let s = 0; s <= 18; s++) {
+        const t = -0.92 + (s / 18) * 1.66; // rump (-0.92) -> upper back/shoulders (+0.74), never onto head
+        const radial = Math.sqrt(Math.max(0, 1 - t * t));
+        const dorsalHeight =
+          0.242 *
+          (1.0 +
+            0.13 * Math.exp(-Math.pow((t + 0.18) / 0.55, 2)) +
+            0.04 * Math.exp(-Math.pow((t - 0.35) / 0.4, 2)));
+        const ySurf =
+          dorsalHeight * radial +
+          0.022 * Math.exp(-Math.pow((t + 0.12) / 0.65, 2)) * (1 - Math.abs(t) * 0.4) +
+          0.015;
+        const zSurf = (t < 0 ? t * 0.385 * 1.03 : t * 0.385 * 0.96) - 0.04;
+        // Embed tube center slightly beneath dorsal surface so a crisp flush dark-grey stripe shows along his back
+        spinePts.push(new THREE.Vector3(0, ySurf - 0.015, zSurf));
+      }
+      const bodyStripe = makeMesh(
+        new THREE.TubeGeometry(new THREE.CatmullRomCurve3(spinePts), 32, 0.022, 8, false),
+        darkGreyStripeMat,
+        false,
+      );
+      this.bodyPivot.add(bodyStripe);
+    }
 
     // Soft furry neck-collar / chest ruff blending shoulders seamlessly into the head (no skinny neck!)
     const chestRuff = makeMesh(new THREE.SphereGeometry(0.185, 16, 12), creamFurMat);
@@ -588,7 +668,7 @@ export class MiniHamsterActor {
     this.headPivot.position.set(0, 0.032, 0.285);
     this.bodyPivot.add(this.headPivot);
 
-    const headMesh = makeMesh(createCampbellHeadGeometry(), coatMat);
+    const headMesh = makeMesh(createCampbellHeadGeometry(), headCoatMat);
     headMesh.position.set(0, 0.01, 0.035);
     this.headPivot.add(headMesh);
 
@@ -619,7 +699,7 @@ export class MiniHamsterActor {
     // Glossy prominent dark obsidian "boba" eyes set slightly high & wide-lateral + curved whiskers
     for (const side of [-1, 1]) {
       // Subtle fur eyelid rim
-      const eyeRim = makeMesh(new THREE.SphereGeometry(0.05, 12, 10), coatMat, false);
+      const eyeRim = makeMesh(new THREE.SphereGeometry(0.05, 12, 10), headCoatMat, false);
       eyeRim.scale.set(0.92, 0.94, 0.82);
       eyeRim.position.set(side * 0.132, 0.042, 0.146);
       this.headPivot.add(eyeRim);
@@ -894,6 +974,7 @@ export class MiniHamsterActor {
     for (const g of this.geometries) g.dispose();
     for (const m of this.materials) m.dispose();
     this.furTex.dispose();
+    this.headFurTex?.dispose();
     this.furBumpTex.dispose();
     this.shadowTex.dispose();
   }

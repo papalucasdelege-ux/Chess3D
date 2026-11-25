@@ -140,6 +140,7 @@ interface SceneCallbacks {
   onUpperRightVoidChange?: (spec: UpperRightVoidSpec) => void;
   onContextLost?: () => void;
   onContextRestored?: () => void;
+  onSecretCoord8DoubleClick?: () => void;
 }
 
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
@@ -391,7 +392,9 @@ export class ChessScene3D {
 
   // Interaction
   private raycaster = new THREE.Raycaster();
+  private coordRaycaster = new THREE.Raycaster();
   private pointerDownPos = { x: 0, y: 0 };
+  private lastCoord8TapMs = 0;
   private hoveredSquare: string | null = null;
   private lastHoverRaycastTime = 0;
 
@@ -412,6 +415,7 @@ export class ChessScene3D {
   private boundPointerUp!: (e: PointerEvent) => void;
   private boundPointerMove!: (e: PointerEvent) => void;
   private boundPointerLeave!: () => void;
+  private boundDblClick!: (e: MouseEvent) => void;
   private boundContextLost!: (e: Event) => void;
   private boundContextRestored!: () => void;
 
@@ -582,6 +586,7 @@ export class ChessScene3D {
         this.requestRender();
       }
     };
+    this.boundDblClick = (e) => this.handleDblClick(e);
     this.boundContextLost = (e) => {
       e.preventDefault();
       cancelAnimationFrame(this.frameId);
@@ -602,6 +607,9 @@ export class ChessScene3D {
     dom.addEventListener('pointerup', this.boundPointerUp);
     dom.addEventListener('pointermove', this.boundPointerMove);
     dom.addEventListener('pointerleave', this.boundPointerLeave);
+    if (this.callbacks.onSecretCoord8DoubleClick) {
+      dom.addEventListener('dblclick', this.boundDblClick);
+    }
     dom.addEventListener('webglcontextlost', this.boundContextLost);
     dom.addEventListener('webglcontextrestored', this.boundContextRestored);
 
@@ -1392,6 +1400,7 @@ export class ChessScene3D {
       // Flush right onto the oiled walnut frame top (y = 0.0604) so the carved groove sits into the wood
       mesh.position.set(x, 0.0607, z);
       mesh.receiveShadow = this.enableShadows;
+      mesh.userData = { coordLabel: label };
       this.coordGroup.add(mesh);
     };
 
@@ -3750,6 +3759,38 @@ export class ChessScene3D {
     return null;
   }
 
+  private isPointerOnCoord8(clientX: number, clientY: number): boolean {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    _rayMouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    _rayMouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    this.coordRaycaster.setFromCamera(_rayMouse, this.camera);
+
+    // Direct raycast against the embossed "8" coordinate plaques on the board rim
+    const coord8Meshes = this.coordGroup.children.filter((obj) => obj.userData?.coordLabel === '8');
+    if (coord8Meshes.length > 0 && this.coordRaycaster.intersectObjects(coord8Meshes, false).length > 0) {
+      return true;
+    }
+
+    // Generous proximity fallback on the board top plane around both "8" coordinate plaques (±4.22, -3.5)
+    if (this.coordRaycaster.ray.intersectPlane(_dogPlane, _tmpVec)) {
+      const distLeft = Math.hypot(_tmpVec.x - -4.22, _tmpVec.z - -3.5);
+      const distRight = Math.hypot(_tmpVec.x - 4.22, _tmpVec.z - -3.5);
+      if (distLeft <= 0.34 || distRight <= 0.34) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private handleDblClick(e: MouseEvent): void {
+    if (!this.callbacks.onSecretCoord8DoubleClick) return;
+    if (this.isPointerOnCoord8(e.clientX, e.clientY)) {
+      e.preventDefault();
+      this.callbacks.onSecretCoord8DoubleClick();
+    }
+  }
+
   private handlePointerDown(e: PointerEvent): void {
     if (e.button !== 0) return;
     this.pointerDownPos.x = e.clientX;
@@ -3763,6 +3804,19 @@ export class ChessScene3D {
       e.clientY - this.pointerDownPos.y,
     );
     if (travel > 6) return;
+
+    // Touch/pen double-tap fallback for the developer-only "8" coordinate secret trigger
+    if (this.callbacks.onSecretCoord8DoubleClick && e.pointerType !== 'mouse') {
+      if (this.isPointerOnCoord8(e.clientX, e.clientY)) {
+        const now = performance.now();
+        if (now - this.lastCoord8TapMs <= 420) {
+          this.lastCoord8TapMs = 0;
+          this.callbacks.onSecretCoord8DoubleClick();
+          return;
+        }
+        this.lastCoord8TapMs = now;
+      }
+    }
 
     if (this.calcPreviewActive) {
       if (this.calcWaitingForClick) {
@@ -4602,6 +4656,7 @@ export class ChessScene3D {
     dom.removeEventListener('pointerup', this.boundPointerUp);
     dom.removeEventListener('pointermove', this.boundPointerMove);
     dom.removeEventListener('pointerleave', this.boundPointerLeave);
+    dom.removeEventListener('dblclick', this.boundDblClick);
     dom.removeEventListener('webglcontextlost', this.boundContextLost);
     dom.removeEventListener('webglcontextrestored', this.boundContextRestored);
 

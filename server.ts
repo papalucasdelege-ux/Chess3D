@@ -2397,16 +2397,72 @@ async function startServer(): Promise<void> {
   }
 
   // ============================================================================
-  // Video Studio Production Lock & Cross-Site Request Guard (Dev-Only)
+  // Video Studio Production Lock, Developer Password Gate & Cross-Site Guard (Dev-Only)
   // ============================================================================
-  const requireStudioDeveloperAuth = (
+  const STUDIO_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+  const STUDIO_LOGIN_WINDOW_MS = 5 * 60 * 1000;
+  const STUDIO_LOGIN_MAX_ATTEMPTS = 8;
+
+  const studioSessions = new Map<string, number>(); // token -> expiresAtMs
+  const studioLoginAttempts = new Map<string, number[]>(); // ip -> timestamps
+  let claimedStudioPasswordRecord: { saltHex: string; hashHex: string } | null = null;
+
+  const getConfiguredEnvStudioPassword = (): string => {
+    const raw = process.env.STUDIO_DEV_PASSWORD;
+    return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : '';
+  };
+
+  const hashStudioPassword = (password: string, saltHex?: string): { saltHex: string; hashHex: string } => {
+    const salt = saltHex || crypto.randomBytes(16).toString('hex');
+    const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+    return { saltHex: salt, hashHex: derived };
+  };
+
+  const timingSafeEqualStrings = (a: string, b: string): boolean => {
+    const bufA = Buffer.from(a, 'utf8');
+    const bufB = Buffer.from(b, 'utf8');
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+  };
+
+  const issueStudioSessionToken = (): string => {
+    const now = Date.now();
+    for (const [tok, exp] of studioSessions.entries()) {
+      if (exp <= now) studioSessions.delete(tok);
+    }
+    const token = crypto.randomBytes(32).toString('hex');
+    studioSessions.set(token, now + STUDIO_SESSION_TTL_MS);
+    return token;
+  };
+
+  const extractStudioBearerToken = (req: express.Request): string | null => {
+    const auth = String(req.headers.authorization || '').trim();
+    if (!auth.toLowerCase().startsWith('bearer ')) return null;
+    const token = auth.slice(7).trim();
+    return token.length >= 32 && token.length <= 128 ? token : null;
+  };
+
+  const isStudioBearerValid = (req: express.Request): boolean => {
+    const token = extractStudioBearerToken(req);
+    if (!token) return false;
+    const exp = studioSessions.get(token);
+    if (!exp) return false;
+    if (exp <= Date.now()) {
+      studioSessions.delete(token);
+      return false;
+    }
+    return true;
+  };
+
+  const requireStudioDevHostAndOrigin = (
     req: express.Request,
     res: express.Response,
+    requireOriginHeader = true,
   ): boolean => {
-    // Video Studio mutations, file uploads, FFmpeg transcodes, and deletes are strictly disabled
-    // in production builds and on shared public preview hosts (`ais-pre-*`).
+    // Video Studio mutations, file uploads, FFmpeg transcodes, and password auth are strictly
+    // disabled in production builds and on shared public preview hosts (`ais-pre-*`).
     if (IS_PROD) {
-      res.status(403).json({ error: 'Video Studio is read-only in production builds.' });
+      res.status(403).json({ error: 'Video Studio is disabled in production builds.' });
       return false;
     }
 
@@ -2427,13 +2483,15 @@ async function startServer(): Promise<void> {
       return false;
     }
 
-    // Require a valid same-origin Origin or Referer header on all Studio mutations
+    if (!requireOriginHeader) return true;
+
+    // Require a valid same-origin Origin or Referer header on all Studio mutations & auth posts
     const originSource =
-      (typeof req.headers.origin === 'string' && req.headers.origin.length > 0
+      typeof req.headers.origin === 'string' && req.headers.origin.length > 0
         ? req.headers.origin
         : typeof req.headers.referer === 'string' && req.headers.referer.length > 0
           ? req.headers.referer
-          : '');
+          : '';
     if (!originSource) {
       res.status(403).json({ error: 'Missing Origin header for Studio mutation.' });
       return false;
@@ -2456,6 +2514,104 @@ async function startServer(): Promise<void> {
 
     return true;
   };
+
+  const requireStudioDeveloperAuth = (
+    req: express.Request,
+    res: express.Response,
+  ): boolean => {
+    if (!requireStudioDevHostAndOrigin(req, res, true)) return false;
+    if (!isStudioBearerValid(req)) {
+      res.status(401).json({ error: 'Developer password authentication required.' });
+      return false;
+    }
+    return true;
+  };
+
+  app.get('/api/studio-auth/status', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!requireStudioDevHostAndOrigin(req, res, false)) return;
+    const envPw = getConfiguredEnvStudioPassword();
+    const source: 'env' | 'claimed' | 'unconfigured' = envPw
+      ? 'env'
+      : claimedStudioPasswordRecord
+        ? 'claimed'
+        : 'unconfigured';
+    res.json({
+      configured: source !== 'unconfigured',
+      source,
+      authenticated: isStudioBearerValid(req),
+    });
+  });
+
+  app.post('/api/studio-auth/setup', express.json(), (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!requireStudioDevHostAndOrigin(req, res, true)) return;
+    if (getConfiguredEnvStudioPassword() || claimedStudioPasswordRecord) {
+      res.status(409).json({ error: 'Developer password is already configured.' });
+      return;
+    }
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (password.length < 6 || password.length > 128) {
+      res.status(400).json({ error: 'Developer password must be between 6 and 128 characters.' });
+      return;
+    }
+    claimedStudioPasswordRecord = hashStudioPassword(password);
+    const token = issueStudioSessionToken();
+    res.json({ ok: true, token });
+  });
+
+  app.post('/api/studio-auth/login', express.json(), (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!requireStudioDevHostAndOrigin(req, res, true)) return;
+
+    const clientIp = String(req.ip || req.socket.remoteAddress || 'local');
+    const now = Date.now();
+    const recent = (studioLoginAttempts.get(clientIp) || []).filter(
+      (t) => now - t <= STUDIO_LOGIN_WINDOW_MS,
+    );
+    if (recent.length >= STUDIO_LOGIN_MAX_ATTEMPTS) {
+      studioLoginAttempts.set(clientIp, recent);
+      res.status(429).json({ error: 'Too many failed attempts. Please wait a few minutes.' });
+      return;
+    }
+
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    const envPw = getConfiguredEnvStudioPassword();
+    if (!envPw && !claimedStudioPasswordRecord) {
+      res.status(412).json({ error: 'Developer password has not been set up yet.' });
+      return;
+    }
+
+    let valid = false;
+    if (envPw) {
+      // Configured environment secret always takes precedence over any claimed fallback hash
+      valid = timingSafeEqualStrings(password, envPw);
+    } else if (claimedStudioPasswordRecord) {
+      const candidate = hashStudioPassword(password, claimedStudioPasswordRecord.saltHex);
+      valid = timingSafeEqualStrings(candidate.hashHex, claimedStudioPasswordRecord.hashHex);
+    }
+
+    if (!valid) {
+      recent.push(now);
+      studioLoginAttempts.set(clientIp, recent);
+      res.status(401).json({ error: 'Incorrect developer password.' });
+      return;
+    }
+
+    studioLoginAttempts.delete(clientIp);
+    const token = issueStudioSessionToken();
+    res.json({ ok: true, token });
+  });
+
+  app.post('/api/studio-auth/logout', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!requireStudioDevHostAndOrigin(req, res, true)) return;
+    const token = extractStudioBearerToken(req);
+    if (token) {
+      studioSessions.delete(token);
+    }
+    res.json({ ok: true });
+  });
 
   app.get('/api/angel-videos', (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');

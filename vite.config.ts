@@ -62,7 +62,7 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
-          cacheId: 'chessangel-v4-5',
+          cacheId: 'chessangel-v4-5b',
           // Precache app shell, 3D chess engine, and UI bundle (icons included via includeAssets above)
           globPatterns: ['**/*.{js,css,html,ico,woff,woff2}'],
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
@@ -78,35 +78,23 @@ export default defineConfig(() => {
               handler: 'NetworkOnly',
             },
             {
-              // Voice clips & soundtrack MP3s (URL-stamped with ?v=<APP_BUILD_ID> for guaranteed freshness on republish)
+              // Stream Chess Angel MP4 videos and full soundtrack MP3s directly via native browser
+              // HTTP 206 Partial Content Range requests (prevents Workbox RangeRequestsPlugin stalls
+              // on Windows Chrome, Android Chrome, Safari/iOS, Firefox, and Edge).
               urlPattern: ({ url }) =>
-                url.pathname.startsWith('/voices/') ||
-                url.pathname === '/seduction.mp3' ||
-                (url.pathname.startsWith('/assets/aistudio/') && url.pathname.endsWith('.mp3')),
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'chessangel-voices-v4-5',
-                rangeRequests: true,
-                expiration: {
-                  maxEntries: 260,
-                  maxAgeSeconds: 60 * 60 * 24 * 30,
-                  purgeOnQuotaError: true,
-                },
-                cacheableResponse: {
-                  statuses: [200],
-                },
-              },
+                (url.pathname.startsWith('/assets/aistudio/') &&
+                  (url.pathname.endsWith('.mp4') || url.pathname.endsWith('.mp3'))) ||
+                url.pathname === '/seduction.mp3',
+              handler: 'NetworkOnly',
             },
             {
-              // Chess Angel portrait MP4s (URL-stamped with ?v=<APP_BUILD_ID> so replaced videos renew immediately)
-              urlPattern: ({ url }) =>
-                url.pathname.startsWith('/assets/aistudio/') && url.pathname.endsWith('.mp4'),
+              // Short voice clips under /voices/ (URL-stamped with ?v=<APP_BUILD_ID>)
+              urlPattern: ({ url }) => url.pathname.startsWith('/voices/'),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-videos-v4-5',
-                rangeRequests: true,
+                cacheName: 'chessangel-voices-v4-5b',
                 expiration: {
-                  maxEntries: 150,
+                  maxEntries: 260,
                   maxAgeSeconds: 60 * 60 * 24 * 30,
                   purgeOnQuotaError: true,
                 },
@@ -120,7 +108,7 @@ export default defineConfig(() => {
               urlPattern: ({ url }) => url.pathname === '/assets/aistudio/angel_video_map.json',
               handler: 'NetworkFirst',
               options: {
-                cacheName: 'chessangel-registry-v4-5',
+                cacheName: 'chessangel-registry-v4-5b',
                 networkTimeoutSeconds: 3,
                 cacheableResponse: {
                   statuses: [200],
@@ -134,7 +122,7 @@ export default defineConfig(() => {
                 /\.(png|jpg|jpeg|webp|svg)$/i.test(url.pathname),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-images-v4-5',
+                cacheName: 'chessangel-images-v4-5b',
                 expiration: {
                   maxEntries: 40,
                   maxAgeSeconds: 60 * 60 * 24 * 30,

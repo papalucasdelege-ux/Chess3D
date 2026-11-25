@@ -33,6 +33,13 @@ const LazyAngelVideoStudioModal = import.meta.env.DEV
       })),
     )
   : null;
+const LazyStudioPasswordGateModal = import.meta.env.DEV
+  ? lazy(() =>
+      import('./components/StudioPasswordGateModal').then((m) => ({
+        default: m.StudioPasswordGateModal,
+      })),
+    )
+  : null;
 import {
   OpponentSpeechBanner,
   type CalcPreviewProgress,
@@ -59,6 +66,7 @@ import {
   isStudioDeveloperUnlocked,
   logoutStudioDeveloperSession,
   prepareHumanCommentaryPlayback,
+  resetAllAngelVideoState,
   resetGameVideoPlayCounts,
   startAngelMediaBackgroundPrewarmer,
   subscribeStudioDeveloperAuth,
@@ -90,6 +98,7 @@ import {
   DEFAULT_MUSIC_TRACKS,
   opponentSpeech,
   resetGameCommentaryCounts,
+  resetInterMatchRemarkFlags,
   resolvePreviewConcernedFigures,
   resolvePreviewForkArrows,
   type AngelVoiceMode,
@@ -527,7 +536,8 @@ export default function App() {
     } catch {
       // ignore storage errors
     }
-    return Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+    // Never silently disable idle/escape videos just because Windows/Android has UI animations reduced
+    return false;
   });
   const [shadowsEnabled, setShadowsEnabled] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
@@ -624,6 +634,7 @@ export default function App() {
   const [studioUnlocked, setStudioUnlocked] = useState<boolean>(() =>
     isStudioDeveloperUnlocked(),
   );
+  const [studioPasswordGateOpen, setStudioPasswordGateOpen] = useState(false);
   const [videoStudioOpen, setVideoStudioOpen] = useState(false);
   const [idlePreviewNonce, setIdlePreviewNonce] = useState(0);
   const [previewIdleUrl, setPreviewIdleUrl] = useState<string | null>(null);
@@ -1896,6 +1907,7 @@ export default function App() {
   ]);
 
   const treeSquareClickRef = useRef<(sq: string) => void>(() => {});
+  const secretStudioTriggerRef = useRef<(() => void) | null>(null);
 
   // === Mount Three.js 3D Scene ONCE (Strict Non-Reactive Ref Architecture) ===
   useEffect(() => {
@@ -1908,6 +1920,10 @@ export default function App() {
       onUpperRightVoidChange: (spec) => setUpperRightVoid(spec),
       onContextLost: () => setWebglLost(true),
       onContextRestored: () => setWebglLost(false),
+      onSecretCoord8DoubleClick:
+        import.meta.env.DEV && ALLOW_VIDEO_STUDIO
+          ? () => secretStudioTriggerRef.current?.()
+          : undefined,
     });
     sceneRef.current = scene;
 
@@ -2077,6 +2093,8 @@ export default function App() {
           }, postLaunchClearMs);
         };
 
+        // Stop any stale speech so the puppy video takes over Chess Angel's portrait cleanly
+        opponentSpeech.stop();
         // Fire the 3D puppy frame-synced when the <video>'s live currentTime reaches jumpSec (e.g. 4.2s)
         dogRunCueCallbackRef.current = firePuppyOnce;
         setDogRunCueSec(jumpSec);
@@ -2085,7 +2103,7 @@ export default function App() {
         setIdlePreviewNonce((n) => n + 1);
 
         // Guaranteed fallback launch if mobile/PWA video buffering delays the live frame cue
-        const fallbackLaunchMs = Math.max(1200, Math.round((jumpSec + 1.4) * 1000));
+        const fallbackLaunchMs = Math.max(2000, Math.round((jumpSec + 2.4) * 1000));
         dogJumpTimerRef.current = window.setTimeout(() => {
           dogJumpTimerRef.current = null;
           firePuppyOnce();
@@ -2225,6 +2243,46 @@ export default function App() {
   }, []);
   const triggerDanceWithStarsEventRef = useRef(triggerDanceWithStarsEvent);
   triggerDanceWithStarsEventRef.current = triggerDanceWithStarsEvent;
+
+  const handleResetAngelMessages = useCallback(() => {
+    opponentSpeech.stop();
+    if (dogJumpTimerRef.current !== null) {
+      window.clearTimeout(dogJumpTimerRef.current);
+      dogJumpTimerRef.current = null;
+    }
+    if (dogVideoClearTimerRef.current !== null) {
+      window.clearTimeout(dogVideoClearTimerRef.current);
+      dogVideoClearTimerRef.current = null;
+    }
+    dogRunCueCallbackRef.current = null;
+    dogEventActiveRef.current = false;
+    setDogRunCueSec(null);
+    setPreviewIdleUrl(null);
+    setDanceStarsActive(false);
+
+    resetInterMatchRemarkFlags();
+    resetGameCommentaryCounts();
+    resetAllAngelVideoState();
+
+    hesitationStageRef.current = 0;
+    turnStartedAtRef.current = Date.now();
+    puppyIdleAccumMsRef.current = 0;
+    lastPuppyAutoAtRef.current = 0;
+    matchSpecialEventFiredRef.current = false;
+    matchActiveElapsedMsRef.current = 0;
+    matchSpecialTargetPlyRef.current = 6 + Math.floor(Math.random() * 5);
+    setIdlePreviewNonce((n) => n + 1);
+
+    if (angelModalEnabled) {
+      const freshIntro = createIntroMessage();
+      setOpponentMessage(freshIntro);
+      if (freshIntro && angelVoice === 'on') {
+        opponentSpeech.playClip(freshIntro.clipId, 'on', soundEnabled);
+      }
+    } else {
+      setOpponentMessage(null);
+    }
+  }, [angelModalEnabled, angelVoice, soundEnabled]);
 
   // === Independent 100ms Simulation Loop (Decoupled from requestAnimationFrame & React Render Tree) ===
   useEffect(() => {
@@ -3685,10 +3743,16 @@ export default function App() {
 
   const handleSecretStudioTrigger = useCallback(() => {
     if (!ALLOW_VIDEO_STUDIO) return;
-    unlockStudioDeveloperSession();
-    setStudioUnlocked(true);
-    setVideoStudioOpen(true);
+    if (isStudioDeveloperUnlocked()) {
+      setStudioUnlocked(true);
+      setVideoStudioOpen(true);
+      return;
+    }
+    setStudioPasswordGateOpen(true);
   }, []);
+
+  secretStudioTriggerRef.current =
+    import.meta.env.DEV && ALLOW_VIDEO_STUDIO ? handleSecretStudioTrigger : null;
 
   useEffect(() => {
     if (!ALLOW_VIDEO_STUDIO) return;
@@ -4982,6 +5046,7 @@ export default function App() {
         musicTracks={musicTracks}
         activeMusicTrackIndex={activeMusicTrackIndex}
         onSelectMusicTrack={handleSelectMusicTrack}
+        onResetAngelMessages={handleResetAngelMessages}
         angelVoice={angelVoice}
         onChangeAngelVoice={(mode) => {
           setAngelVoice(mode);
@@ -5102,7 +5167,6 @@ export default function App() {
         canSaveCurrent={!isReplayMode && gameMode !== 'tactical'}
         justSaved={justSaved}
         onOpenLoadDrawer={() => announceControlEvent(createLoadGameMessage())}
-        onSecretStudioTrigger={ALLOW_VIDEO_STUDIO ? handleSecretStudioTrigger : undefined}
         onTitleTribute={handleTriggerCreatorTribute}
         onStartTacticalTraining={handleStartTacticalTraining}
         onReturnToCasualPlay={handleReturnToCasualPlay}
@@ -5203,6 +5267,24 @@ export default function App() {
         }
       />
 
+      {/* Developer-only Security Screen asking for the developer password (excluded from consumer production builds) */}
+      {import.meta.env.DEV &&
+        ALLOW_VIDEO_STUDIO &&
+        studioPasswordGateOpen &&
+        LazyStudioPasswordGateModal && (
+          <Suspense fallback={null}>
+            <LazyStudioPasswordGateModal
+              onAuthenticated={(token) => {
+                unlockStudioDeveloperSession(token);
+                setStudioUnlocked(true);
+                setStudioPasswordGateOpen(false);
+                setVideoStudioOpen(true);
+              }}
+              onClose={() => setStudioPasswordGateOpen(false)}
+            />
+          </Suspense>
+        )}
+
       {/* Developer-only Chess Angel Video Studio (completely excluded from consumer production builds via import.meta.env.DEV) */}
       {import.meta.env.DEV && ALLOW_VIDEO_STUDIO && studioUnlocked && videoStudioOpen && LazyAngelVideoStudioModal && (
         <Suspense fallback={null}>
@@ -5210,6 +5292,7 @@ export default function App() {
             onClose={() => setVideoStudioOpen(false)}
             onLockStudio={() => {
               logoutStudioDeveloperSession();
+              setStudioUnlocked(false);
               setVideoStudioOpen(false);
             }}
             onPreviewCase={(clipId, text, tag) => {
