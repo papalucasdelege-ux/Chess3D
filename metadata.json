@@ -1,6 +1,6 @@
 {
   "name": "ChessAngel 3D",
-  "description": "Play ChessAngel 3D online: carved wooden Staunton chess with live voice & video commentary, 3D search-tree lines, and hints. Created by Jan Rom, Brussels 2026.",
+  "description": "Non-profit educational chess game by Jan Rom (jrom.eu/), creator of studentplatform.net, calctrain.studentplatform.net, and chess3d.studentplatform.net.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -51,6 +51,7 @@ import {
   logoutStudioDeveloperSession,
   prepareHumanCommentaryPlayback,
   resetGameVideoPlayCounts,
+  startAngelMediaBackgroundPrewarmer,
   subscribeStudioDeveloperAuth,
   unlockStudioDeveloperSession,
 } from './chess/angelPortraitVideos';
@@ -74,9 +75,11 @@ import {
   createUndoConfirmedMessage,
   evaluateHumanMoveCommentary,
   getSpeakerName,
+  inspectPostMoveForkState,
   opponentSpeech,
   resetGameCommentaryCounts,
   resolvePreviewConcernedFigures,
+  resolvePreviewForkArrows,
   type AngelVoiceMode,
   type OpponentMessage,
   type VoicePlaybackState,
@@ -534,6 +537,44 @@ export default function App() {
   const [speechHighlightWindowOpen, setSpeechHighlightWindowOpen] = useState(false);
   const prevVoiceStateForHighlightRef = useRef<VoicePlaybackState>('idle');
   const [coachArrows, setCoachArrows] = useState<SuggestionArrow[]>([]);
+  const forkArrowsTimerRef = useRef<number | null>(null);
+  const clearForkArrowsTimer = useCallback(() => {
+    if (forkArrowsTimerRef.current !== null) {
+      window.clearTimeout(forkArrowsTimerRef.current);
+      forkArrowsTimerRef.current = null;
+    }
+  }, []);
+  const showTemporaryForkArrows = useCallback(
+    (arrows: { from: string; to: string }[]) => {
+      clearForkArrowsTimer();
+      if (!arrows || arrows.length === 0) return;
+      setCoachArrows(
+        arrows.map((a) => ({
+          from: a.from,
+          to: a.to,
+          kind: 'fork',
+        })),
+      );
+      forkArrowsTimerRef.current = window.setTimeout(() => {
+        forkArrowsTimerRef.current = null;
+        setCoachArrows((prev) =>
+          prev.some((arr) => arr.kind === 'fork')
+            ? prev.filter((arr) => arr.kind !== 'fork')
+            : prev,
+        );
+      }, 3000);
+    },
+    [clearForkArrowsTimer],
+  );
+  useEffect(() => {
+    startAngelMediaBackgroundPrewarmer();
+    return () => {
+      if (forkArrowsTimerRef.current !== null) {
+        window.clearTimeout(forkArrowsTimerRef.current);
+        forkArrowsTimerRef.current = null;
+      }
+    };
+  }, []);
   const [calcPreview, setCalcPreview] = useState<CalcPreviewProgress | null>(null);
   const [calcShowingPending, setCalcShowingPending] = useState(false);
   const calcShowingTimerRef = useRef<number | null>(null);
@@ -1049,6 +1090,7 @@ export default function App() {
         treeActiveOnScreenRef.current = false;
         setTreeStatusMode('idle');
         setCalcPreview(null);
+        clearForkArrowsTimer();
         setCoachArrows([]);
         turnStartedAtRef.current = performance.now();
         hesitationStageRef.current = 0;
@@ -1219,7 +1261,20 @@ export default function App() {
           } else {
             awaitingDistractionModalRef.current = false;
             holdBotUntilRef.current = 0;
-            if (preserveMessageOnBotCommitRef.current && !over && !chess.inCheck()) {
+            const forkState = inspectPostMoveForkState(
+              preFen,
+              from,
+              to,
+              promotion,
+              aiColor,
+              humanColorActual,
+            );
+            if (
+              preserveMessageOnBotCommitRef.current &&
+              !over &&
+              !chess.inCheck() &&
+              !forkState.isFork
+            ) {
               preserveMessageOnBotCommitRef.current = false;
               setOpponentMessage((prev) =>
                 prev && prev.action?.kind === 'calc-preview'
@@ -1241,7 +1296,13 @@ export default function App() {
               });
               if (msg) {
                 setOpponentMessage(msg);
+                if (msg.forkArrows && msg.forkArrows.length > 0) {
+                  showTemporaryForkArrows(msg.forkArrows);
+                }
                 opponentSpeech.playClip(msg.clipId, angelVoice, soundEnabled);
+              } else if (forkState.isFork) {
+                // 3rd+ fork in the game: say nothing about forks and clear any stale banner so player plays freely
+                setOpponentMessage(null);
               } else {
                 setOpponentMessage((prev) => (prev?.action ? prev : null));
               }
@@ -1266,6 +1327,8 @@ export default function App() {
       humanColorActual,
       analysis,
       soundEnabled,
+      clearForkArrowsTimer,
+      showTemporaryForkArrows,
     ],
   );
 
@@ -1788,7 +1851,22 @@ export default function App() {
             latestAllSimulationsRef.current = msg.report.allSimulations;
           }
 
+          const snap = simSnapshotRef.current;
+          const aiColorForMove: PieceColor = snap.humanColorActual === 'w' ? 'b' : 'w';
+          const forkPreview =
+            snap.gameMode === 'engine'
+              ? inspectPostMoveForkState(
+                  snap.localFen,
+                  from,
+                  to,
+                  promo,
+                  aiColorForMove,
+                  snap.humanColorActual,
+                )
+              : { isFork: false, shouldWarn: false };
+
           if (
+            !forkPreview.isFork &&
             showSearchTreeRef.current &&
             msg.report?.treeEdges &&
             msg.report.treeEdges.length > 0 &&
@@ -2312,6 +2390,7 @@ export default function App() {
         calcShowingTimerRef.current = null;
       }
       setCalcShowingPending(false);
+      clearForkArrowsTimer();
       sceneRef.current?.stopCalculationPreview(false);
       setCalcPreview(null);
       setCoachArrows([]);
@@ -2432,6 +2511,7 @@ export default function App() {
     setCalcShowingPending(false);
     sceneRef.current?.stopCalculationPreview(false);
     setCalcPreview(null);
+    clearForkArrowsTimer();
     setCoachArrows([]);
     setOpponentMessage(null);
     opponentSpeech.stop();
@@ -3934,6 +4014,7 @@ export default function App() {
               setTreeBrowser(null);
               setCalcPreview(null);
               setFrontalTreeViewOpen(false);
+              clearForkArrowsTimer();
               setCoachArrows([]);
 
               setAngelModalEnabled(true);
@@ -3960,7 +4041,12 @@ export default function App() {
               let previewAction: OpponentMessage['action'] = undefined;
               let previewMathSummary: string | undefined = undefined;
 
-              if (caseId === 'hint_shown') {
+              if (caseId === 'warn_double' || caseId === 'warn_fork_2step') {
+                const fArrows = resolvePreviewForkArrows(caseId, previewFen, humanColorActual);
+                if (fArrows.length > 0) {
+                  showTemporaryForkArrows(fArrows);
+                }
+              } else if (caseId === 'hint_shown') {
                 const best = resolveCandidateMovesForFen(previewFen, analysis, 1)[0];
                 if (best) {
                   setCoachArrows([

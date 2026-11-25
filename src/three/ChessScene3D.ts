@@ -30,7 +30,7 @@ import type { UpperRightVoidSpec } from '../utils/deviceLayout';
 export interface SuggestionArrow {
   from: string;
   to: string;
-  kind: 'primary' | 'secondary' | 'branch' | 'trial-1' | 'trial-2' | 'trial-3';
+  kind: 'primary' | 'secondary' | 'branch' | 'trial-1' | 'trial-2' | 'trial-3' | 'fork';
   opacityScale?: number;
   customColorHex?: number;
 }
@@ -2583,21 +2583,23 @@ export class ChessScene3D {
       const halfShaft = 0.084;
       const halfHead = 0.228;
 
-      // Strictly Gold, Cyan, and Rose translucent glowing palette
+      // Gold, Cyan, Rose, and Transparent Lila (fork) glowing palette
       const palette =
-        arrow.kind === 'trial-2' || arrow.kind === 'secondary'
-          ? { coreColor: 0x38bdf8, glowColor: 0x7dd3fc }
-          : arrow.kind === 'trial-3'
-            ? { coreColor: 0xfb7185, glowColor: 0xfda4af }
-            : { coreColor: 0xffcf54, glowColor: 0xffe082 };
+        arrow.kind === 'fork'
+          ? { coreColor: 0xc084fc, glowColor: 0xe9d5ff }
+          : arrow.kind === 'trial-2' || arrow.kind === 'secondary'
+            ? { coreColor: 0x38bdf8, glowColor: 0x7dd3fc }
+            : arrow.kind === 'trial-3'
+              ? { coreColor: 0xfb7185, glowColor: 0xfda4af }
+              : { coreColor: 0xffcf54, glowColor: 0xffe082 };
 
       const coreHex = arrow.customColorHex ?? palette.coreColor;
       const glowHex = arrow.customColorHex ?? palette.glowColor;
       const scaleAlpha = arrow.opacityScale ?? 1;
 
-      const outerGlowOpacity = 0.16 * scaleAlpha;
-      const innerGlowOpacity = 0.24 * scaleAlpha;
-      const coreTranslucentOpacity = 0.44 * scaleAlpha;
+      const outerGlowOpacity = (arrow.kind === 'fork' ? 0.15 : 0.16) * scaleAlpha;
+      const innerGlowOpacity = (arrow.kind === 'fork' ? 0.24 : 0.24) * scaleAlpha;
+      const coreTranslucentOpacity = (arrow.kind === 'fork' ? 0.48 : 0.44) * scaleAlpha;
 
       // 1) Wide soft outer additive halo (airy glow across wood grain & square lines)
       const outerHaloGeo = buildArrowGeometry(

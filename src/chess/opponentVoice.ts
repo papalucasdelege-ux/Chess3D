@@ -124,6 +124,7 @@ export interface OpponentMessage {
   action?: AngelInteractiveAction;
   isStudioPreview?: boolean;
   concernedFigures?: SpeechFigureHighlight[];
+  forkArrows?: { from: string; to: string }[];
 }
 
 interface ClipEntry {
@@ -619,15 +620,19 @@ const SPEAKER_NAME = 'Chess Angel';
 // - 3rd occurrence plays _v3 (concise third-occurrence phrasing)
 // - 4th+ occurrences alternate cleanly between _v2 and _v3
 const caseOccurrenceCounts = new Map<CommentaryCaseId, number>();
+let forkWarningsShownInGame = 0;
+const MAX_FORK_WARNINGS_PER_GAME = 2;
 let messageSeq = 1;
 
 type CaseMaxPlaysProvider = (caseId: CommentaryCaseId) => number | null;
 let caseMaxPlaysProvider: CaseMaxPlaysProvider = (caseId) =>
   caseId === 'tree_browse' || caseId === 'hesitate_hint'
     ? 6
-    : caseId === 'seduction'
-      ? 1
-      : null;
+    : caseId === 'warn_double' || caseId === 'warn_fork_2step'
+      ? 2
+      : caseId === 'seduction'
+        ? 1
+        : null;
 
 export function registerCaseMaxPlaysProvider(provider: CaseMaxPlaysProvider): void {
   caseMaxPlaysProvider = provider;
@@ -647,6 +652,7 @@ export function canPlayCaseInGame(caseId: CommentaryCaseId): boolean {
 
 export function resetGameCommentaryCounts(): void {
   caseOccurrenceCounts.clear();
+  forkWarningsShownInGame = 0;
 }
 
 function tryPickCaseClip(caseId: CommentaryCaseId): ClipEntry | null {
@@ -1227,6 +1233,167 @@ export function resolvePreviewConcernedFigures(
   }
 }
 
+/**
+ * Resolves representative fork arrows (`from -> to`) when previewing `warn_double` or `warn_fork_2step`
+ * in Chess Angel Video Studio (`Test` button).
+ */
+export function resolvePreviewForkArrows(
+  caseId: CommentaryCaseId,
+  fen: string,
+  humanColor: PieceColor,
+): { from: string; to: string }[] {
+  if (caseId !== 'warn_double' && caseId !== 'warn_fork_2step') return [];
+  const aiColor: PieceColor = humanColor === 'w' ? 'b' : 'w';
+  try {
+    const chess = new Chess(fen);
+    const twoStep = detectTwoStepThreats(fen, aiColor, humanColor);
+    if (twoStep.forkArrows.length >= 2) {
+      return twoStep.forkArrows;
+    }
+    const targets = [
+      findKingSquareOfColor(chess, humanColor),
+      ...findPiecesOfType(chess, humanColor, 'q'),
+      ...findPiecesOfType(chess, humanColor, 'r'),
+      ...findPiecesOfType(chess, humanColor, 'b'),
+      ...findPiecesOfType(chess, humanColor, 'n'),
+    ]
+      .filter((sq): sq is Square => Boolean(sq))
+      .slice(0, 2);
+    const forker =
+      [
+        ...findPiecesOfType(chess, aiColor, 'n'),
+        ...findPiecesOfType(chess, aiColor, 'q'),
+        ...findPiecesOfType(chess, aiColor, 'b'),
+      ][0] || null;
+    if (forker && targets.length >= 2) {
+      return targets.map((sq) => ({ from: forker, to: sq }));
+    }
+  } catch {
+    // ignore invalid FEN
+  }
+  return [];
+}
+
+/**
+ * Finds all valuable defender pieces (King, Queen, Rook, Bishop, Knight) genuinely forked
+ * from `attackerSq` by a piece of type `attackerType`.
+ */
+function findGenuineForkTargetsFromSquare(
+  chess: Chess,
+  attackerSq: Square,
+  attackerType: PieceSymbol,
+  attackerColor: PieceColor,
+  defenderColor: PieceColor,
+): Square[] {
+  const board = chess.board();
+  const attackerVal = PIECE_VALUES[attackerType] ?? 3;
+  const candidates: { square: Square; value: number; undefended: boolean; isKing: boolean }[] = [];
+
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const cell = board[r][c];
+      if (!cell || cell.color !== defenderColor || cell.type === 'p') continue;
+      const sq = `${FILES[c]}${8 - r}` as Square;
+      const attackers = findPiecesAttackingSquare(chess, sq, attackerColor);
+      if (!attackers.includes(attackerSq)) continue;
+
+      const isKing = cell.type === 'k';
+      const val = PIECE_VALUES[cell.type];
+      const undefended = !isKing && !chess.isAttacked(sq, defenderColor);
+      const isGenuineForkTarget =
+        isKing ||
+        undefended ||
+        val > attackerVal ||
+        ((attackerType === 'n' || attackerType === 'p') && val >= 3);
+
+      if (isGenuineForkTarget) {
+        candidates.push({ square: sq, value: val, undefended, isKing });
+      }
+    }
+  }
+
+  candidates.sort((a, b) => {
+    if (a.isKing !== b.isKing) return a.isKing ? -1 : 1;
+    if (a.undefended !== b.undefended) return a.undefended ? -1 : 1;
+    return b.value - a.value;
+  });
+
+  return candidates.map((c) => c.square);
+}
+
+/**
+ * Detects an immediate fork created on the board right after `aiColor` played to `lastMoveTo`.
+ */
+function detectImmediateForkByAi(
+  chess: Chess,
+  lastMoveTo: Square,
+  aiColor: PieceColor,
+  humanColor: PieceColor,
+): {
+  forkerSqs: Square[];
+  targetSqs: Square[];
+  arrows: { from: string; to: string }[];
+} | null {
+  const movedCell = chess.get(lastMoveTo);
+  if (movedCell && movedCell.color === aiColor) {
+    const directTargets = findGenuineForkTargetsFromSquare(
+      chess,
+      lastMoveTo,
+      movedCell.type,
+      aiColor,
+      humanColor,
+    );
+    if (directTargets.length >= 2) {
+      const topTargets = directTargets.slice(0, 3);
+      return {
+        forkerSqs: [lastMoveTo],
+        targetSqs: topTargets,
+        arrows: topTargets.map((sq) => ({ from: lastMoveTo, to: sq })),
+      };
+    }
+  }
+
+  // Also check discovered double-attack forks (e.g. moving one piece uncovers a second attacker)
+  const threatened = countThreatenedValuables(chess, aiColor, humanColor);
+  const genuineMulti: { targetSq: Square; attackerSq: Square }[] = [];
+  if (chess.inCheck()) {
+    const kingSq = findKingSquareOfColor(chess, humanColor);
+    const kingAttackers = findPiecesAttackingSquare(chess, kingSq, aiColor);
+    if (kingSq && kingAttackers.length > 0) {
+      genuineMulti.push({ targetSq: kingSq, attackerSq: kingAttackers[0] });
+    }
+  }
+  for (const t of threatened) {
+    const attSqs = findPiecesAttackingSquare(chess, t.square, aiColor);
+    for (const aSq of attSqs) {
+      const aPiece = chess.get(aSq);
+      if (!aPiece) continue;
+      const aVal = PIECE_VALUES[aPiece.type] ?? 3;
+      if (t.undefended || t.value > aVal) {
+        genuineMulti.push({ targetSq: t.square, attackerSq: aSq });
+        break;
+      }
+    }
+  }
+
+  const uniqueTargets = new Map<Square, Square>();
+  for (const item of genuineMulti) {
+    if (!uniqueTargets.has(item.targetSq)) {
+      uniqueTargets.set(item.targetSq, item.attackerSq);
+    }
+  }
+  if (uniqueTargets.size >= 2) {
+    const entries = Array.from(uniqueTargets.entries()).slice(0, 3);
+    return {
+      forkerSqs: Array.from(new Set(entries.map(([, a]) => a))),
+      targetSqs: entries.map(([t]) => t),
+      arrows: entries.map(([t, a]) => ({ from: a, to: t })),
+    };
+  }
+
+  return null;
+}
+
 function detectTwoStepThreats(
   fen: string,
   aiColor: PieceColor,
@@ -1236,7 +1403,9 @@ function detectTwoStepThreats(
   mateAttackerSqs: Square[];
   hasForkPreview: boolean;
   forkAttackerSq: Square | null;
+  forkMoveToSq: Square | null;
   forkTargetSqs: Square[];
+  forkArrows: { from: string; to: string }[];
   passedPawnClose: boolean;
   passedPawnSqs: Square[];
   openFileKingPressure: boolean;
@@ -1246,7 +1415,9 @@ function detectTwoStepThreats(
   const mateAttackerSqs: Square[] = [];
   let hasForkPreview = false;
   let forkAttackerSq: Square | null = null;
+  let forkMoveToSq: Square | null = null;
   let forkTargetSqs: Square[] = [];
+  let forkArrows: { from: string; to: string }[] = [];
   let passedPawnClose = false;
   const passedPawnSqs: Square[] = [];
   let openFileKingPressure = false;
@@ -1269,12 +1440,31 @@ function detectTwoStepThreats(
         aiTurnChess.undo();
         break;
       }
-      if (!hasForkPreview && (m.piece === 'n' || m.piece === 'q' || m.piece === 'b')) {
-        const attackedValuables = countThreatenedValuables(aiTurnChess, aiColor, humanColor);
-        if (attackedValuables.length >= 2) {
-          hasForkPreview = true;
-          forkAttackerSq = m.from as Square;
-          forkTargetSqs = attackedValuables.slice(0, 3).map((t) => t.square);
+      if (
+        !hasForkPreview &&
+        (m.piece === 'n' || m.piece === 'q' || m.piece === 'b' || m.piece === 'r' || m.piece === 'p')
+      ) {
+        const landingSq = m.to as Square;
+        // Landing square must be safe (not simply captured by the player on arrival)
+        if (!aiTurnChess.isAttacked(landingSq, humanColor)) {
+          const forkedSqs = findGenuineForkTargetsFromSquare(
+            aiTurnChess,
+            landingSq,
+            m.piece,
+            aiColor,
+            humanColor,
+          );
+          if (forkedSqs.length >= 2) {
+            const topTargets = forkedSqs.slice(0, 3);
+            hasForkPreview = true;
+            forkAttackerSq = m.from as Square;
+            forkMoveToSq = landingSq;
+            forkTargetSqs = topTargets;
+            forkArrows = [
+              { from: m.from, to: landingSq },
+              ...topTargets.map((sq) => ({ from: landingSq, to: sq })),
+            ];
+          }
         }
       }
       aiTurnChess.undo();
@@ -1326,12 +1516,47 @@ function detectTwoStepThreats(
     mateAttackerSqs,
     hasForkPreview,
     forkAttackerSq,
+    forkMoveToSq,
     forkTargetSqs,
+    forkArrows,
     passedPawnClose,
     passedPawnSqs,
     openFileKingPressure,
     kingFileAttackerSqs,
   };
+}
+
+/**
+ * Checks ahead of time whether a pending bot move (`from -> to`) on `preFen` creates an
+ * immediate fork or a 2-step fork threat (without mutating game commentary counters).
+ */
+export function inspectPostMoveForkState(
+  preFen: string,
+  from: string,
+  to: string,
+  promotion: string | undefined,
+  aiColor: PieceColor,
+  humanColor: PieceColor,
+): { isFork: boolean; shouldWarn: boolean } {
+  try {
+    const chess = new Chess(preFen);
+    const res = chess.move({ from, to, promotion: promotion || 'q' });
+    if (!res || chess.isCheckmate() || chess.isStalemate() || chess.isDraw()) {
+      return { isFork: false, shouldWarn: false };
+    }
+    const postFen = chess.fen();
+    const imm = detectImmediateForkByAi(chess, res.to as Square, aiColor, humanColor);
+    if (imm) {
+      return { isFork: true, shouldWarn: forkWarningsShownInGame < MAX_FORK_WARNINGS_PER_GAME };
+    }
+    const twoStep = detectTwoStepThreats(postFen, aiColor, humanColor);
+    if (twoStep.hasForkPreview) {
+      return { isFork: true, shouldWarn: forkWarningsShownInGame < MAX_FORK_WARNINGS_PER_GAME };
+    }
+  } catch {
+    // ignore invalid move
+  }
+  return { isFork: false, shouldWarn: false };
 }
 
 export interface HumanCommentaryContext {
@@ -1741,6 +1966,7 @@ export function composeBotMoveCommentary(ctx: BotCommentaryContext): OpponentMes
     tone: CommentaryTone,
     withCalcOffer = false,
     concernedFigures?: SpeechFigureHighlight[],
+    forkArrows?: { from: string; to: string }[],
   ): OpponentMessage | null => {
     const entry = tryPickCaseClip(caseId);
     if (!entry) return null;
@@ -1754,6 +1980,7 @@ export function composeBotMoveCommentary(ctx: BotCommentaryContext): OpponentMes
       mathSummary: mathBadge,
       action: withCalcOffer ? calcAction : undefined,
       concernedFigures,
+      forkArrows,
     };
   };
 
@@ -1777,7 +2004,63 @@ export function composeBotMoveCommentary(ctx: BotCommentaryContext): OpponentMes
     return make('draw', 'DRAW', 'neutral');
   }
 
-  // 3. DIRECT CHECK
+  const topLine = analysis?.lines[0];
+  const aiSign = aiColor === 'w' ? 1 : -1;
+  const aiMateIn =
+    topLine?.mateIn != null && Math.sign(topLine.mateIn) === aiSign
+      ? Math.abs(topLine.mateIn)
+      : null;
+
+  const immediateFork = detectImmediateForkByAi(
+    chess,
+    lastMove.to as Square,
+    aiColor,
+    humanColor,
+  );
+  const twoStep = detectTwoStepThreats(fen, aiColor, humanColor);
+  const threatenedHuman = countThreatenedValuables(chess, aiColor, humanColor);
+
+  // 3. TOP PRIORITY #1 IN GAMEPLAY: FORK WARNINGS (1st & 2nd time show 3s transparent lila arrows; 3rd+ time say nothing & let player play)
+  if (immediateFork !== null || twoStep.hasForkPreview) {
+    if (forkWarningsShownInGame >= MAX_FORK_WARNINGS_PER_GAME) {
+      // 3rd and following forks in the same game: say nothing about forks anymore and let the player play
+      return null;
+    }
+
+    if (immediateFork !== null) {
+      const msg = make(
+        'warn_double',
+        'FORK THREAT',
+        'warning',
+        false,
+        buildConcernedFigures(immediateFork.targetSqs, immediateFork.forkerSqs),
+        immediateFork.arrows,
+      );
+      if (msg) {
+        forkWarningsShownInGame += 1;
+        return msg;
+      }
+    }
+
+    if (twoStep.hasForkPreview) {
+      const msg = make(
+        'warn_fork_2step',
+        '2-STEP FORK',
+        'warning',
+        false,
+        buildConcernedFigures(twoStep.forkTargetSqs, [twoStep.forkAttackerSq || lastMove.to]),
+        twoStep.forkArrows,
+      );
+      if (msg) {
+        forkWarningsShownInGame += 1;
+        return msg;
+      }
+    }
+
+    return null;
+  }
+
+  // 4. DIRECT CHECK (non-fork checks)
   if (chess.inCheck()) {
     const checkers = findPiecesAttackingSquare(chess, humanKingSq, aiColor);
     const checkFigures = buildConcernedFigures(
@@ -1793,17 +2076,7 @@ export function composeBotMoveCommentary(ctx: BotCommentaryContext): OpponentMes
     return make('check_general', 'CHECK', 'check', false, checkFigures);
   }
 
-  const topLine = analysis?.lines[0];
-  const aiSign = aiColor === 'w' ? 1 : -1;
-  const aiMateIn =
-    topLine?.mateIn != null && Math.sign(topLine.mateIn) === aiSign
-      ? Math.abs(topLine.mateIn)
-      : null;
-
-  const twoStep = detectTwoStepThreats(fen, aiColor, humanColor);
-  const threatenedHuman = countThreatenedValuables(chess, aiColor, humanColor);
-
-  // 4. FORCED MATE OR 2-STEP MATE THREAT
+  // 5. FORCED MATE OR 2-STEP MATE THREAT
   if (((aiMateIn !== null && aiMateIn <= 3) || twoStep.hasMateThreat) && canPlayCaseInGame('warn_mate')) {
     const mateAttackers =
       twoStep.mateAttackerSqs.length > 0 ? twoStep.mateAttackerSqs : [lastMove.to];
@@ -1816,7 +2089,7 @@ export function composeBotMoveCommentary(ctx: BotCommentaryContext): OpponentMes
     );
   }
 
-  // 5. PROMOTION
+  // 6. PROMOTION
   if (lastMove.promotion && canPlayCaseInGame('promotion')) {
     return make(
       'promotion',
@@ -1827,30 +2100,12 @@ export function composeBotMoveCommentary(ctx: BotCommentaryContext): OpponentMes
     );
   }
 
-  // 6. HIGH-VALUE CAPTURE
+  // 7. HIGH-VALUE CAPTURE
   if (lastMove.captured === 'q' && canPlayCaseInGame('capture_queen')) {
     return make('capture_queen', 'QUEEN CAPTURED', 'capture');
   }
   if (lastMove.captured === 'r' && canPlayCaseInGame('capture_rook')) {
     return make('capture_rook', 'ROOK CAPTURED', 'capture');
-  }
-
-  // 7. DOUBLE ATTACK
-  if (threatenedHuman.length >= 2 && canPlayCaseInGame('warn_double')) {
-    const dangerSqs = threatenedHuman.map((t) => t.square);
-    const attackerSet = new Set<string>([lastMove.to]);
-    for (const t of threatenedHuman) {
-      for (const aSq of findPiecesAttackingSquare(chess, t.square, aiColor)) {
-        attackerSet.add(aSq);
-      }
-    }
-    return make(
-      'warn_double',
-      'DOUBLE THREAT',
-      'warning',
-      true,
-      buildConcernedFigures(dangerSqs, attackerSet),
-    );
   }
 
   // 8. DIRECT PIECE THREAT
@@ -1891,19 +2146,9 @@ export function composeBotMoveCommentary(ctx: BotCommentaryContext): OpponentMes
     return make('calc_offer', 'SEARCH TREE · SHOW LINES?', 'math', true);
   }
 
-  // 11. CASTLING / FORK / PAWN / MINOR CAPTURE / SEARCH TREE
+  // 11. CASTLING / PAWN / MINOR CAPTURE / SEARCH TREE
   if ((lastMove.san === 'O-O' || lastMove.san === 'O-O-O') && canPlayCaseInGame('castled')) {
     return make('castled', 'CASTLED', 'opening', Boolean(calcAction));
-  }
-
-  if (twoStep.hasForkPreview && canPlayCaseInGame('warn_fork_2step') && Math.random() < 0.65) {
-    return make(
-      'warn_fork_2step',
-      '2-STEP FORK',
-      'warning',
-      Boolean(calcAction),
-      buildConcernedFigures(twoStep.forkTargetSqs, [twoStep.forkAttackerSq || lastMove.to]),
-    );
   }
 
   if (twoStep.passedPawnClose && lastMove.piece === 'p' && canPlayCaseInGame('warn_pawn_promo')) {

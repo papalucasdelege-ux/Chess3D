@@ -804,6 +804,33 @@ async function startServer(): Promise<void> {
       res.status(403).json({ error: 'Access denied.' });
       return;
     }
+
+    // Block AI / LLM / technical-scraper User-Agents while allowing standard SEO search engines on "/"
+    const ua = String(req.headers['user-agent'] || '');
+    const isAiCrawler =
+      /GPTBot|OAI-SearchBot|ChatGPT-User|Google-Extended|GoogleOther|Google-CloudVertexBot|PerplexityBot|Perplexity-User|ClaudeBot|Claude-Web|Claude-SearchBot|anthropic-ai|CCBot|Meta-ExternalAgent|Meta-ExternalFetcher|Applebot-Extended|Bytespider|Amazonbot|YouBot|DuckAssistBot|MistralAI-User|cohere-ai|Diffbot|ImagesiftBot|omgili|Timpibot|Webzio-Extended|Scrapy/i.test(
+        ua,
+      );
+    if (isAiCrawler && lowerPath !== '/robots.txt') {
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow, nosnippet, noarchive, noai, noimageai');
+      res.status(403).type('text/plain').send('Forbidden');
+      return;
+    }
+
+    if (
+      lowerPath.startsWith('/assets/') ||
+      lowerPath.startsWith('/voices/') ||
+      lowerPath.startsWith('/api/') ||
+      lowerPath.startsWith('/chess_angel_') ||
+      lowerPath.endsWith('.js') ||
+      lowerPath.endsWith('.json') ||
+      lowerPath.endsWith('.webmanifest')
+    ) {
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow, nosnippet, noarchive, noai, noimageai');
+    } else {
+      res.setHeader('X-Robots-Tag', 'index, follow, noarchive, noai, noimageai');
+    }
+
     // Keep PWA service worker and manifest always revalidated for clean updates
     if (lowerPath === '/sw.js' || lowerPath === '/manifest.webmanifest') {
       res.setHeader('Cache-Control', 'no-cache, must-revalidate');
@@ -943,6 +970,31 @@ async function startServer(): Promise<void> {
 
   // Serve public media assets (including Chess Angel 3:4 portrait MP4 videos, guaranteed audio-free) with HTTP 206 Range support
   app.use('/assets', (req, _res, next) => {
+    // Transparent fallback: if /assets/aistudio/angel_(case|idle|escape)_<key>.mp4 is requested
+    // when only builtin_<key>.mp4 exists on disk, rewrite cleanly to the builtin file so <video> never 404s
+    const mReq = /^\/aistudio\/angel_(case|idle|escape|default)_([a-z0-9_]+)\.mp4$/i.exec(req.path);
+    if (mReq) {
+      const requestedAbs = path.resolve(publicAssetsDir, '.' + req.path);
+      if (
+        requestedAbs.startsWith(publicAssetsDir + path.sep) &&
+        !fs.existsSync(requestedAbs)
+      ) {
+        const kind = mReq[1].toLowerCase();
+        const key = mReq[2].toLowerCase();
+        const builtinName =
+          kind === 'default'
+            ? 'builtin_default_speaking.mp4'
+            : kind === 'escape'
+              ? `builtin_escape_${key}.mp4`
+              : `builtin_${key}.mp4`;
+        const builtinAbs = path.resolve(publicAssetsDir, 'aistudio', builtinName);
+        if (fs.existsSync(builtinAbs)) {
+          const qIdx = req.url.indexOf('?');
+          const qs = qIdx >= 0 ? req.url.slice(qIdx) : '';
+          req.url = `/aistudio/${builtinName}${qs}`;
+        }
+      }
+    }
     if (!IS_PROD && /\.(mp4|webm|mov|m4v)$/i.test(req.path)) {
       const candidate = path.resolve(publicAssetsDir, '.' + req.path);
       if (candidate.startsWith(publicAssetsDir + path.sep)) {
@@ -962,6 +1014,10 @@ async function startServer(): Promise<void> {
       },
     }),
   );
+  // Strict 404 guard so missing /assets/* files NEVER fall through to Vite SPA index.html (text/html)
+  app.use('/assets', (_req, res) => {
+    res.status(404).end();
+  });
 
   // Persistent Chess Angel Portrait Video Registry & Automatic Audio-Stripping Uploader
   const aistudioAssetsDir = path.resolve(publicAssetsDir, 'aistudio');
@@ -2038,6 +2094,48 @@ async function startServer(): Promise<void> {
             if (apex !== null) {
               result.escapeApexes[cleanEsc] = apex;
             }
+          }
+        }
+      }
+    }
+
+    // Populate builtin_*.mp4 videos for any slot that has no custom angel_*.mp4 override
+    try {
+      if (fs.existsSync(aistudioAssetsDir)) {
+        for (const entry of fs.readdirSync(aistudioAssetsDir, { withFileTypes: true })) {
+          if (!entry.isFile()) continue;
+          const mBuiltin = /^builtin_([a-z0-9_]+)\.mp4$/i.exec(entry.name);
+          if (!mBuiltin) continue;
+          const bKey = mBuiltin[1].toLowerCase();
+          const cleanPublicPath = `/assets/aistudio/${entry.name}`;
+          if (bKey === 'default_speaking') {
+            if (!result.defaultSpeaking) result.defaultSpeaking = cleanPublicPath;
+          } else if (bKey === 'mouse_idle_sleep') {
+            if (!result.mouseIdle) result.mouseIdle = cleanPublicPath;
+          } else if (bKey === 'mouse_wake_up') {
+            if (!result.mouseIdleWake) result.mouseIdleWake = cleanPublicPath;
+          } else if (bKey.startsWith('idle_')) {
+            if (!result.idleVariants[bKey]) result.idleVariants[bKey] = cleanPublicPath;
+          } else if (bKey.startsWith('escape_')) {
+            const escKey = bKey.slice('escape_'.length);
+            if (!result.escapes[escKey]) result.escapes[escKey] = cleanPublicPath;
+          } else if (!result.cases[bKey]) {
+            result.cases[bKey] = cleanPublicPath;
+          }
+        }
+      }
+    } catch {
+      // Ignore builtin discovery errors
+    }
+
+    // Prune nonexistent seductionAudioVariants (.mp3 files missing on disk)
+    if (result.seductionAudioVariants) {
+      for (const [k, v] of Object.entries(result.seductionAudioVariants)) {
+        const fname = stripQueryFromAssetUrl(v);
+        if (!fname || !fs.existsSync(path.join(publicVoicesFemaleDir, fname))) {
+          delete result.seductionAudioVariants[k];
+          if (result.seductionAudioDurations) {
+            delete result.seductionAudioDurations[k];
           }
         }
       }

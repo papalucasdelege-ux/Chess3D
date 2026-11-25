@@ -25,7 +25,7 @@ export default defineConfig(() => {
           name: 'ChessAngel 3D',
           short_name: 'ChessAngel',
           description:
-            'Hand-carved 3D wooden Staunton chess with Chess Angel voice & video commentary, 3D search-tree lines, and hints.',
+            'Non-profit educational chess game by Jan Rom (jrom.eu/), creator of studentplatform.net, calctrain.studentplatform.net, and chess3d.studentplatform.net.',
           theme_color: '#000000',
           background_color: '#000000',
           display: 'standalone',
@@ -62,7 +62,7 @@ export default defineConfig(() => {
           clientsClaim: true,
           skipWaiting: true,
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/api\//, /^\/ws$/],
+          navigateFallbackDenylist: [/^\/api\//, /^\/ws$/, /^\/assets\//, /^\/voices\//],
           runtimeCaching: [
             {
               // Never cache authenticated or live API routes
@@ -70,14 +70,14 @@ export default defineConfig(() => {
               handler: 'NetworkOnly',
             },
             {
-              // Voice clips are small (~40-70 KB) and fetched as ArrayBuffers: cache on first play for offline speech
+              // Voice clips are small (~40-70 KB) and fetched as ArrayBuffers: cache all clips for offline speech
               urlPattern: ({ url }) =>
                 url.pathname.startsWith('/voices/') || url.pathname === '/seduction.mp3',
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-voices-v3-3',
+                cacheName: 'chessangel-voices-v3-4',
                 expiration: {
-                  maxEntries: 220,
+                  maxEntries: 260,
                   maxAgeSeconds: 60 * 60 * 24 * 30,
                   purgeOnQuotaError: true,
                 },
@@ -87,15 +87,15 @@ export default defineConfig(() => {
               },
             },
             {
-              // Chess Angel portrait MP4s: use RangeRequestsPlugin so Android HTTP 206 Range streaming NEVER stalls
+              // Chess Angel portrait MP4s: hold all ~70 videos (maxEntries: 150) with RangeRequestsPlugin so Android tablets NEVER evict or stall
               urlPattern: ({ url }) =>
                 url.pathname.startsWith('/assets/aistudio/') && url.pathname.endsWith('.mp4'),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-videos-v3-3',
+                cacheName: 'chessangel-videos-v3-4',
                 rangeRequests: true,
                 expiration: {
-                  maxEntries: 45,
+                  maxEntries: 150,
                   maxAgeSeconds: 60 * 60 * 24 * 30,
                   purgeOnQuotaError: true,
                 },
@@ -109,7 +109,7 @@ export default defineConfig(() => {
               urlPattern: ({ url }) => url.pathname === '/assets/aistudio/angel_video_map.json',
               handler: 'StaleWhileRevalidate',
               options: {
-                cacheName: 'chessangel-registry-v3-3',
+                cacheName: 'chessangel-registry-v3-4',
                 cacheableResponse: {
                   statuses: [200],
                 },
@@ -122,7 +122,7 @@ export default defineConfig(() => {
                 /\.(png|jpg|jpeg|webp|svg)$/i.test(url.pathname),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-images-v3-3',
+                cacheName: 'chessangel-images-v3-4',
                 expiration: {
                   maxEntries: 40,
                   maxAgeSeconds: 60 * 60 * 24 * 30,
@@ -140,14 +140,15 @@ export default defineConfig(() => {
           type: 'module',
         },
       }),
-      // Ensures 100% of Chess Angel .mp4 videos in public/assets/aistudio/ are registered in
-      // angel_video_map.json before bundling and copied cleanly into dist/ when Publish runs.
+      // Ensures 100% of Chess Angel .mp4 videos (both angel_*.mp4 and builtin_*.mp4) in
+      // public/assets/aistudio/ are registered in angel_video_map.json before bundling and copied cleanly into dist/.
       {
         name: 'sync-all-angel-media-on-build',
-        apply: 'build',
+        apply: 'build' as const,
         buildStart(): void {
           try {
             const aistudioDir = path.resolve(__dirname, 'public/assets/aistudio');
+            const voicesFemaleDir = path.resolve(__dirname, 'public/voices/female');
             const mapPath = path.join(aistudioDir, 'angel_video_map.json');
             if (!fs.existsSync(aistudioDir)) return;
 
@@ -162,61 +163,7 @@ export default defineConfig(() => {
             const videoSizes = ((rawMap.videoSizes as Record<string, number>) || {});
             let changed = false;
 
-            for (const entry of fs.readdirSync(aistudioDir, { withFileTypes: true })) {
-              if (
-                !entry.isFile() ||
-                !/\.(mp4|webm|mov|m4v)$/i.test(entry.name) ||
-                entry.name.includes('.opt.') ||
-                entry.name.includes('.tmp')
-              ) {
-                continue;
-              }
-              const full = path.join(aistudioDir, entry.name);
-              const stat = fs.statSync(full);
-              const cleanPath = `/assets/aistudio/${entry.name}`;
-              if (videoSizes[cleanPath] !== stat.size) {
-                videoSizes[cleanPath] = stat.size;
-                changed = true;
-              }
-
-              const m = /^angel_(idle|mouse_idle|default|group|case|escape)_([a-z0-9_]+)\.mp4$/i.exec(
-                entry.name,
-              );
-              if (!m) continue;
-              const kind = m[1].toLowerCase();
-              const key = m[2].toLowerCase();
-              const versioned = cleanPath;
-
-              if (kind === 'idle') {
-                const normKey = key === 'idle_listening' ? 'idle_1' : key;
-                if (!idleVariants[normKey]) {
-                  idleVariants[normKey] = versioned;
-                  changed = true;
-                }
-              } else if (kind === 'mouse_idle') {
-                if (key === 'wake' && !rawMap.mouseIdleWake) {
-                  rawMap.mouseIdleWake = versioned;
-                  changed = true;
-                } else if (key !== 'wake' && !rawMap.mouseIdle) {
-                  rawMap.mouseIdle = versioned;
-                  changed = true;
-                }
-              } else if (kind === 'default' && !rawMap.defaultSpeaking) {
-                rawMap.defaultSpeaking = versioned;
-                changed = true;
-              } else if (kind === 'group' && !groups[key]) {
-                groups[key] = versioned;
-                changed = true;
-              } else if (kind === 'case' && !cases[key]) {
-                cases[key] = versioned;
-                changed = true;
-              } else if (kind === 'escape' && !escapes[key]) {
-                escapes[key] = versioned;
-                changed = true;
-              }
-            }
-
-            // Prune any stale map references to deleted files so published builds never hit 404
+            // Prune any stale map references to deleted files FIRST so builtin_*.mp4 fallbacks can fill them
             for (const dict of [idleVariants, groups, cases, escapes]) {
               for (const [k, v] of Object.entries(dict)) {
                 if (typeof v !== 'string') continue;
@@ -225,9 +172,135 @@ export default defineConfig(() => {
                 if (!fs.existsSync(path.join(aistudioDir, fname))) {
                   delete dict[k];
                   changed = true;
+                } else if (v !== clean) {
+                  dict[k] = clean;
+                  changed = true;
                 }
               }
             }
+            for (const topKey of ['defaultSpeaking', 'mouseIdle', 'mouseIdleWake'] as const) {
+              const val = rawMap[topKey];
+              if (typeof val === 'string') {
+                const clean = val.split('?')[0];
+                const fname = path.basename(clean);
+                if (!fs.existsSync(path.join(aistudioDir, fname))) {
+                  delete rawMap[topKey];
+                  changed = true;
+                } else if (val !== clean) {
+                  rawMap[topKey] = clean;
+                  changed = true;
+                }
+              }
+            }
+
+            const entries = fs
+              .readdirSync(aistudioDir, { withFileTypes: true })
+              .filter(
+                (e) =>
+                  e.isFile() &&
+                  /\.(mp4|webm|mov|m4v)$/i.test(e.name) &&
+                  !e.name.includes('.opt.') &&
+                  !e.name.includes('.tmp'),
+              )
+              // Prefer custom angel_*.mp4 ahead of builtin_*.mp4 when both exist
+              .sort((a, b) => {
+                const aAngel = a.name.startsWith('angel_') ? 0 : 1;
+                const bAngel = b.name.startsWith('angel_') ? 0 : 1;
+                return aAngel - bAngel || a.name.localeCompare(b.name);
+              });
+
+            for (const entry of entries) {
+              const full = path.join(aistudioDir, entry.name);
+              const stat = fs.statSync(full);
+              const cleanPath = `/assets/aistudio/${entry.name}`;
+              if (videoSizes[cleanPath] !== stat.size) {
+                videoSizes[cleanPath] = stat.size;
+                changed = true;
+              }
+
+              const mAngel = /^angel_(idle|mouse_idle|default|group|case|escape)_([a-z0-9_]+)\.mp4$/i.exec(
+                entry.name,
+              );
+              if (mAngel) {
+                const kind = mAngel[1].toLowerCase();
+                const key = mAngel[2].toLowerCase();
+                if (kind === 'idle') {
+                  const normKey = key === 'idle_listening' ? 'idle_1' : key;
+                  if (!idleVariants[normKey]) {
+                    idleVariants[normKey] = cleanPath;
+                    changed = true;
+                  }
+                } else if (kind === 'mouse_idle') {
+                  if (key === 'wake' && !rawMap.mouseIdleWake) {
+                    rawMap.mouseIdleWake = cleanPath;
+                    changed = true;
+                  } else if (key !== 'wake' && !rawMap.mouseIdle) {
+                    rawMap.mouseIdle = cleanPath;
+                    changed = true;
+                  }
+                } else if (kind === 'default' && !rawMap.defaultSpeaking) {
+                  rawMap.defaultSpeaking = cleanPath;
+                  changed = true;
+                } else if (kind === 'group' && !groups[key]) {
+                  groups[key] = cleanPath;
+                  changed = true;
+                } else if (kind === 'case' && !cases[key]) {
+                  cases[key] = cleanPath;
+                  changed = true;
+                } else if (kind === 'escape' && !escapes[key]) {
+                  escapes[key] = cleanPath;
+                  changed = true;
+                }
+                continue;
+              }
+
+              const mBuiltin = /^builtin_([a-z0-9_]+)\.mp4$/i.exec(entry.name);
+              if (mBuiltin) {
+                const bKey = mBuiltin[1].toLowerCase();
+                if (bKey === 'default_speaking') {
+                  if (!rawMap.defaultSpeaking) {
+                    rawMap.defaultSpeaking = cleanPath;
+                    changed = true;
+                  }
+                } else if (bKey === 'mouse_idle_sleep') {
+                  if (!rawMap.mouseIdle) {
+                    rawMap.mouseIdle = cleanPath;
+                    changed = true;
+                  }
+                } else if (bKey === 'mouse_wake_up') {
+                  if (!rawMap.mouseIdleWake) {
+                    rawMap.mouseIdleWake = cleanPath;
+                    changed = true;
+                  }
+                } else if (bKey.startsWith('idle_')) {
+                  if (!idleVariants[bKey]) {
+                    idleVariants[bKey] = cleanPath;
+                    changed = true;
+                  }
+                } else if (bKey.startsWith('escape_')) {
+                  const escKey = bKey.slice('escape_'.length);
+                  if (!escapes[escKey]) {
+                    escapes[escKey] = cleanPath;
+                    changed = true;
+                  }
+                } else if (!cases[bKey]) {
+                  cases[bKey] = cleanPath;
+                  changed = true;
+                }
+              }
+            }
+
+            // Prune dead seductionAudioVariants whose .mp3 does not exist on disk
+            const sedVariants = (rawMap.seductionAudioVariants as Record<string, string>) || {};
+            for (const [k, v] of Object.entries(sedVariants)) {
+              if (typeof v !== 'string') continue;
+              const fname = path.basename(v.split('?')[0]);
+              if (!fs.existsSync(path.join(voicesFemaleDir, fname))) {
+                delete sedVariants[k];
+                changed = true;
+              }
+            }
+            rawMap.seductionAudioVariants = sedVariants;
 
             if (changed) {
               rawMap.idleVariants = idleVariants;
@@ -252,7 +325,7 @@ export default defineConfig(() => {
               fs.cpSync(srcSub, dstSub, { recursive: true, force: true });
             }
           }
-          for (const rootFile of ['seduction.mp3', '_headers', '_redirects']) {
+          for (const rootFile of ['seduction.mp3', '_headers', '_redirects', 'robots.txt']) {
             const srcFile = path.resolve(__dirname, 'public', rootFile);
             if (fs.existsSync(srcFile)) {
               fs.copyFileSync(srcFile, path.resolve(distDir, rootFile));
@@ -265,7 +338,7 @@ export default defineConfig(() => {
       // in production builds. Do not remove.
       {
         name: 'copy-unbundled-src-assets',
-        apply: 'build',
+        apply: 'build' as const,
         closeBundle(error?: Error): void {
           if (error) {
             return;
@@ -283,6 +356,9 @@ export default defineConfig(() => {
       alias: {
         '@': path.resolve(__dirname, '.'),
       },
+    },
+    esbuild: {
+      legalComments: 'none' as const,
     },
     build: {
       sourcemap: false,

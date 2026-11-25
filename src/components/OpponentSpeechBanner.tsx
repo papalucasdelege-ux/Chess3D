@@ -32,6 +32,7 @@ import {
   resolveDefaultSpeakingLipVideo,
   shouldExtendWithDefaultLipSync,
   subscribeAngelVideoOverrides,
+  warmAngelVideoUrlInCache,
   type AngelEscapeCueKey,
   type ResolvedActiveEscapeCue,
 } from '../chess/angelPortraitVideos';
@@ -86,6 +87,13 @@ const IS_MOBILE_DEVICE =
   (typeof navigator !== 'undefined' && /Android|iPhone|iPad/i.test(navigator.userAgent)) ||
   isTouchTabletHardware();
 
+// Distinguish compact phones (< 600px shortest side) from Android tablets / iPads so tablets get crisp 560x752 video
+const IS_COMPACT_PHONE =
+  IS_MOBILE_DEVICE &&
+  !isTouchTabletHardware() &&
+  typeof window !== 'undefined' &&
+  Math.min(window.innerWidth || 800, window.innerHeight || 800) < 600;
+
 /**
  * Hard-silences any lady portrait HTMLVideoElement regardless of what video file
  * or codec is loaded: locks defaultMuted, muted, volume = 0, and disables any
@@ -124,8 +132,8 @@ function silenceVideoElement(video: HTMLVideoElement | null): void {
   }
 }
 
-const PORTRAIT_CANVAS_W = IS_MOBILE_DEVICE ? 288 : 560;
-const PORTRAIT_CANVAS_H = IS_MOBILE_DEVICE ? 384 : 752;
+const PORTRAIT_CANVAS_W = IS_COMPACT_PHONE ? 360 : 560;
+const PORTRAIT_CANVAS_H = IS_COMPACT_PHONE ? 480 : 752;
 const PROBE_SIZE = 32;
 const BLEND_TO_IDLE_MS = 1650;
 const BLEND_TO_SPEAK_MS = 780;
@@ -771,6 +779,10 @@ function ChessAngelPortraitVideo({
       return;
     }
     const cues = resolveActiveEscapeCues(forSpeechText, forClipId);
+    // Pre-warm escape overlay bytes into HTTP / Service Worker cache via fetch() (zero MediaCodec allocation)
+    for (const c of cues) {
+      warmAngelVideoUrlInCache(c.videoUrl);
+    }
     utteranceWallStartMsRef.current = performance.now();
     const estTalk = forClipId ? VOICE_CLIP_DURATION_SEC[forClipId] ?? 6.0 : 6.0;
     utteranceMaxWindowSecRef.current = estTalk + 1.5;
@@ -933,7 +945,7 @@ function ChessAngelPortraitVideo({
     const nowMs = performance.now();
     if (playingPostVideoEscapeRef.current) {
       const escStuck =
-        escapeWaitingFrameRef.current && nowMs - escapeWaitStartMsRef.current > 1400;
+        escapeWaitingFrameRef.current && nowMs - escapeWaitStartMsRef.current > 4500;
       return !escStuck;
     }
     if (activeRoleRef.current === 'idle') return false;
@@ -945,7 +957,7 @@ function ChessAngelPortraitVideo({
       return false;
     }
     if (deferredPostVideoCuesRef.current.length > 0) {
-      if (waitingForIncomingFrameRef.current && nowMs - incomingWaitStartMsRef.current > 1200) {
+      if (waitingForIncomingFrameRef.current && nowMs - incomingWaitStartMsRef.current > 6500) {
         deferredPostVideoCuesRef.current = [];
         return false;
       }
@@ -953,11 +965,11 @@ function ChessAngelPortraitVideo({
     }
     if (video.ended || slotSafeEndedRef.current[slot]) return false;
     if (waitingForIncomingFrameRef.current) {
-      return nowMs - incomingWaitStartMsRef.current <= 1200;
+      return nowMs - incomingWaitStartMsRef.current <= 6500;
     }
     if (pausedBaseForEscapeRef.current) return true;
     if (video.paused) return false;
-    return nowMs - slotLastProgressMsRef.current[slot] <= 1200;
+    return nowMs - slotLastProgressMsRef.current[slot] <= 3200;
   };
 
   /**
@@ -1161,11 +1173,14 @@ function ChessAngelPortraitVideo({
       sampleSlotVideoFrame(outSlot);
     }
 
-    // 1a. Incoming Frame Watchdog: if an incoming clip stalls on mobile/network or hits 404,
-    //     fall back to built-in speaking/idle at 1.5s and hard-unlock at 2.4s so queues NEVER freeze!
+    // 1a. Incoming Frame Watchdog: fall back immediately (220ms) ONLY on actual <video> decode/404 error,
+    //     otherwise allow 7.5s for 1.5–3.0MB clips to stream over Wi-Fi/LTE on Android tablets so diverse videos never get overwritten!
     if (waitingForIncomingFrameRef.current && !activeReady && incomingWaitStartMsRef.current > 0) {
       const waitedMs = now - incomingWaitStartMsRef.current;
-      if (waitedMs > 1500 && !slotFallbackUsedRef.current[activeSlot]) {
+      const hasMediaError = Boolean(activeVideo?.error);
+      const fallbackThresholdMs = hasMediaError ? 220 : 7500;
+      const hardUnlockThresholdMs = hasMediaError ? 1400 : 9000;
+      if (waitedMs > fallbackThresholdMs && !slotFallbackUsedRef.current[activeSlot]) {
         slotFallbackUsedRef.current[activeSlot] = true;
         const fallbackUrl =
           activeRoleRef.current === 'speaking'
@@ -1175,7 +1190,7 @@ function ChessAngelPortraitVideo({
           incomingWaitStartMsRef.current = now;
           loadVideoIntoSlot(activeSlot, fallbackUrl, slotAutoPlayRef.current[activeSlot]);
         }
-      } else if (waitedMs > 2400) {
+      } else if (waitedMs > hardUnlockThresholdMs) {
         waitingForIncomingFrameRef.current = false;
         isBlendingRef.current = false;
         slotSafeEndedRef.current[activeSlot] = true;
@@ -1506,7 +1521,7 @@ function ChessAngelPortraitVideo({
         } else if (
           escapeWaitingFrameRef.current &&
           !escReady &&
-          ((escapeWaitStartMsRef.current > 0 && now - escapeWaitStartMsRef.current > 1500) ||
+          ((escapeWaitStartMsRef.current > 0 && now - escapeWaitStartMsRef.current > 4500) ||
             Boolean(escVideo?.error))
         ) {
           // Escape overlay failed or timed out on mobile: release cleanly and resume base video!

@@ -3,38 +3,48 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ChessAngel 3D – Interactive 3D Wood Chess by Jan Rom</title>
+    <title>ChessAngel 3D – Non-Profit Educational Chess by Jan Rom</title>
     <meta
       name="description"
-      content="Play ChessAngel 3D online: carved wooden Staunton chess with live voice &amp; video commentary, 3D search-tree lines, and hints. Created by Jan Rom, Brussels 2026."
+      content="Non-profit educational chess game by Jan Rom (jrom.eu/), creator of studentplatform.net, calctrain.studentplatform.net, and chess3d.studentplatform.net."
     />
     <meta
       name="keywords"
-      content="ChessAngel 3D, 3D chess online, wooden Staunton chess, interactive chess AI, Chess Angel voice commentary, 3D chess search tree visualization, chess analysis engine, chess replay theatre, webGL 3D chess, Jan Rom, Brussels 2026, jrom.eu, rom.brussels"
+      content="ChessAngel 3D, chess3d.studentplatform.net, studentplatform.net, calctrain.studentplatform.net, Jan Rom, jrom.eu, non-profit educational applications, educational chess, Brussels"
     />
-    <meta name="author" content="Jan Rom (Brussels, 2026) – www.jrom.eu | www.rom.brussels" />
-    <meta name="creator" content="Jan Rom" />
-    <meta name="publisher" content="Jan Rom – www.jrom.eu | www.rom.brussels" />
-    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
+    <meta name="author" content="Jan Rom – https://jrom.eu/" />
+    <meta name="creator" content="Jan Rom (jrom.eu/)" />
+    <meta
+      name="publisher"
+      content="Jan Rom – jrom.eu/ | studentplatform.net | calctrain.studentplatform.net | chess3d.studentplatform.net"
+    />
+    <meta name="robots" content="index, follow, noarchive, noai, noimageai" />
+    <meta name="googlebot" content="index, follow, noarchive, noai, noimageai" />
+    <meta name="bingbot" content="index, follow, noarchive, noai, noimageai" />
+    <link rel="canonical" href="https://chess3d.studentplatform.net/" />
 
     <!-- OpenGraph Social Cards -->
     <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://chess3d.studentplatform.net/" />
     <meta property="og:site_name" content="ChessAngel 3D" />
     <meta property="og:locale" content="en_US" />
-    <meta property="og:title" content="ChessAngel 3D – Interactive 3D Wood Chess by Jan Rom" />
+    <meta property="og:title" content="ChessAngel 3D – Non-Profit Educational Chess by Jan Rom" />
     <meta
       property="og:description"
-      content="Play ChessAngel 3D online: carved wooden Staunton chess with live voice &amp; video commentary, 3D search-tree lines, and hints. Created by Jan Rom, Brussels 2026."
+      content="Non-profit educational chess game by Jan Rom (jrom.eu/), creator of studentplatform.net, calctrain.studentplatform.net, and chess3d.studentplatform.net."
     />
     <meta property="og:image" content="/assets/aistudio/chess3D-angel_414f5812.png" />
-    <meta property="og:image:alt" content="ChessAngel 3D – Hand-carved 3D Staunton chess with Chess Angel" />
+    <meta
+      property="og:image:alt"
+      content="ChessAngel 3D – Non-profit educational application created by Jan Rom (jrom.eu/)"
+    />
 
     <!-- Twitter / X Cards -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="ChessAngel 3D – Interactive 3D Wood Chess by Jan Rom" />
+    <meta name="twitter:title" content="ChessAngel 3D – Non-Profit Educational Chess by Jan Rom" />
     <meta
       name="twitter:description"
-      content="Play ChessAngel 3D online: carved wooden Staunton chess with live voice &amp; video commentary, 3D search-tree lines, and hints. Created by Jan Rom, Brussels 2026."
+      content="Non-profit educational chess game by Jan Rom (jrom.eu/), creator of studentplatform.net, calctrain.studentplatform.net, and chess3d.studentplatform.net."
     />
     <meta name="twitter:image" content="/assets/aistudio/chess3D-angel_414f5812.png" />
 
@@ -47,77 +57,112 @@
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png" />
     <link rel="shortcut icon" type="image/png" href="/assets/aistudio/chess3D-angel_414f5812.png" />
-    <link rel="author" href="https://www.jrom.eu" />
+    <link rel="author" href="https://jrom.eu/" />
+    <link rel="me" href="https://jrom.eu/" />
+    <link rel="related" href="https://studentplatform.net/" />
+    <link rel="related" href="https://calctrain.studentplatform.net/" />
 
-    <!-- Schema.org Structured Data (VideoGame & WebApplication + Creator Attribution) -->
+    <!-- Schema.org Structured Data (Jan Rom & His Three Non-Profit Educational Applications) -->
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": ["VideoGame", "WebApplication"],
-        "name": "ChessAngel 3D",
-        "alternateName": "ChessAngel 3D v3.3",
-        "softwareVersion": "3.3.0",
-        "applicationCategory": "GameApplication",
-        "genre": ["Chess", "Board Game", "3D Strategy Game"],
-        "operatingSystem": "Web Browser",
-        "browserRequirements": "Requires HTML5 and WebGL",
-        "datePublished": "2026",
-        "copyrightYear": 2026,
-        "inLanguage": "en",
-        "image": "/assets/aistudio/chess3D-angel_414f5812.png",
-        "description": "ChessAngel 3D is an interactive browser-based 3D chess experience featuring hand-carved walnut and maple Staunton pieces with embossed wooden board coordinates, animated portrait video and expressive voice commentary from Chess Angel across five thinking levels, real-time 3D search-tree visualization over the board, multi-line tactical analysis and move-quality coaching, timed chess clocks, pass-and-play, and a classic & personal match replay theatre. Created by Jan Rom in Brussels in 2026 (www.jrom.eu / www.rom.brussels).",
-        "playMode": ["SinglePlayer", "MultiPlayer", "CoOp"],
-        "author": {
-          "@type": "Person",
-          "name": "Jan Rom",
-          "url": "https://www.jrom.eu",
-          "sameAs": ["https://www.jrom.eu", "https://www.rom.brussels"],
-          "homeLocation": {
-            "@type": "Place",
-            "name": "Brussels, Belgium"
+        "@graph": [
+          {
+            "@type": "Person",
+            "@id": "https://jrom.eu/#jan-rom",
+            "name": "Jan Rom",
+            "url": "https://jrom.eu/",
+            "sameAs": [
+              "https://jrom.eu/",
+              "https://www.jrom.eu",
+              "https://www.rom.brussels",
+              "https://studentplatform.net/",
+              "https://calctrain.studentplatform.net/",
+              "https://chess3d.studentplatform.net/"
+            ],
+            "homeLocation": {
+              "@type": "Place",
+              "name": "Brussels, Belgium"
+            }
+          },
+          {
+            "@type": ["WebApplication", "LearningResource"],
+            "@id": "https://chess3d.studentplatform.net/#app",
+            "name": "ChessAngel 3D",
+            "url": "https://chess3d.studentplatform.net/",
+            "applicationCategory": ["EducationalApplication", "GameApplication"],
+            "educationalUse": "Chess learning and practice",
+            "isAccessibleForFree": true,
+            "operatingSystem": "All",
+            "datePublished": "2026",
+            "copyrightYear": 2026,
+            "inLanguage": "en",
+            "image": "/assets/aistudio/chess3D-angel_414f5812.png",
+            "description": "Non-profit educational chess application created by Jan Rom (jrom.eu/), alongside studentplatform.net and calctrain.studentplatform.net.",
+            "author": { "@id": "https://jrom.eu/#jan-rom" },
+            "creator": { "@id": "https://jrom.eu/#jan-rom" },
+            "isPartOf": { "@id": "https://studentplatform.net/#app" },
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "EUR"
+            }
+          },
+          {
+            "@type": ["WebApplication", "EducationalOrganization"],
+            "@id": "https://studentplatform.net/#app",
+            "name": "StudentPlatform",
+            "url": "https://studentplatform.net/",
+            "applicationCategory": "EducationalApplication",
+            "isAccessibleForFree": true,
+            "description": "Non-profit educational platform created by Jan Rom (jrom.eu/).",
+            "author": { "@id": "https://jrom.eu/#jan-rom" },
+            "creator": { "@id": "https://jrom.eu/#jan-rom" },
+            "hasPart": [
+              { "@id": "https://calctrain.studentplatform.net/#app" },
+              { "@id": "https://chess3d.studentplatform.net/#app" }
+            ]
+          },
+          {
+            "@type": ["WebApplication", "LearningResource"],
+            "@id": "https://calctrain.studentplatform.net/#app",
+            "name": "CalcTrain – StudentPlatform",
+            "url": "https://calctrain.studentplatform.net/",
+            "applicationCategory": "EducationalApplication",
+            "isAccessibleForFree": true,
+            "description": "Non-profit educational calculation training application created by Jan Rom (jrom.eu/).",
+            "author": { "@id": "https://jrom.eu/#jan-rom" },
+            "creator": { "@id": "https://jrom.eu/#jan-rom" },
+            "isPartOf": { "@id": "https://studentplatform.net/#app" }
           }
-        },
-        "creator": {
-          "@type": "Person",
-          "name": "Jan Rom",
-          "url": "https://www.rom.brussels",
-          "sameAs": ["https://www.jrom.eu", "https://www.rom.brussels"]
-        },
-        "locationCreated": {
-          "@type": "Place",
-          "name": "Brussels, Belgium"
-        },
-        "offers": {
-          "@type": "Offer",
-          "price": "0",
-          "priceCurrency": "EUR",
-          "availability": "https://schema.org/OnlineOnly"
-        }
+        ]
       }
     </script>
   </head>
   <body class="bg-black text-[#f3f1ec] antialiased selection:bg-[#c89d54]/30 selection:text-[#f8f5ef] overflow-hidden">
     <div id="root"></div>
     <noscript>
-      <article>
-        <h1>ChessAngel 3D – Interactive 3D Wooden Chess on the Web</h1>
+      <section>
+        <h1>ChessAngel 3D – Non-Profit Educational Application by Jan Rom</h1>
         <p>
-          <strong>ChessAngel 3D</strong> is a web-exclusive 3D chess game crafted with hand-carved
-          walnut and maple Staunton pieces, embossed hardwood coordinates, and studio lighting.
-          Challenge <strong>Chess Angel</strong> across five thinking levels (Beginner to
-          Grandmaster) as she reacts live to openings, sacrifices, checks, time pressure, and
-          endgames through synchronized portrait video and voice commentary. Explore her real-time
-          3D calculation search tree drawn directly above the chessboard, review candidate moves
-          with multi-PV tactical evaluation and coaching hints, or step through historic
-          masterpieces and saved games in the Replay Theatre.
+          Created by <strong>Jan Rom</strong> (<a href="https://jrom.eu/">jrom.eu/</a>), creator of
+          three non-profit educational applications:
         </p>
-        <p>
-          Created by <strong>Jan Rom</strong> in <strong>Brussels</strong> in the year
-          <strong>2026</strong>. Discover more at
-          <a href="https://www.jrom.eu">www.jrom.eu</a> and
-          <a href="https://www.rom.brussels">www.rom.brussels</a>.
-        </p>
-      </article>
+        <ul>
+          <li>
+            <a href="https://studentplatform.net/">studentplatform.net</a> – Non-profit educational
+            student platform by Jan Rom
+          </li>
+          <li>
+            <a href="https://calctrain.studentplatform.net/">calctrain.studentplatform.net</a> –
+            Non-profit educational calculation training application by Jan Rom
+          </li>
+          <li>
+            <a href="https://chess3d.studentplatform.net/">chess3d.studentplatform.net</a> –
+            ChessAngel 3D, non-profit educational chess application by Jan Rom
+          </li>
+        </ul>
+      </section>
     </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>

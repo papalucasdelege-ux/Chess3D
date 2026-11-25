@@ -123,6 +123,8 @@ export const MULTI_SLOT_CASE_IDS: ReadonlySet<CommentaryCaseId> = new Set<Commen
 export const DEFAULT_VIDEO_MAX_PLAYS: Readonly<Record<string, number>> = {
   'case:tree_browse': 6,
   'case:hesitate_hint': 6,
+  'case:warn_double': 2,
+  'case:warn_fork_2step': 2,
 };
 
 export const DEFAULT_VIDEO_PLAY_TO_END: Readonly<Record<string, boolean>> = {
@@ -905,13 +907,13 @@ let runtimeOverrides: AngelVideoMapPayload = {
     idle_5: '/assets/aistudio/angel_idle_idle_5.mp4',
     idle_6: '/assets/aistudio/angel_idle_idle_6.mp4',
     idle_7: '/assets/aistudio/angel_idle_idle_7.mp4',
-    idle_8: '/assets/aistudio/angel_idle_idle_8.mp4',
+    idle_8: '/assets/aistudio/builtin_idle_8.mp4',
   },
   defaultSpeaking: '/assets/aistudio/angel_default_speaking_default.mp4',
   groups: {},
   cases: {
     intro: '/assets/aistudio/angel_case_intro.mp4',
-    opening: '/assets/aistudio/angel_case_opening.mp4',
+    opening: '/assets/aistudio/builtin_opening.mp4',
     tree_browse: '/assets/aistudio/angel_case_tree_browse.mp4',
     castled: '/assets/aistudio/angel_case_castled.mp4',
     calc_offer: '/assets/aistudio/angel_case_calc_offer.mp4',
@@ -924,8 +926,8 @@ let runtimeOverrides: AngelVideoMapPayload = {
     seduction: '/assets/aistudio/angel_case_seduction.mp4',
     seduction_2: '/assets/aistudio/angel_case_seduction_2.mp4',
     seduction_3: '/assets/aistudio/angel_case_seduction_3.mp4',
-    seduction_4: '/assets/aistudio/angel_case_seduction_4.mp4',
-    seduction_5: '/assets/aistudio/angel_case_seduction_5.mp4',
+    seduction_4: '/assets/aistudio/builtin_seduction_4.mp4',
+    seduction_5: '/assets/aistudio/builtin_seduction_5.mp4',
     stalemate: '/assets/aistudio/angel_case_stalemate.mp4',
     trial_confirm_1: '/assets/aistudio/angel_case_trial_confirm_1.mp4',
     trial_confirm_2: '/assets/aistudio/angel_case_trial_confirm_2.mp4',
@@ -938,11 +940,18 @@ let runtimeOverrides: AngelVideoMapPayload = {
     watch_bishop: '/assets/aistudio/angel_case_watch_bishop.mp4',
     angel_modal_on: '/assets/aistudio/angel_case_angel_modal_on.mp4',
     angel_modal_off: '/assets/aistudio/angel_case_angel_modal_off.mp4',
-    hesitate_hint: '/assets/aistudio/angel_case_hesitate_hint.mp4',
-    resign: '/assets/aistudio/angel_case_resign.mp4',
-    thank_jan: '/assets/aistudio/angel_case_thank_jan.mp4',
-    clock_timeout: '/assets/aistudio/angel_case_clock_timeout.mp4',
-    promotion: '/assets/aistudio/angel_case_promotion.mp4',
+    hesitate_hint: '/assets/aistudio/builtin_hesitate_hint.mp4',
+    resign: '/assets/aistudio/builtin_resign.mp4',
+    thank_jan: '/assets/aistudio/builtin_thank_jan.mp4',
+    clock_timeout: '/assets/aistudio/builtin_clock_timeout.mp4',
+    promotion: '/assets/aistudio/builtin_promotion.mp4',
+    save_game: '/assets/aistudio/builtin_save_game.mp4',
+    load_game: '/assets/aistudio/builtin_load_game.mp4',
+    level_beginner: '/assets/aistudio/builtin_level_beginner.mp4',
+    level_intermediate: '/assets/aistudio/builtin_level_intermediate.mp4',
+    level_advanced: '/assets/aistudio/builtin_level_advanced.mp4',
+    level_master: '/assets/aistudio/builtin_level_master.mp4',
+    level_grandmaster: '/assets/aistudio/builtin_level_grandmaster.mp4',
   },
   escapes: {
     point_you: '/assets/aistudio/angel_escape_point_you.mp4',
@@ -1097,14 +1106,8 @@ let runtimeOverrides: AngelVideoMapPayload = {
   },
   seductionAudioUrl: '/voices/female/seduction.mp3',
   seductionAudioDuration: 4.5,
-  seductionAudioVariants: {
-    seduction_4: '/voices/female/seduction_4.mp3',
-    seduction_5: '/voices/female/seduction_5.mp3',
-  },
-  seductionAudioDurations: {
-    seduction_4: 8.1,
-    seduction_5: 12.1,
-  },
+  seductionAudioVariants: {},
+  seductionAudioDurations: {},
   thankJanAudioUrl: '/voices/female/thank_jan.mp3',
   thankJanAudioDuration: 8.9,
 };
@@ -1308,6 +1311,10 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
       ? (data.compressionPreset as AngelCompressionPreset)
       : runtimeOverrides.compressionPreset || 'lossless_21';
 
+  if (!variants.idle_8) {
+    variants.idle_8 = '/assets/aistudio/builtin_idle_8.mp4';
+  }
+
   return {
     idle: variants.idle_1 || data?.idle,
     idleVariants: variants,
@@ -1315,15 +1322,25 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
       data?.defaultSpeaking || '/assets/aistudio/angel_default_speaking_default.mp4',
     groups: data?.groups || {},
     cases: {
-      opening: '/assets/aistudio/angel_case_opening.mp4',
+      opening: '/assets/aistudio/builtin_opening.mp4',
       calc_offer: '/assets/aistudio/angel_case_calc_offer.mp4',
       new_match: '/assets/aistudio/angel_case_new_match.mp4',
       angel_modal_on: '/assets/aistudio/angel_case_angel_modal_on.mp4',
       angel_modal_off: '/assets/aistudio/angel_case_angel_modal_off.mp4',
-      resign: '/assets/aistudio/angel_case_resign.mp4',
-      thank_jan: '/assets/aistudio/angel_case_thank_jan.mp4',
-      clock_timeout: '/assets/aistudio/angel_case_clock_timeout.mp4',
-      promotion: '/assets/aistudio/angel_case_promotion.mp4',
+      hesitate_hint: '/assets/aistudio/builtin_hesitate_hint.mp4',
+      seduction_4: '/assets/aistudio/builtin_seduction_4.mp4',
+      seduction_5: '/assets/aistudio/builtin_seduction_5.mp4',
+      resign: '/assets/aistudio/builtin_resign.mp4',
+      thank_jan: '/assets/aistudio/builtin_thank_jan.mp4',
+      clock_timeout: '/assets/aistudio/builtin_clock_timeout.mp4',
+      promotion: '/assets/aistudio/builtin_promotion.mp4',
+      save_game: '/assets/aistudio/builtin_save_game.mp4',
+      load_game: '/assets/aistudio/builtin_load_game.mp4',
+      level_beginner: '/assets/aistudio/builtin_level_beginner.mp4',
+      level_intermediate: '/assets/aistudio/builtin_level_intermediate.mp4',
+      level_advanced: '/assets/aistudio/builtin_level_advanced.mp4',
+      level_master: '/assets/aistudio/builtin_level_master.mp4',
+      level_grandmaster: '/assets/aistudio/builtin_level_grandmaster.mp4',
       ...(data?.cases || {}),
     },
     escapes: {
@@ -1457,6 +1474,19 @@ export function findSlotIdsForVideoUrl(
     const rawKey = m[2].toLowerCase();
     const key = kind === 'idle' && rawKey === 'idle_listening' ? 'idle_1' : rawKey;
     add(`${kind}:${key}`);
+  }
+  const mBuiltin = /\/builtin_([a-z0-9_]+)\.mp4$/i.exec(clean);
+  if (mBuiltin) {
+    const bKey = mBuiltin[1].toLowerCase();
+    if (bKey === 'default_speaking') {
+      add('default:speaking_default');
+    } else if (bKey.startsWith('idle_')) {
+      add(`idle:${bKey}`);
+    } else if (bKey.startsWith('escape_')) {
+      add(`escape:${bKey.slice('escape_'.length)}`);
+    } else if (bKey !== 'mouse_idle_sleep' && bKey !== 'mouse_wake_up') {
+      add(`case:${bKey}`);
+    }
   }
 
   const idle1 = (
@@ -2957,5 +2987,134 @@ export function prepareHumanCommentaryPlayback(
     videoSec || undefined,
   );
   return { videoUrl, videoSec, audioSec, playToEnd };
+}
+
+const warmedMediaUrls = new Set<string>();
+let backgroundPrewarmerStarted = false;
+
+/**
+ * Gently warms a single `.mp4` or `.mp3` URL into the browser HTTP + Service Worker cache via
+ * `fetch()` WITHOUT instantiating any `HTMLVideoElement` or Android hardware `MediaCodec`.
+ */
+export function warmAngelVideoUrlInCache(url?: string | null): void {
+  if (typeof window === 'undefined' || !url) return;
+  const clean = url.trim();
+  if (!clean || warmedMediaUrls.has(clean)) return;
+  const nav = navigator as Navigator & {
+    connection?: { saveData?: boolean };
+  };
+  if (nav.connection?.saveData) return;
+  warmedMediaUrls.add(clean);
+  fetch(clean, { method: 'GET', credentials: 'same-origin' })
+    .then((res) => {
+      if (!res.ok) {
+        warmedMediaUrls.delete(clean);
+        return;
+      }
+      // Consume body stream so Workbox CacheFirst persists the full 200 response for Range requests
+      return res.arrayBuffer().catch(() => {});
+    })
+    .catch(() => {
+      warmedMediaUrls.delete(clean);
+    });
+}
+
+/**
+ * Sequential, single-request-at-a-time background media cache warmer for installed PWAs,
+ * Android tablets, and non-Data-Saver connections. Ensures all Chess Angel portrait videos
+ * (thank_jan, forks, seduction 1–5, escapes, idles, level clips) are locally cached for
+ * instant playback with zero MediaCodec pressure.
+ */
+export function startAngelMediaBackgroundPrewarmer(): void {
+  if (typeof window === 'undefined' || backgroundPrewarmerStarted) return;
+  const nav = navigator as Navigator & {
+    standalone?: boolean;
+    connection?: { saveData?: boolean; effectiveType?: string };
+  };
+  if (nav.connection?.saveData) return;
+  const effType = nav.connection?.effectiveType || '';
+  if (effType === 'slow-2g' || effType === '2g') return;
+
+  const isInstalledPwa =
+    (typeof window.matchMedia === 'function' &&
+      window.matchMedia('(display-mode: standalone)').matches) ||
+    nav.standalone === true;
+  const shortestSide = Math.min(window.innerWidth || 1024, window.innerHeight || 768);
+  const isTabletOrDesktop = shortestSide >= 600;
+  // Always warm the full catalog for installed PWAs and tablets/desktops; on small non-installed phones warm core gameplay clips
+  const warmFullCatalog = isInstalledPwa || isTabletOrDesktop || effType === '4g' || effType === '';
+
+  backgroundPrewarmerStarted = true;
+
+  const collectUrls = (): string[] => {
+    const ordered: string[] = [];
+    const push = (u?: string | null) => {
+      if (!u) return;
+      if (!ordered.includes(u)) ordered.push(u);
+    };
+
+    // High-priority clips first (intro, forks, thank_jan, seduction, tree_browse, escapes)
+    push(ANGEL_DEFAULT_SPEAKING_VIDEO_SRC);
+    push(runtimeOverrides.defaultSpeaking);
+    push(ANGEL_IDLE_LISTENING_VIDEO_SRC);
+    push(runtimeOverrides.cases?.intro);
+    push(runtimeOverrides.cases?.warn_double);
+    push(runtimeOverrides.cases?.warn_fork_2step);
+    push(runtimeOverrides.cases?.warn_fork_2step_2);
+    push(runtimeOverrides.cases?.thank_jan);
+    push(runtimeOverrides.cases?.opening);
+    push(runtimeOverrides.cases?.tree_browse);
+    push(runtimeOverrides.cases?.seduction);
+    push(runtimeOverrides.cases?.seduction_2);
+    push(runtimeOverrides.cases?.seduction_3);
+    push(runtimeOverrides.cases?.seduction_4);
+    push(runtimeOverrides.cases?.seduction_5);
+    for (const escUrl of Object.values(runtimeOverrides.escapes || {})) {
+      push(escUrl);
+    }
+
+    if (warmFullCatalog) {
+      for (const caseUrl of Object.values(runtimeOverrides.cases || {})) {
+        push(caseUrl);
+      }
+      for (const caseUrl of Object.values(ANGEL_CASE_VIDEO_MAP)) {
+        push(caseUrl);
+      }
+      for (const idleUrl of Object.values(runtimeOverrides.idleVariants || {})) {
+        push(idleUrl);
+      }
+      push(runtimeOverrides.thankJanAudioUrl);
+      push(runtimeOverrides.seductionAudioUrl);
+    }
+
+    return ordered;
+  };
+
+  window.setTimeout(() => {
+    const queue = collectUrls();
+    let idx = 0;
+    const pumpNext = () => {
+      if (idx >= queue.length) return;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        window.setTimeout(pumpNext, 5000);
+        return;
+      }
+      const url = queue[idx++];
+      if (warmedMediaUrls.has(url)) {
+        window.setTimeout(pumpNext, 40);
+        return;
+      }
+      warmedMediaUrls.add(url);
+      fetch(url, { method: 'GET', credentials: 'same-origin' })
+        .then((res) => (res.ok ? res.arrayBuffer() : Promise.resolve(null)))
+        .catch(() => {
+          warmedMediaUrls.delete(url);
+        })
+        .finally(() => {
+          window.setTimeout(pumpNext, isInstalledPwa ? 180 : 320);
+        });
+    };
+    pumpNext();
+  }, 2600);
 }
 

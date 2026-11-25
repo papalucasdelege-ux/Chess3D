@@ -36,12 +36,33 @@
   [headers.values]
     Content-Type = "application/javascript; charset=utf-8"
     Cache-Control = "no-store, no-cache, must-revalidate"
+    X-Robots-Tag = "noindex, nofollow, nosnippet, noarchive, noai, noimageai"
+
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json; charset=utf-8"
+    Cache-Control = "no-store, no-cache, must-revalidate"
+    X-Content-Type-Options = "nosniff"
+    X-Robots-Tag = "noindex, nofollow, nosnippet, noarchive, noai, noimageai"
 
 [[headers]]
   for = "/index.html"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
     X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+    X-Robots-Tag = "index, follow, noarchive, noai, noimageai"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Robots-Tag = "index, follow, noarchive, noai, noimageai"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow, nosnippet, noarchive, noai, noimageai"
 
 [[headers]]
   for = "/assets/aistudio/angel_video_map.json"
@@ -49,6 +70,7 @@
     Content-Type = "application/json; charset=utf-8"
     Cache-Control = "public, max-age=0, must-revalidate"
     Access-Control-Allow-Origin = "*"
+    X-Robots-Tag = "noindex, nofollow, nosnippet, noarchive, noai, noimageai"
 
 [[headers]]
   for = "/assets/aistudio/*.mp4"
@@ -57,6 +79,7 @@
     Accept-Ranges = "bytes"
     Cache-Control = "public, max-age=604800"
     X-Content-Type-Options = "nosniff"
+    X-Robots-Tag = "noindex, nofollow, nosnippet, noarchive, noai, noimageai"
 
 [[headers]]
   for = "/voices/female/*.mp3"
@@ -65,3 +88,4 @@
     Accept-Ranges = "bytes"
     Cache-Control = "public, max-age=604800"
     X-Content-Type-Options = "nosniff"
+    X-Robots-Tag = "noindex, nofollow, nosnippet, noarchive, noai, noimageai"
