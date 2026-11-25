@@ -635,7 +635,13 @@ export default function App() {
   const dogEventActiveRef = useRef<boolean>(false);
   const puppyIdleAccumMsRef = useRef<number>(0);
   const lastPuppyAutoAtRef = useRef<number>(0);
-  const lastIdleCritterRef = useRef<'puppy' | 'hamsters' | 'dance_stars'>('hamsters');
+  const lastIdleCritterRef = useRef<'puppy' | 'hamsters' | 'dance_stars'>(
+    (['puppy', 'hamsters', 'dance_stars'] as const)[Math.floor(Math.random() * 3)],
+  );
+  const matchSpecialEventFiredRef = useRef<boolean>(false);
+  const matchSpecialTargetPlyRef = useRef<number>(6 + Math.floor(Math.random() * 5));
+  const matchActiveElapsedMsRef = useRef<number>(0);
+  const prevMatchScopeRef = useRef<string>('');
   const lastSpeechEndedAtRef = useRef<number>(0);
   const prevPuppyActivitySigRef = useRef<string>('');
   const frontalTreeViewOpenRef = useRef<boolean>(false);
@@ -2366,14 +2372,38 @@ export default function App() {
         turnStartedAtRef.current = now;
       }
 
-      // 5. Playful Special Events (Dance with Stars, Fluffy White Puppy, 3D Mini Hamsters Chase)
-      //    Triggers naturally when waiting for a match (~18s) or thinking quietly during a match (~38s).
-      const activitySig = `${snap.gameMode}|${snap.localFen}|${snap.activeRoom?.id || ''}|${snap.activeRoom?.status || ''}|${snap.activeRoom?.moves.length ?? 0}|${snap.localResult?.reason || ''}`;
+      // 5. Playful Special Events (Dance with Stars, Fluffy White Puppy, 3D Campbell's Mini Hamsters Chase)
+      //    - Guarantees at least ONE special event takes place during every active match (around ply 6–10 or ~36s of play).
+      //    - Also triggers naturally when waiting for a match (~18s) or thinking quietly during a match (~38s).
+      const currentMovesLen =
+        snap.gameMode === 'multiplayer'
+          ? (snap.activeRoom?.moves.length ?? 0)
+          : snap.localMovesLen;
+      const matchScopeKey = `${snap.gameMode}|${snap.activeRoom?.id || 'local'}`;
+      const matchResetOccurred =
+        matchScopeKey !== prevMatchScopeRef.current ||
+        (currentMovesLen === 0 && matchActiveElapsedMsRef.current > 0);
+
+      if (matchResetOccurred) {
+        prevMatchScopeRef.current = matchScopeKey;
+        matchSpecialEventFiredRef.current = false;
+        matchActiveElapsedMsRef.current = 0;
+        matchSpecialTargetPlyRef.current = 6 + Math.floor(Math.random() * 5);
+      } else if (!prevMatchScopeRef.current) {
+        prevMatchScopeRef.current = matchScopeKey;
+      }
+
+      const activitySig = `${snap.gameMode}|${snap.localFen}|${snap.activeRoom?.id || ''}|${snap.activeRoom?.status || ''}|${currentMovesLen}|${snap.localResult?.reason || ''}`;
       if (activitySig !== prevPuppyActivitySigRef.current) {
         prevPuppyActivitySigRef.current = activitySig;
         puppyIdleAccumMsRef.current = 0;
-        // If an actual move or match change happened before the puppy jumped out, cancel the pending jump cleanly
-        if ((dogJumpTimerRef.current !== null || dogRunCueCallbackRef.current !== null) && !snap.videoStudioOpen) {
+        // Only abort a pending special-event entrance if the match was reset or switched modes
+        // (making a regular chess move during a match lets the special event finish smoothly!).
+        if (
+          matchResetOccurred &&
+          (dogJumpTimerRef.current !== null || dogRunCueCallbackRef.current !== null) &&
+          !snap.videoStudioOpen
+        ) {
           if (dogJumpTimerRef.current !== null) {
             window.clearTimeout(dogJumpTimerRef.current);
             dogJumpTimerRef.current = null;
@@ -2401,6 +2431,22 @@ export default function App() {
         !isPausedForShowcaseOrModal &&
         !dogEventActiveRef.current;
 
+      const isActivePlayMatch =
+        !isTabHidden &&
+        !snap.videoStudioOpen &&
+        !snap.treeBrowserOpen &&
+        !snap.isReplayMode &&
+        snap.gameMode !== 'tactical' &&
+        snap.isViewingLatest &&
+        ((snap.gameMode === 'multiplayer' && snap.activeRoom?.status === 'active') ||
+          ((snap.gameMode === 'engine' || snap.gameMode === 'local') &&
+            snap.localMovesLen > 0 &&
+            !snap.localResult));
+
+      if (isActivePlayMatch) {
+        matchActiveElapsedMsRef.current += dtMs;
+      }
+
       if (canRunAutoPuppy) {
         const isWaitingForMatch =
           (snap.gameMode === 'multiplayer' &&
@@ -2410,22 +2456,13 @@ export default function App() {
           ((snap.gameMode === 'engine' || snap.gameMode === 'local') &&
             (snap.localMovesLen === 0 || snap.localResult !== null));
 
-        const isWaitingLongInMatch =
-          !isWaitingForMatch &&
-          snap.isViewingLatest &&
-          ((snap.gameMode === 'multiplayer' && snap.activeRoom?.status === 'active') ||
-            ((snap.gameMode === 'engine' || snap.gameMode === 'local') &&
-              snap.localMovesLen > 0 &&
-              !snap.localResult));
+        const isWaitingLongInMatch = !isWaitingForMatch && isActivePlayMatch;
 
         if (isWaitingForMatch || isWaitingLongInMatch) {
           // Pause (don't reset) while Chess Angel briefly speaks; only count quiet time
           if (voiceStateRef.current !== 'speaking') {
             puppyIdleAccumMsRef.current += dtMs;
-            const thresholdMs = isWaitingForMatch ? 18_000 : 38_000;
-            const cooldownOk =
-              lastPuppyAutoAtRef.current === 0 || now - lastPuppyAutoAtRef.current >= 55_000;
-            const quietSinceSpeechOk = now - lastSpeechEndedAtRef.current >= 3_500;
+
             const canPlayPuppy =
               snap.angelModalEnabled &&
               snap.angelVisible &&
@@ -2435,10 +2472,29 @@ export default function App() {
               snap.angelVisible &&
               Boolean(getAngelDanceStarsVideoUrl());
 
-            if (cooldownOk && quietSinceSpeechOk && puppyIdleAccumMsRef.current >= thresholdMs) {
+            // Guaranteed per-match special event trigger (fires once per active match around ply 6–10 or 36s of play)
+            const guaranteedMatchDue =
+              isWaitingLongInMatch &&
+              !matchSpecialEventFiredRef.current &&
+              (currentMovesLen >= matchSpecialTargetPlyRef.current ||
+                matchActiveElapsedMsRef.current >= 36_000) &&
+              now - lastSpeechEndedAtRef.current >= 1_600;
+
+            // Standard idle trigger (waiting before match or thinking long during a match)
+            const thresholdMs = isWaitingForMatch ? 18_000 : 38_000;
+            const cooldownOk =
+              lastPuppyAutoAtRef.current === 0 || now - lastPuppyAutoAtRef.current >= 55_000;
+            const quietSinceSpeechOk = now - lastSpeechEndedAtRef.current >= 3_500;
+            const idleTriggerDue =
+              cooldownOk && quietSinceSpeechOk && puppyIdleAccumMsRef.current >= thresholdMs;
+
+            if (guaranteedMatchDue || idleTriggerDue) {
               lastPuppyAutoAtRef.current = now;
               puppyIdleAccumMsRef.current = 0;
-              // Rotate playfully through Fluffy White Puppy, 3D Mini Hamsters Chase, and Dance with Stars
+              if (isWaitingLongInMatch) {
+                matchSpecialEventFiredRef.current = true;
+              }
+              // Rotate playfully through Fluffy White Puppy, 3D Campbell's Mini Hamsters Chase, and Dance with Stars
               if (canPlayDanceStars && lastIdleCritterRef.current === 'hamsters') {
                 lastIdleCritterRef.current = 'dance_stars';
                 triggerDanceWithStarsEventRef.current({ fromStudio: false });
