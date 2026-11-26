@@ -18,6 +18,8 @@ import {
 } from './pieceFactory';
 import { WildDogActor } from './wildDog';
 import { MiniHamsterActor } from './miniHamsters';
+import { OpeningFlowchart3D } from './openingFlowchart3D';
+import { CalcPureTree3D } from './calcPureTree3D';
 import { soundEngine } from './sound';
 import type {
   BoardSkinId,
@@ -386,6 +388,11 @@ export class ChessScene3D {
   private hamsterWobbles = new Map<THREE.Group, WobblePieceAnim>();
   private lastPiecesBoardKey: string | null = null;
 
+  // Special 3D Extension: Multicolor neon PCB opening flowchart growing seamlessly out of builtin_opening.mp4
+  private openingFlowchart: OpeningFlowchart3D | null = null;
+  // Special 3D Extension: Golden-mahogany & glowing emerald Tree of Life unfolding out of angel_case_calc_pure.mp4
+  private calcPureTree: CalcPureTree3D | null = null;
+
   // Camera transition & responsive maximum-extent framing state
   private currentPreset: CameraPreset = 'white';
   private userAdjustedCamera = false;
@@ -554,6 +561,8 @@ export class ChessScene3D {
     this.wildDog = new WildDogActor(this.enableShadows);
     this.hamsterGrey = new MiniHamsterActor('russian-grey', this.enableShadows);
     this.hamsterWhite = new MiniHamsterActor('snow-white', this.enableShadows);
+    this.openingFlowchart = new OpeningFlowchart3D();
+    this.calcPureTree = new CalcPureTree3D();
     this.scene.add(
       this.boardGroup,
       this.coordGroup,
@@ -569,6 +578,8 @@ export class ChessScene3D {
       this.hamsterGrey.dustGroup,
       this.hamsterWhite.root,
       this.hamsterWhite.dustGroup,
+      this.openingFlowchart.root,
+      this.calcPureTree.root,
     );
     this.rebuildCoordinates(skin.coordTextColor, skin.frameGrainHex, skin.boardEnvIntensity);
 
@@ -2507,13 +2518,13 @@ export class ChessScene3D {
       const portraitW = modalRect.width;
       const portraitH = Math.min(modalRect.height, modalRect.width * (752 / 560));
 
-      // In the 560x752 video, leaping Udo spans ~36.5% of portraitH crown-to-paw (~63.5% of portraitW nose-to-paw)
-      const computedScale = (0.365 * portraitH) / pxPerWorldUnit;
+      // In the 560x752 video, leaping Udo spans ~36.5% of portraitH crown-to-paw; normalized for Udo's longer-legged 1.15-unit local height
+      const computedScale = (0.338 * portraitH) / pxPerWorldUnit;
       this.wildDogScale = THREE.MathUtils.clamp(computedScale, 0.95, 2.35);
 
-      // Start slightly higher at Chess Angel's upper chest/shoulder height (38% down portrait) so Udo and his sparkles leap cleanly from her elevated arms
+      // Match Chess Angel's lower arm exit height (~48% down portrait) so Udo leaps cleanly right out of her arms
       const startClientX = modalRect.left + portraitW * 0.22;
-      const startClientY = modalRect.top + portraitH * 0.38;
+      const startClientY = modalRect.top + portraitH * 0.48;
       _rayMouse.x = ((startClientX - canvasRect.left) / canvasRect.width) * 2 - 1;
       _rayMouse.y = -((startClientY - canvasRect.top) / canvasRect.height) * 2 + 1;
       _dogRaycaster.setFromCamera(_rayMouse, this.camera);
@@ -2524,13 +2535,13 @@ export class ChessScene3D {
 
       startWorld = new THREE.Vector3(launchAirPos.x, BOARD_TOP_Y, launchAirPos.z);
       this.wildDogLaunchLiftY = THREE.MathUtils.clamp(
-        launchAirPos.y - BOARD_TOP_Y + 0.36,
-        0.95,
-        5.4,
+        launchAirPos.y - BOARD_TOP_Y - 0.14,
+        0.55,
+        4.4,
       );
     } else {
       this.wildDogScale = 1.62;
-      this.wildDogLaunchLiftY = 2.15;
+      this.wildDogLaunchLiftY = 1.58;
       const startClientX = canvasRect.left + canvasRect.width * 0.78;
       const startClientY = canvasRect.top + canvasRect.height * 0.34;
       startWorld = raycastClientToBoardPlane(
@@ -2690,7 +2701,7 @@ export class ChessScene3D {
       if (u < 0.27) {
         const leapT = u / 0.27;
         const fallFactor = (1 - leapT) * (1 + 0.42 * leapT);
-        const hopBoost = Math.sin(leapT * Math.PI) * 0.48;
+        const hopBoost = Math.sin(leapT * Math.PI) * 0.22;
         jumpArcY = this.wildDogLaunchLiftY * fallFactor + hopBoost;
       } else if (u > 0.78 && u < 0.94) {
         const exitHopT = (u - 0.78) / 0.16;
@@ -3047,25 +3058,9 @@ export class ChessScene3D {
       }
     }
 
-    // Stereo squeaks alternating between the white & Russian grey mini hamsters
-    this.hamsterSqueakEnvWhite = Math.max(0, this.hamsterSqueakEnvWhite - dt * 5.8);
-    this.hamsterSqueakEnvGrey = Math.max(0, this.hamsterSqueakEnvGrey - dt * 5.8);
-    if (this.hamsterElapsed >= this.hamsterNextSqueakAt && (whiteVisible || greyVisible)) {
-      this.hamsterNextSqueakAt = this.hamsterElapsed + 0.36 + Math.random() * 0.26;
-      const whiteSqueaks = whiteVisible && (!greyVisible || Math.random() > 0.48);
-      if (whiteSqueaks) {
-        this.hamsterSqueakEnvWhite = 1.0;
-      } else {
-        this.hamsterSqueakEnvGrey = 1.0;
-      }
-      if (!this.hamsterSoundMuted) {
-        _dogProj.copy(whiteSqueaks ? _hamPosA : _hamPosB).project(this.camera);
-        soundEngine.playHamsterSqueak(
-          THREE.MathUtils.clamp(_dogProj.x, -0.9, 0.9),
-          whiteSqueaks ? 'white' : 'grey',
-        );
-      }
-    }
+    // Mini hamsters run silently (like real hamsters), keeping only subtle visual whisker/jaw animation
+    this.hamsterSqueakEnvWhite = 0;
+    this.hamsterSqueakEnvGrey = 0;
 
     const commitHamster = (
       actor: MiniHamsterActor,
@@ -4686,6 +4681,12 @@ export class ChessScene3D {
         if (this.updateHamsterChase(dt)) {
           keepAnimating = true;
         }
+        if (this.openingFlowchart?.update(dt, this.camera.quaternion)) {
+          keepAnimating = true;
+        }
+        if (this.calcPureTree?.update(dt, this.camera.quaternion)) {
+          keepAnimating = true;
+        }
 
         if (this.controls.update()) {
           keepAnimating = true;
@@ -4725,12 +4726,67 @@ export class ChessScene3D {
     scheduleFrame();
   }
 
+  public syncOpeningFlowchart(
+    active: boolean,
+    currentTimeSec: number,
+    portraitRect: DOMRect | null,
+  ): void {
+    if (!this.openingFlowchart || this.webglUnavailable || !this.renderer) return;
+    const canvasRect = this.renderer.domElement.getBoundingClientRect();
+    this.openingFlowchart.syncWithOpeningVideo(
+      active,
+      currentTimeSec,
+      portraitRect,
+      canvasRect,
+      this.camera,
+      BOARD_TOP_Y,
+    );
+    if (this.openingFlowchart.isActive()) {
+      this.requestRender();
+    }
+  }
+
+  public stopOpeningFlowchart(): void {
+    if (!this.openingFlowchart) return;
+    this.openingFlowchart.stopImmediately();
+    this.requestRender();
+  }
+
+  public syncCalcPureTree(
+    active: boolean,
+    currentTimeSec: number,
+    portraitRect: DOMRect | null,
+  ): void {
+    if (!this.calcPureTree || this.webglUnavailable || !this.renderer) return;
+    const wasRunning = this.calcPureTree.isRunning();
+    const canvasRect = this.renderer.domElement.getBoundingClientRect();
+    this.calcPureTree.syncWithCalcPureVideo(
+      active,
+      currentTimeSec,
+      portraitRect,
+      canvasRect,
+      this.camera,
+      BOARD_TOP_Y,
+    );
+    if (wasRunning || this.calcPureTree.isRunning()) {
+      this.requestRender();
+    }
+  }
+
+  public stopCalcPureTree(): void {
+    if (!this.calcPureTree) return;
+    this.calcPureTree.stopImmediately();
+    this.requestRender();
+  }
+
   public dispose(): void {
     this.disposed = true;
     this.stopCalculationPreview(false);
     this.stopSearchTreeThinLines();
     this.stopWildDogRun(false);
     this.stopHamsterChase();
+    this.stopOpeningFlowchart();
+    this.stopCalcPureTree();
     cancelAnimationFrame(this.frameId);
     window.clearTimeout(this.frameId);
     window.clearTimeout(this.powerSaveTimerId);
@@ -4746,6 +4802,10 @@ export class ChessScene3D {
     this.hamsterGrey = null;
     this.hamsterWhite?.dispose();
     this.hamsterWhite = null;
+    this.openingFlowchart?.dispose();
+    this.openingFlowchart = null;
+    this.calcPureTree?.dispose();
+    this.calcPureTree = null;
 
     const dom = this.renderer.domElement;
     dom.removeEventListener('pointerdown', this.boundPointerDown);

@@ -5,6 +5,7 @@ interface CachedUdoTextures {
   headColorMap: THREE.CanvasTexture;
   earColorMap: THREE.CanvasTexture;
   wireBumpMap: THREE.CanvasTexture;
+  roughnessMap: THREE.CanvasTexture;
   shadowMap: THREE.CanvasTexture;
   sparkleStarMap: THREE.CanvasTexture;
   sparkleMoteMap: THREE.CanvasTexture;
@@ -26,8 +27,8 @@ const _sparkleFwd = new THREE.Vector3();
 const _sparkleRight = new THREE.Vector3();
 const _sparkleSpawnPos = new THREE.Vector3();
 
-const SPARKLE_STAR_COUNT = 56;
-const SPARKLE_MOTE_COUNT = 64;
+const SPARKLE_STAR_COUNT = 116;
+const SPARKLE_MOTE_COUNT = 168;
 
 const SPARKLE_PALETTE: ReadonlyArray<readonly [number, number, number]> = [
   [1.0, 0.91, 0.48], // warm radiant champagne gold
@@ -38,14 +39,14 @@ const SPARKLE_PALETTE: ReadonlyArray<readonly [number, number, number]> = [
 ];
 
 /**
- * Generates and caches all procedural CanvasTextures for Udo —
- * the black/charcoal-grizzle & white wirehaired Jack/Parson Russell Terrier:
- * - `bodyColorMap`: snowy-white rough terrier coat with wispy fur texture & subtle dark tail-root spot
- * - `headColorMap`: exact UV-mapped symmetrical dark charcoal-grizzle eye/cheek/crown mask,
- *   feathered white center forehead blaze, and pure snowy-white bearded muzzle
- * - `earColorMap`: dark charcoal-black terrier ear leather streaked with silver-white wirehair wisps at the fold
- * - `wireBumpMap`: coarse broken/wirehaired terrier fur micro-relief
- * - `shadowMap`: soft grounded radial contact shadow
+ * Generates and caches high-resolution procedural CanvasTextures matching **Video Udo**
+ * (the fluffy white & charcoal-grizzle wirehaired Jack/Parson Russell Terrier held in Chess Angel's arms):
+ * - `bodyColorMap`: 1024x1024 pure snowy-white shaggy terrier coat with warm ivory-silver fur depth (no dark spots!)
+ * - `headColorMap`: 1024x1024 exact Video Udo symmetrical dark charcoal-slate eye/cheek/crown mask with
+ *   silvery-grey wirehair streaks, crisp snowy-white forehead blaze, and pure fluffy white bearded muzzle
+ * - `earColorMap`: 512x512 dark charcoal-slate terrier ear fur streaked with soft silvery-white crease hairs
+ * - `wireBumpMap` & `roughnessMap`: shaggy broken-coat terrier fur micro-relief & soft velvet roughness
+ * - `shadowMap`, `sparkleStarMap`, `sparkleMoteMap`: contact shadow + golden magical leap sparkles
  */
 function getUdoTextures(): CachedUdoTextures {
   if (cachedUdoTextures) return cachedUdoTextures;
@@ -56,58 +57,49 @@ function getUdoTextures(): CachedUdoTextures {
     return (seed - 1) / 2147483646;
   };
 
-  // 1. Body Coat Texture (512x512): snowy-white rough terrier fur + small dark hip/tail-base spot
-  // UV convention on sculpted body: u = angle around Z (u = 0.25 dorsal top), v = 0 (rump) .. 1 (chest/neck)
-  const bodySize = 512;
+  // 1. Body Coat Texture (1024x1024): 100% pure fluffy snowy-white shaggy coat matching Video Udo
+  const bodySize = 1024;
   const bodyCanvas = document.createElement('canvas');
   bodyCanvas.width = bodySize;
   bodyCanvas.height = bodySize;
   const bCtx = bodyCanvas.getContext('2d');
   if (bCtx) {
     const grad = bCtx.createLinearGradient(0, 0, 0, bodySize);
-    grad.addColorStop(0, '#f8f7f4');
-    grad.addColorStop(0.55, '#f4f3ef');
-    grad.addColorStop(1, '#eceae4');
+    grad.addColorStop(0, '#fbfaf7');
+    grad.addColorStop(0.55, '#f6f5f2');
+    grad.addColorStop(1, '#efeee9');
     bCtx.fillStyle = grad;
     bCtx.fillRect(0, 0, bodySize, bodySize);
 
-    // Subtle dark charcoal-grizzle spot right near the rear-right hip / tail base (v ≈ 0.08, u ≈ 0.34)
-    const spotCx = 0.34 * bodySize;
-    const spotCy = (1 - 0.08) * bodySize;
-    const spotGrad = bCtx.createRadialGradient(spotCx, spotCy, 8, spotCx, spotCy, 46);
-    spotGrad.addColorStop(0, 'rgba(34, 33, 32, 0.88)');
-    spotGrad.addColorStop(0.62, 'rgba(52, 50, 48, 0.58)');
-    spotGrad.addColorStop(1, 'rgba(52, 50, 48, 0)');
-    bCtx.fillStyle = spotGrad;
-    bCtx.beginPath();
-    bCtx.arc(spotCx, spotCy, 46, 0, Math.PI * 2);
-    bCtx.fill();
-
-    // Scruffy white & pale-silver wirehair terrier strokes flowing front-to-back
-    for (let i = 0; i < 2800; i++) {
+    // Layered soft shaggy white & pale warm-silver fur strokes flowing nose-to-rump
+    for (let i = 0; i < 8200; i++) {
       const x = rand() * bodySize;
       const y = rand() * bodySize;
-      const len = 7 + rand() * 15;
-      const jitterX = (rand() - 0.5) * 4.5;
+      const len = 12 + rand() * 28;
+      const jitterX = (rand() - 0.5) * 8.5;
+      const roll = rand();
       const alpha = 0.08 + rand() * 0.14;
-      bCtx.strokeStyle =
-        rand() > 0.38
-          ? `rgba(255, 255, 255, ${(alpha * 1.35).toFixed(3)})`
-          : `rgba(196, 193, 186, ${alpha.toFixed(3)})`;
-      bCtx.lineWidth = 1.0 + rand() * 1.2;
+      if (roll > 0.42) {
+        bCtx.strokeStyle = `rgba(255, 255, 253, ${(alpha * 1.4).toFixed(3)})`;
+      } else if (roll > 0.12) {
+        bCtx.strokeStyle = `rgba(202, 200, 194, ${alpha.toFixed(3)})`;
+      } else {
+        bCtx.strokeStyle = `rgba(176, 174, 168, ${(alpha * 0.78).toFixed(3)})`;
+      }
+      bCtx.lineWidth = 1.1 + rand() * 1.65;
       bCtx.beginPath();
       bCtx.moveTo(x, y);
-      bCtx.lineTo(x + jitterX, y + len);
+      bCtx.quadraticCurveTo(x + jitterX * 0.55, y + len * 0.5, x + jitterX, y + len);
       bCtx.stroke();
     }
   }
 
-  // 2. Head Coat Texture (512x512): Udo's exact dark grizzle mask + white center blaze + white bearded snout!
+  // 2. Head Coat Texture (1024x1024): Video Udo's exact symmetrical dark charcoal mask,
+  // crisp white center forehead blaze, and pure snowy-white fluffy bearded snout!
   // UV convention on sculpted head:
-  // - v = 0 (back of skull/nape) .. v = 1 (front nose tip); Note Canvas flipY=true -> py = (1 - v) * size
-  // - u = angle / 2PI around Z: u = 0.25 is exact dorsal top (+Y, forehead/bridge),
-  //   u = 0.0 / 0.5 are exact right/left cheeks, u = 0.75 is ventral chin/throat (-Y).
-  const headSize = 512;
+  // - v = 0 (back of skull/nape) .. v = 1 (front nose tip); Canvas flipY=true -> py = (1 - v) * size
+  // - u = angle / 2PI around Z: u = 0.25 dorsal top (+Y), u = 0.0/0.5 lateral cheeks, u = 0.75 ventral chin (-Y).
+  const headSize = 1024;
   const headCanvas = document.createElement('canvas');
   headCanvas.width = headSize;
   headCanvas.height = headSize;
@@ -117,61 +109,60 @@ function getUdoTextures(): CachedUdoTextures {
     const data = img.data;
 
     for (let py = 0; py < headSize; py++) {
-      const v = 1 - py / (headSize - 1); // 0 = nape, 0.45 = eyes/stop, 1.0 = nose tip
+      const v = 1 - py / (headSize - 1); // 0 = nape, 0.48 = eyes/stop, 1.0 = nose tip
       for (let px = 0; px < headSize; px++) {
         const u = px / (headSize - 1);
         const angle = u * Math.PI * 2;
         const cosA = Math.cos(angle); // lateral X: +1 right, -1 left, 0 top/bottom centerline
         const sinA = Math.sin(angle); // vertical Y: +1 dorsal top, -1 ventral chin/throat
-
-        // Angular/lateral distance from exact top centerline (sinA = +1, cosA = 0)
         const latAbs = Math.abs(cosA);
 
-        // Determine how dark (1 = deep charcoal mask, 0 = snowy white coat) this texel is:
         let darkMask = 0;
 
-        // Mask covers upper & lateral cranium, around both eyes, and upper cheeks (v in ~0.06..0.60),
-        // while throat/under-chin (sinA < -0.35), muzzle/beard (v > 0.58), and center forehead blaze stay WHITE!
-        if (sinA > -0.42 && v < 0.64) {
-          // Muzzle transition: crisp feathery transition into pure white snout around v = 0.54..0.61
-          // Cheek patches dip slightly further forward laterally around the eyes/zygomatic arch (v up to ~0.60)
-          const muzzleFrontLimit = 0.52 + 0.09 * Math.exp(-Math.pow((sinA - 0.05) / 0.52, 2));
-          const frontFade = THREE.MathUtils.clamp((muzzleFrontLimit - v) / 0.085, 0, 1);
+        // Video Udo's mask wraps symmetrically over both temples, eyes, upper cheeks & outer crown,
+        // curving cleanly down the lateral cheek (v up to ~0.58) while keeping his fluffy white muzzle,
+        // white beard/chin/throat, white neck nape, and bright center forehead blaze crisp snowy-white!
+        if (sinA > -0.44 && v < 0.65) {
+          // Cheek patches sweep forward around the eyes & upper cheeks then curve gracefully back into the white beard
+          const cheekForwardReach =
+            0.5 +
+            0.115 * Math.exp(-Math.pow((sinA - 0.02) / 0.46, 2)) -
+            0.05 * Math.max(0, -sinA - 0.15);
+          const frontFade = THREE.MathUtils.clamp((cheekForwardReach - v) / 0.075, 0, 1);
 
-          // Nape transition: white neck collar blends in right at the very back of nape (v < 0.10)
-          const napeFade = THREE.MathUtils.clamp((v - 0.05) / 0.09, 0, 1);
+          // Crisp feathered rear edge meeting his snowy-white fluffy neck ruff (matches Video Udo mid-leap!)
+          const napeLimit = 0.12 - 0.05 * Math.max(0, sinA);
+          const napeFade = THREE.MathUtils.clamp((v - napeLimit) / 0.085, 0, 1);
 
-          // Ventral throat transition: under-jaw & throat stay crisp white
-          const throatFade = THREE.MathUtils.clamp((sinA + 0.36) / 0.24, 0, 1);
+          // Pure white under-jaw & throat
+          const throatFade = THREE.MathUtils.clamp((sinA + 0.34) / 0.22, 0, 1);
 
-          // Center white forehead blaze! Runs right up dorsal top (sinA > 0) between the two dark eye patches:
-          // Narrowest just above/between the eyes (v ≈ 0.42, half-width ≈ 0.13), flaring forward into white snout
-          // and tapering softly near the top crown (v ≈ 0.16).
+          // Iconic bright snowy-white center forehead blaze running straight up between his eyes!
           let blazeWhiteness = 0;
-          if (sinA > 0.15) {
+          if (sinA > 0.18) {
             const blazeHalfWidth =
-              v > 0.46
-                ? 0.125 + (v - 0.46) * 1.45
-                : 0.125 + 0.045 * Math.exp(-Math.pow((v - 0.24) / 0.14, 2));
+              v > 0.45
+                ? 0.145 + (v - 0.45) * 1.65
+                : 0.145 + 0.055 * Math.exp(-Math.pow((v - 0.26) / 0.18, 2));
             blazeWhiteness =
-              1 - THREE.MathUtils.clamp((latAbs - blazeHalfWidth * 0.62) / (blazeHalfWidth * 0.65), 0, 1);
+              1 - THREE.MathUtils.clamp((latAbs - blazeHalfWidth * 0.58) / (blazeHalfWidth * 0.64), 0, 1);
           }
 
           darkMask = frontFade * napeFade * throatFade * (1 - blazeWhiteness);
 
-          // Deepen darkness directly around both eye sockets (v ≈ 0.44..0.53, latAbs ≈ 0.38..0.78, sinA > -0.05)
-          const eyeRingBoost =
-            Math.exp(-Math.pow((v - 0.48) / 0.08, 2)) *
-            Math.exp(-Math.pow((latAbs - 0.56) / 0.24, 2)) *
-            (sinA > -0.1 ? 1 : 0);
-          darkMask = THREE.MathUtils.clamp(darkMask + eyeRingBoost * 0.45 * (1 - blazeWhiteness), 0, 1);
+          // Richer dark charcoal accent right around the eye sockets & upper cheek patch
+          const eyeZone =
+            Math.exp(-Math.pow((v - 0.48) / 0.095, 2)) *
+            Math.exp(-Math.pow((latAbs - 0.54) / 0.26, 2)) *
+            (sinA > -0.12 ? 1 : 0);
+          darkMask = THREE.MathUtils.clamp(darkMask + eyeZone * 0.42 * (1 - blazeWhiteness), 0, 1);
         }
 
-        const grain = (rand() - 0.5) * 18;
-        // White coat RGB (~246, 244, 240) vs Charcoal-black grizzle mask RGB (~28, 27, 26)
-        const r = 246 * (1 - darkMask) + 27 * darkMask + grain * (0.45 + darkMask * 0.55);
-        const g = 244 * (1 - darkMask) + 26 * darkMask + grain * (0.45 + darkMask * 0.55);
-        const b = 239 * (1 - darkMask) + 25 * darkMask + grain * (0.45 + darkMask * 0.55);
+        const grain = (rand() - 0.5) * 16;
+        // Warm snowy white (250, 248, 244) vs Video Udo's rich charcoal-slate grizzle (34, 35, 37)
+        const r = 250 * (1 - darkMask) + 34 * darkMask + grain * (0.4 + darkMask * 0.55);
+        const g = 248 * (1 - darkMask) + 35 * darkMask + grain * (0.4 + darkMask * 0.55);
+        const b = 244 * (1 - darkMask) + 37 * darkMask + grain * (0.4 + darkMask * 0.55);
 
         const idx = (py * headSize + px) * 4;
         data[idx] = Math.round(THREE.MathUtils.clamp(r, 0, 255));
@@ -182,9 +173,8 @@ function getUdoTextures(): CachedUdoTextures {
     }
     hCtx.putImageData(img, 0, 0);
 
-    // Paint authentic grizzled wirehair terrier strands!
-    // Silver-white & charcoal hairs feathering across the blaze, brows, cheeks, and bearded muzzle
-    for (let i = 0; i < 4200; i++) {
+    // Rich painterly shaggy wirehair strokes — silver-white & charcoal feathering matching Video Udo
+    for (let i = 0; i < 11500; i++) {
       const u = rand();
       const v = rand();
       const px = u * headSize;
@@ -194,28 +184,33 @@ function getUdoTextures(): CachedUdoTextures {
       const sinA = Math.sin(angle);
       const latAbs = Math.abs(cosA);
 
-      const inMaskZone = sinA > -0.32 && v > 0.08 && v < 0.58 && latAbs > 0.13;
-      const len = 6 + rand() * 14;
-      // Radiate slightly outward from muzzle/blaze just like Udo's wirehair facial furnishings!
-      const dirX = cosA * (2.5 + rand() * 4.5) + (rand() - 0.5) * 2.5;
-      const dirY = (v > 0.5 ? -1 : 1) * len * 0.85;
+      const inMaskZone = sinA > -0.32 && v > 0.1 && v < 0.58 && latAbs > 0.15;
+      const len = 10 + rand() * 24;
+      const dirX = cosA * (4.0 + rand() * 8.0) + (rand() - 0.5) * 4.5;
+      const dirY = (v > 0.48 ? -1 : 1) * len * 0.85;
 
       if (inMaskZone) {
-        // Grizzled charcoal + occasional silver-white wirehair highlights (signature Udo grizzle!)
-        const isSilverWisp = rand() > 0.72;
-        const alpha = isSilverWisp ? 0.18 + rand() * 0.24 : 0.22 + rand() * 0.28;
-        hCtx.strokeStyle = isSilverWisp
-          ? `rgba(218, 217, 213, ${alpha.toFixed(3)})`
-          : `rgba(18, 17, 17, ${alpha.toFixed(3)})`;
+        // Silvery-grey grizzle highlights woven through charcoal-black cheek & brow fur
+        const roll = rand();
+        if (roll > 0.7) {
+          const alpha = 0.2 + rand() * 0.28;
+          hCtx.strokeStyle = `rgba(210, 212, 214, ${alpha.toFixed(3)})`;
+        } else if (roll > 0.46) {
+          const alpha = 0.22 + rand() * 0.26;
+          hCtx.strokeStyle = `rgba(92, 95, 98, ${alpha.toFixed(3)})`;
+        } else {
+          const alpha = 0.25 + rand() * 0.3;
+          hCtx.strokeStyle = `rgba(20, 21, 23, ${alpha.toFixed(3)})`;
+        }
       } else {
-        // Crisp white scruffy beard & blaze strands
-        const isSoftShadow = rand() > 0.64;
+        // Fluffy snowy-white mustache, chin beard, blaze & neck ruff strands
+        const isShadow = rand() > 0.62;
         const alpha = 0.14 + rand() * 0.2;
-        hCtx.strokeStyle = isSoftShadow
-          ? `rgba(196, 193, 187, ${alpha.toFixed(3)})`
-          : `rgba(255, 255, 255, ${(alpha * 1.3).toFixed(3)})`;
+        hCtx.strokeStyle = isShadow
+          ? `rgba(196, 195, 190, ${alpha.toFixed(3)})`
+          : `rgba(255, 255, 253, ${(alpha * 1.35).toFixed(3)})`;
       }
-      hCtx.lineWidth = 0.9 + rand() * 1.25;
+      hCtx.lineWidth = 1.0 + rand() * 1.6;
       hCtx.beginPath();
       hCtx.moveTo(px, py);
       hCtx.lineTo(px + dirX, py + dirY);
@@ -223,41 +218,44 @@ function getUdoTextures(): CachedUdoTextures {
     }
   }
 
-  // 3. Ear Texture (256x256): Dark charcoal-black with silver-white wirehair wisps near the base/fold
-  const earSize = 256;
+  // 3. Ear Texture (512x512): Video Udo's dark charcoal-slate folded V-ears with soft silver-grey fold highlights
+  const earSize = 512;
   const earCanvas = document.createElement('canvas');
   earCanvas.width = earSize;
   earCanvas.height = earSize;
   const eCtx = earCanvas.getContext('2d');
   if (eCtx) {
     const eGrad = eCtx.createLinearGradient(0, 0, 0, earSize);
-    eGrad.addColorStop(0, '#141313'); // pointed dark feathered tip
-    eGrad.addColorStop(0.55, '#21201f');
-    eGrad.addColorStop(1, '#333130'); // grizzled ear base
+    eGrad.addColorStop(0, '#1d1f21'); // dark charcoal V-tip
+    eGrad.addColorStop(0.55, '#2b2d30');
+    eGrad.addColorStop(0.84, '#3e4145'); // soft grizzled upper crease
+    eGrad.addColorStop(1, '#4c4f54');
     eCtx.fillStyle = eGrad;
     eCtx.fillRect(0, 0, earSize, earSize);
 
-    for (let i = 0; i < 1100; i++) {
+    // Soft silvery-grey rim & crease feathering matching Video Udo's folded ears
+    for (let i = 0; i < 3600; i++) {
       const x = rand() * earSize;
       const y = rand() * earSize;
-      const len = 8 + rand() * 18;
-      // More silver-white wirehair wisps near the upper fold/base, jet-charcoal toward tips
-      const silverChance = y > earSize * 0.42 ? 0.36 : 0.12;
+      const len = 10 + rand() * 24;
+      const nearCrease = y > earSize * 0.56;
+      const nearEdge = x < earSize * 0.16 || x > earSize * 0.84;
+      const silverChance = nearCrease ? 0.42 : nearEdge ? 0.34 : 0.16;
       const isSilver = rand() < silverChance;
-      const alpha = isSilver ? 0.18 + rand() * 0.26 : 0.24 + rand() * 0.28;
+      const alpha = isSilver ? 0.18 + rand() * 0.28 : 0.24 + rand() * 0.28;
       eCtx.strokeStyle = isSilver
-        ? `rgba(222, 220, 216, ${alpha.toFixed(3)})`
-        : `rgba(12, 12, 12, ${alpha.toFixed(3)})`;
-      eCtx.lineWidth = 1.0 + rand() * 1.2;
+        ? `rgba(214, 216, 218, ${alpha.toFixed(3)})`
+        : `rgba(14, 15, 17, ${alpha.toFixed(3)})`;
+      eCtx.lineWidth = 1.1 + rand() * 1.5;
       eCtx.beginPath();
       eCtx.moveTo(x, y);
-      eCtx.lineTo(x + (rand() - 0.5) * 4, y - len);
+      eCtx.lineTo(x + (rand() - 0.5) * 6, y - len);
       eCtx.stroke();
     }
   }
 
-  // 4. Coarse Wirehair Bump Map (256x256)
-  const bumpSize = 256;
+  // 4. Shaggy Wirehair Bump Map (512x512, linear data)
+  const bumpSize = 512;
   const bumpCanvas = document.createElement('canvas');
   bumpCanvas.width = bumpSize;
   bumpCanvas.height = bumpSize;
@@ -265,42 +263,63 @@ function getUdoTextures(): CachedUdoTextures {
   if (bumpCtx) {
     bumpCtx.fillStyle = '#808080';
     bumpCtx.fillRect(0, 0, bumpSize, bumpSize);
-    for (let i = 0; i < 2400; i++) {
+    for (let i = 0; i < 7200; i++) {
       const x = rand() * bumpSize;
       const y = rand() * bumpSize;
-      const len = 5 + rand() * 12;
-      const shade = Math.round(78 + rand() * 115);
+      const len = 8 + rand() * 19;
+      const shade = Math.round(72 + rand() * 124);
       bumpCtx.strokeStyle = `rgba(${shade}, ${shade}, ${shade}, 0.48)`;
-      bumpCtx.lineWidth = 1.0 + rand() * 1.1;
+      bumpCtx.lineWidth = 1.1 + rand() * 1.4;
       bumpCtx.beginPath();
       bumpCtx.moveTo(x, y);
-      bumpCtx.lineTo(x + (rand() - 0.5) * 3.5, y + len);
+      bumpCtx.lineTo(x + (rand() - 0.5) * 5.5, y + len);
       bumpCtx.stroke();
     }
   }
 
-  // 5. Soft Grounded Contact Shadow (128x128)
+  // 5. Soft Fur Roughness Variation Map (512x512, linear data)
+  const roughCanvas = document.createElement('canvas');
+  roughCanvas.width = bumpSize;
+  roughCanvas.height = bumpSize;
+  const rCtx = roughCanvas.getContext('2d');
+  if (rCtx) {
+    rCtx.fillStyle = '#e0e0e0';
+    rCtx.fillRect(0, 0, bumpSize, bumpSize);
+    for (let i = 0; i < 3600; i++) {
+      const x = rand() * bumpSize;
+      const y = rand() * bumpSize;
+      const len = 9 + rand() * 20;
+      const val = Math.round(205 + rand() * 45);
+      rCtx.strokeStyle = `rgba(${val}, ${val}, ${val}, 0.36)`;
+      rCtx.lineWidth = 1.2 + rand() * 1.5;
+      rCtx.beginPath();
+      rCtx.moveTo(x, y);
+      rCtx.lineTo(x + (rand() - 0.5) * 4.5, y + len);
+      rCtx.stroke();
+    }
+  }
+
+  // 6. Soft Grounded Contact Shadow (128x128)
   const shadowCanvas = document.createElement('canvas');
   shadowCanvas.width = 128;
   shadowCanvas.height = 128;
   const sCtx = shadowCanvas.getContext('2d');
   if (sCtx) {
     const sGrad = sCtx.createRadialGradient(64, 64, 6, 64, 64, 58);
-    sGrad.addColorStop(0, 'rgba(0, 0, 0, 0.56)');
-    sGrad.addColorStop(0.56, 'rgba(0, 0, 0, 0.25)');
+    sGrad.addColorStop(0, 'rgba(0, 0, 0, 0.54)');
+    sGrad.addColorStop(0.56, 'rgba(0, 0, 0, 0.24)');
     sGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
     sCtx.fillStyle = sGrad;
     sCtx.fillRect(0, 0, 128, 128);
   }
 
-  // 6. Magical 4-Point Star Glint Sparkle Texture (128x128) — matches portrait jump sparkles
+  // 7. Magical 4-Point Star Glint Sparkle Texture (128x128) — matches portrait jump sparkles
   const starCanvas = document.createElement('canvas');
   starCanvas.width = 128;
   starCanvas.height = 128;
   const stCtx = starCanvas.getContext('2d');
   if (stCtx) {
     stCtx.clearRect(0, 0, 128, 128);
-    // Soft warm golden outer halo
     const haloGrad = stCtx.createRadialGradient(64, 64, 0, 64, 64, 58);
     haloGrad.addColorStop(0, 'rgba(255, 253, 232, 0.92)');
     haloGrad.addColorStop(0.15, 'rgba(255, 235, 140, 0.62)');
@@ -329,13 +348,11 @@ function getUdoTextures(): CachedUdoTextures {
       stCtx.restore();
     };
 
-    // Crisp horizontal & vertical 4-point star flare rays + delicate 45-degree secondary glints
     for (let k = 0; k < 4; k++) {
       drawStarRay(k * (Math.PI * 0.5), 60, 4.3, 1.0);
       drawStarRay(k * (Math.PI * 0.5) + Math.PI * 0.25, 24, 2.0, 0.78);
     }
 
-    // Blazing white-gold pinpoint core
     const coreGrad = stCtx.createRadialGradient(64, 64, 0, 64, 64, 9);
     coreGrad.addColorStop(0, 'rgba(255, 255, 255, 1)');
     coreGrad.addColorStop(0.46, 'rgba(255, 250, 214, 0.94)');
@@ -346,7 +363,7 @@ function getUdoTextures(): CachedUdoTextures {
     stCtx.fill();
   }
 
-  // 7. Luminous Golden Fairy-Dust Bokeh Mote Texture (64x64)
+  // 8. Luminous Golden Fairy-Dust Bokeh Mote Texture (64x64)
   const moteCanvas = document.createElement('canvas');
   moteCanvas.width = 64;
   moteCanvas.height = 64;
@@ -367,20 +384,27 @@ function getUdoTextures(): CachedUdoTextures {
   bodyColorMap.colorSpace = THREE.SRGBColorSpace;
   bodyColorMap.wrapS = THREE.RepeatWrapping;
   bodyColorMap.wrapT = THREE.ClampToEdgeWrapping;
+  bodyColorMap.anisotropy = 4;
 
   const headColorMap = new THREE.CanvasTexture(headCanvas);
   headColorMap.colorSpace = THREE.SRGBColorSpace;
   headColorMap.wrapS = THREE.RepeatWrapping;
   headColorMap.wrapT = THREE.ClampToEdgeWrapping;
+  headColorMap.anisotropy = 4;
 
   const earColorMap = new THREE.CanvasTexture(earCanvas);
   earColorMap.colorSpace = THREE.SRGBColorSpace;
   earColorMap.wrapS = THREE.ClampToEdgeWrapping;
   earColorMap.wrapT = THREE.ClampToEdgeWrapping;
+  earColorMap.anisotropy = 4;
 
   const wireBumpMap = new THREE.CanvasTexture(bumpCanvas);
   wireBumpMap.wrapS = THREE.RepeatWrapping;
   wireBumpMap.wrapT = THREE.RepeatWrapping;
+
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  roughnessMap.wrapS = THREE.RepeatWrapping;
+  roughnessMap.wrapT = THREE.RepeatWrapping;
 
   const shadowMap = new THREE.CanvasTexture(shadowCanvas);
   shadowMap.colorSpace = THREE.SRGBColorSpace;
@@ -396,6 +420,7 @@ function getUdoTextures(): CachedUdoTextures {
     headColorMap,
     earColorMap,
     wireBumpMap,
+    roughnessMap,
     shadowMap,
     sparkleStarMap,
     sparkleMoteMap,
@@ -404,16 +429,17 @@ function getUdoTextures(): CachedUdoTextures {
 }
 
 /**
- * Sculpts an athletic, compact Jack/Parson Russell Terrier torso:
- * - Deep brisket/chest, level muscular terrier back, slight loin tuck, rounded hindquarters
- * - Cylindrical-anatomical UVs matching `bodyColorMap`
+ * Sculpts Video Udo's compact, plush, shaggy snowy-white wirehaired terrier torso:
+ * - Proper right-handed Rx(+PI/2) remapping (`-sz -> y`, `sy -> z`) so ALL normals face cleanly outward!
+ * - Deep fluffy chest/brisket ruff, soft muscular back, gentle waist tuck, plush rounded hindquarters
+ * - Subtle organic shaggy fur-wave contour so his white coat reads genuinely fluffy from every angle
  */
 function createTerrierBodyGeometry(): THREE.BufferGeometry {
-  const geo = new THREE.SphereGeometry(1, 32, 24);
+  const geo = new THREE.SphereGeometry(1, 44, 34);
   const pos = geo.attributes.position;
   const uv = geo.attributes.uv;
 
-  const halfLen = 0.39; // compact agile terrier body length (~0.78 Z span)
+  const halfLen = 0.545;
 
   for (let i = 0; i < pos.count; i++) {
     const sx = pos.getX(i);
@@ -423,29 +449,41 @@ function createTerrierBodyGeometry(): THREE.BufferGeometry {
     const t = sy;
     const vNorm = (t + 1) * 0.5;
     const radial = Math.sqrt(sx * sx + sz * sz);
-    const angle = Math.atan2(sz, sx);
+    // Proper rotation Rx(+PI/2): x = sx, y = -sz, z = sy (det = +1 -> strictly outward normals!)
+    const angle = Math.atan2(-sz, sx);
     const cosA = radial > 1e-5 ? sx / radial : 0;
-    const sinA = radial > 1e-5 ? sz / radial : 0; // +1 dorsal back, -1 ventral chest/belly
+    const sinA = radial > 1e-5 ? -sz / radial : 0; // +1 dorsal back, -1 ventral chest/belly
 
-    // Broad muscular shoulders/chest (t ≈ +0.35), slight terrier waist tuck (t ≈ -0.22), firm hips
+    // Plush furry chest/shoulders (t ≈ +0.36), athletic terrier waist tuck (t ≈ -0.18), rounded fluffy rump
     const ribWidth =
-      0.215 *
+      0.214 *
       (1.0 +
-        0.13 * Math.exp(-Math.pow((t - 0.32) / 0.42, 2)) -
-        0.09 * Math.exp(-Math.pow((t + 0.2) / 0.35, 2)) +
-        0.05 * Math.exp(-Math.pow((t + 0.62) / 0.32, 2)));
+        0.145 * Math.exp(-Math.pow((t - 0.34) / 0.44, 2)) -
+        0.085 * Math.exp(-Math.pow((t + 0.16) / 0.36, 2)) +
+        0.075 * Math.exp(-Math.pow((t + 0.58) / 0.34, 2)));
 
-    // Level terrier topline with slight wither rise
-    const topHeight = 0.195 * (1.0 + 0.08 * Math.exp(-Math.pow((t - 0.45) / 0.38, 2)));
-    // Deep terrier brisket at front chest (t > 0), neat abdominal tuck toward rear (t < 0)
+    // Level athletic terrier topline with slightly plush wither ruff
+    const topHeight =
+      0.19 *
+      (1.0 +
+        0.095 * Math.exp(-Math.pow((t - 0.44) / 0.4, 2)) +
+        0.03 * Math.exp(-Math.pow((t + 0.52) / 0.36, 2)));
+
+    // Fluffy white chest ruff in front, clean athletic belly tuck toward rear so his longer legs read clearly
     const bellyDepth =
-      0.215 *
+      0.198 *
       (1.0 +
-        0.18 * Math.exp(-Math.pow((t - 0.36) / 0.44, 2)) -
-        0.24 * Math.exp(-Math.pow((t + 0.36) / 0.42, 2)));
+        0.2 * Math.exp(-Math.pow((t - 0.38) / 0.44, 2)) -
+        0.24 * Math.exp(-Math.pow((t + 0.34) / 0.42, 2)));
 
-    const x = cosA * radial * ribWidth;
-    const y = (sinA >= 0 ? sinA * topHeight : sinA * bellyDepth) * radial;
+    // Subtle shaggy terrier coat waves along lower chest, flanks & haunches
+    const shaggyWave =
+      1.0 +
+      0.019 * Math.sin(t * 15.0 + cosA * 4.5) * (1 - t * t) * (sinA < 0.25 ? 1.25 : 0.7) +
+      0.013 * Math.cos(sinA * 10.0 - t * 11.0) * (1 - t * t);
+
+    const x = cosA * radial * ribWidth * shaggyWave;
+    const y = (sinA >= 0 ? sinA * topHeight : sinA * bellyDepth) * radial * shaggyWave;
     const z = t * halfLen;
 
     pos.setXYZ(i, x, y, z);
@@ -462,13 +500,15 @@ function createTerrierBodyGeometry(): THREE.BufferGeometry {
 }
 
 /**
- * Sculpts Udo's authentic wirehaired terrier skull & sturdy blunt-wedged bearded muzzle:
- * - Broad flat-domed terrier skull between the ears (t < 0)
- * - Distinct stop around t ≈ -0.04 (v ≈ 0.48, right where the eyes sit!)
- * - Full, straight, plushly bearded white snout (t > 0) ending in a rounded terrier muzzle
+ * Sculpts Video Udo's exact appealing wirehaired terrier head:
+ * - Proper right-handed Rx(+PI/2) remapping (`det = +1`) for strictly outward normals & lighting
+ * - Broad expressive dark-masked cranium & rounded cheeks
+ * - Gentle orbital sockets & raised bushy brow ridge so his soulful dark eyes nestle organically
+ * - Distinct terrier stop dropping into his iconic ROUND, PLUMP, SHAGGY WHITE MUSTACHE/BEARD MUZZLE
+ *   (noticeably rounder & cuter than a long pointy snout, matching Udo in Chess Angel's arms!)
  */
 function createUdoHeadGeometry(): THREE.BufferGeometry {
-  const geo = new THREE.SphereGeometry(1, 34, 26);
+  const geo = new THREE.SphereGeometry(1, 52, 38);
   const pos = geo.attributes.position;
   const uv = geo.attributes.uv;
 
@@ -480,31 +520,64 @@ function createUdoHeadGeometry(): THREE.BufferGeometry {
     const t = sy;
     const vNorm = (t + 1) * 0.5; // 0 = nape, 0.5 = eyes/stop, 1.0 = nose tip
     const radial = Math.sqrt(sx * sx + sz * sz);
-    const angle = Math.atan2(sz, sx);
+    // Proper rotation Rx(+PI/2): det = +1 -> outward normals!
+    const angle = Math.atan2(-sz, sx);
     const cosA = radial > 1e-5 ? sx / radial : 0;
-    const sinA = radial > 1e-5 ? sz / radial : 0; // +1 forehead/nasal bridge, -1 jaw/beard
+    const sinA = radial > 1e-5 ? -sz / radial : 0; // +1 forehead/bridge, -1 jaw/beard
+    const absCos = Math.abs(cosA);
 
-    // Terrier stop step-down from forehead cranium (t < 0) to straight nasal bridge (t > 0.08)
-    const stopStep = 0.5 * (1 - Math.tanh((t - 0.02) * 5.2)); // ~1 on skull, ~0 on muzzle
+    // Distinct puppy-terrier stop step-down between rounded forehead cranium (t < 0) and fluffy muzzle (t > 0.08)
+    const stopStep = 0.5 * (1 - Math.tanh((t - 0.02) * 5.6)); // ~1 on cranium, ~0 on muzzle
 
-    // Skull width vs sturdy bearded terrier muzzle width (wirehair furnishings keep snout full & boxy-round!)
+    // Full fluffy cheek-beard & round mustache cushions framing the lower snout (signature Video Udo silhouette!)
+    const mustachePuff =
+      0.044 *
+      Math.exp(-Math.pow((t - 0.52) / 0.34, 2)) *
+      Math.exp(-Math.pow((sinA + 0.16) / 0.52, 2)) *
+      (0.55 + 0.45 * absCos);
+
+    // Subtle dark-masked zygomatic cheek fullness beneath the eyes
+    const cheekFluff =
+      0.024 *
+      Math.exp(-Math.pow((t + 0.1) / 0.34, 2)) *
+      Math.exp(-Math.pow((sinA + 0.18) / 0.48, 2)) *
+      absCos;
+
+    // Gentle orbital eye-socket recesses + expressive shaggy brow ridge above eyes
+    const eyeSocket =
+      -0.016 *
+      Math.exp(-Math.pow((t - 0.04) / 0.16, 2)) *
+      Math.exp(-Math.pow((sinA - 0.32) / 0.2, 2)) *
+      Math.exp(-Math.pow((absCos - 0.58) / 0.24, 2));
+
+    const browRidge =
+      0.02 *
+      Math.exp(-Math.pow((t - 0.02) / 0.2, 2)) *
+      Math.exp(-Math.pow((sinA - 0.62) / 0.2, 2)) *
+      Math.exp(-Math.pow((absCos - 0.48) / 0.32, 2));
+
+    // Delicate vertical philtrum crease between left & right white mustache puffs right under the nose
+    const philtrum =
+      -0.014 *
+      Math.exp(-Math.pow((t - 0.84) / 0.16, 2)) *
+      Math.exp(-Math.pow((sinA + 0.22) / 0.28, 2)) *
+      Math.exp(-Math.pow(cosA / 0.22, 2));
+
+    // Compact, full, adorably boxy-round muzzle width & rounded skull
+    const muzzleEndRound = t > 0.7 ? 1.0 - 0.22 * Math.pow((t - 0.7) / 0.3, 1.8) : 1.0;
     const widthProfile =
-      0.148 +
-      0.068 * stopStep +
-      0.024 * Math.exp(-Math.pow((t - 0.42) / 0.34, 2)) * (sinA < 0.25 ? 1 : 0.4); // fluffy muzzle beard fullness
-
-    const topProfile = 0.115 + 0.078 * stopStep;
+      (0.156 + 0.082 * stopStep) * muzzleEndRound + mustachePuff + cheekFluff + eyeSocket;
+    const topProfile = (0.118 + 0.095 * stopStep) * muzzleEndRound + browRidge + eyeSocket * 0.4;
     const botProfile =
-      0.128 +
-      0.032 * stopStep +
-      0.022 * Math.exp(-Math.pow((t - 0.35) / 0.38, 2)); // scruffy lower beard depth
+      (0.132 + 0.036 * stopStep) * muzzleEndRound + mustachePuff * 0.55 + philtrum * 0.35;
 
     const x = cosA * radial * widthProfile;
     let y = (sinA >= 0 ? sinA * topProfile : sinA * botProfile) * radial;
-    // Slight level lift on skull crown, straight terrier muzzle forward
-    y += 0.028 * stopStep - (1 - stopStep) * 0.018;
+    // Expressive puppy-terrier forehead lift + slightly level/blunt nose tip
+    y += 0.036 * stopStep - (1 - stopStep) * 0.022;
 
-    const z = t >= 0 ? t * 0.335 : t * 0.235;
+    // Compact, cute snout length matching Video Udo (slightly shorter & fuller than a long working terrier!)
+    const z = (t >= 0 ? t * 0.305 : t * 0.242) + mustachePuff * 0.25 + philtrum;
     pos.setXYZ(i, x, y, z);
 
     let uNorm = angle / (Math.PI * 2);
@@ -519,48 +592,288 @@ function createUdoHeadGeometry(): THREE.BufferGeometry {
 }
 
 /**
- * Sculpts Udo's signature high-set V-shaped semi-drop ("airplane / folded terrier") ear:
- * rises from the outer corner of the skull, arches outward horizontally, and folds/tapers
- * into a feathered pointed tip drooping gracefully at the outer end!
+ * Sculpts Video Udo's signature high-set **folded forward-drop V-shaped button ear**
+ * (solid 3D closed lofted mesh with thick rounded margins, subtle concave inner fold,
+ * and guaranteed outward-facing normals for both left and right ears — NOT a flat airplane wing!).
  */
-function createUdoFoldedEarGeometry(side: number): THREE.BufferGeometry {
-  const segU = 18; // span from skull root (0) out to pointed tip (1)
-  const segV = 12; // across ear flap width (-1 back edge .. +1 front edge)
-  const geo = new THREE.PlaneGeometry(1, 1, segU, segV);
+function createUdoButtonEarGeometry(side: number): THREE.BufferGeometry {
+  // Smooth 3D spine path from skull root -> slight upward-outward arch -> folded forward-downward V-flap framing cheek
+  const spineCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(side * 0.056, 0.044, 0.024),
+    new THREE.Vector3(side * 0.118, 0.022, 0.068),
+    new THREE.Vector3(side * 0.146, -0.058, 0.098),
+    new THREE.Vector3(side * 0.132, -0.142, 0.116),
+  ]);
+
+  const lenSegs = 20;
+  const ringSegs = 14;
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  const pt = new THREE.Vector3();
+  const tan = new THREE.Vector3();
+  const chordDir = new THREE.Vector3();
+  const thickDir = new THREE.Vector3();
+  const refForward = new THREE.Vector3(0, 0, 1);
+  const v = new THREE.Vector3();
+
+  for (let i = 0; i <= lenSegs; i++) {
+    const s = i / lenSegs; // 0 = ear base on skull, 1 = softly rounded dark V-tip
+    spineCurve.getPointAt(s, pt);
+    spineCurve.getTangentAt(s, tan).normalize();
+
+    // Build stable right-handed frame (thickDir, chordDir, tan) along the folded V-flap
+    // so chordDir spans front-to-back across the triangular ear flap and thickDir gives solid 3D ear thickness
+    chordDir.crossVectors(tan, new THREE.Vector3(side, 0.18, 0.15));
+    if (chordDir.lengthSq() < 1e-4) chordDir.copy(refForward);
+    chordDir.normalize();
+    thickDir.crossVectors(chordDir, tan).normalize();
+    // Ensure thickDir consistently points outward away from the skull
+    if (thickDir.x * side < -0.2) {
+      thickDir.negate();
+      chordDir.negate();
+    }
+
+    // Triangular V-ear flap width: broad near the upper fold (s ≈ 0.34), tapering gracefully to a softly rounded V-tip
+    const capRound =
+      s < 0.06
+        ? Math.sin((s / 0.06) * Math.PI * 0.5)
+        : s > 0.9
+          ? Math.cos(((s - 0.9) / 0.1) * Math.PI * 0.5)
+          : 1.0;
+    const flapHalfWidth =
+      (0.092 * Math.sin(Math.pow(s, 0.62) * Math.PI * 0.88 + 0.22) * (1 - 0.62 * s * s) + 0.012 * (1 - s)) *
+      Math.max(0.06, capRound);
+    const flapHalfThick = (0.022 * (1 - 0.58 * s) + 0.005) * Math.max(0.08, capRound);
+
+    for (let j = 0; j <= ringSegs; j++) {
+      const uRing = j / ringSegs;
+      const theta = uRing * Math.PI * 2;
+      const cosT = Math.cos(theta); // along ear thickness (+outward, -inner cheek side)
+      const sinT = Math.sin(theta); // along flap width (-rear margin .. +front margin)
+
+      // Subtle natural ear cup concavity on the inner side facing the cheek
+      const cupOffset = -0.014 * (1 - sinT * sinT) * Math.sin(s * Math.PI);
+
+      v.copy(pt)
+        .addScaledVector(thickDir, cosT * flapHalfThick + cupOffset)
+        .addScaledVector(chordDir, sinT * flapHalfWidth);
+      positions.push(v.x, v.y, v.z);
+      uvs.push(uRing, s);
+    }
+  }
+
+  const rowStride = ringSegs + 1;
+  // Verify winding orientation from a mid-flap quad against thickDir so normals ALWAYS point outward
+  const midI = Math.floor(lenSegs * 0.5);
+  const a0 = midI * rowStride;
+  const b0 = a0 + 1;
+  const c0 = a0 + rowStride;
+  const pA = new THREE.Vector3(positions[a0 * 3], positions[a0 * 3 + 1], positions[a0 * 3 + 2]);
+  const pB = new THREE.Vector3(positions[b0 * 3], positions[b0 * 3 + 1], positions[b0 * 3 + 2]);
+  const pC = new THREE.Vector3(positions[c0 * 3], positions[c0 * 3 + 1], positions[c0 * 3 + 2]);
+  spineCurve.getPointAt(midI / lenSegs, pt);
+  const testNorm = new THREE.Vector3().subVectors(pB, pA).cross(new THREE.Vector3().subVectors(pC, pA));
+  const radialOut = new THREE.Vector3().subVectors(pA, pt);
+  const flipWinding = testNorm.dot(radialOut) < 0;
+
+  for (let i = 0; i < lenSegs; i++) {
+    for (let j = 0; j < ringSegs; j++) {
+      const a = i * rowStride + j;
+      const b = a + 1;
+      const c = a + rowStride;
+      const d = c + 1;
+      if (flipWinding) {
+        indices.push(a, c, b);
+        indices.push(b, c, d);
+      } else {
+        indices.push(a, b, c);
+        indices.push(b, d, c);
+      }
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Sculpts a soft, organic, gently curved shaggy fur lock (replaces spiky raw ConeGeometry!).
+ * Always maintains positive Jacobian determinant -> clean outward normals.
+ */
+function createSculptedFurLockGeometry(
+  rx: number,
+  ry: number,
+  rz: number,
+  tipTaper = 0.24,
+  curveBackZ = 0.0,
+): THREE.BufferGeometry {
+  const geo = new THREE.SphereGeometry(1, 14, 12);
   const pos = geo.attributes.position;
-  const uv = geo.attributes.uv;
 
   for (let i = 0; i < pos.count; i++) {
-    // Remap PlaneGeometry X (-0.5..+0.5) -> span s (0 = base on skull, 1 = pointed outer tip)
-    // and Y (-0.5..+0.5) -> flap chord w (-1 = rear margin, +1 = front margin)
-    const s = pos.getX(i) + 0.5;
-    const w = pos.getY(i) * 2;
+    const sx = pos.getX(i);
+    const sy = pos.getY(i); // -1 base .. +1 soft feathered tip
+    const sz = pos.getZ(i);
 
-    // V-shaped terrier ear chord width: broad at fold (s ≈ 0.28), tapering to a feathered point at s = 1
-    const halfWidth =
-      0.098 *
-      (1 - 0.85 * Math.pow(s, 1.42)) *
-      (0.82 + 0.28 * Math.sin(Math.min(1, s * 2.2) * Math.PI * 0.5));
-
-    // Arch up slightly at base (s < 0.32), extend outward laterally, then droop at the feathered outer tip!
-    const reachOut = s * 0.255;
-    const archY =
-      0.046 * Math.sin(Math.min(1, s / 0.52) * Math.PI) -
-      Math.pow(Math.max(0, s - 0.38), 1.65) * 0.19;
-    // Slight forward cup & natural V-shaped terrier ear chord across Z
-    const cupZ = 0.026 * (1 - w * w) + w * halfWidth + s * 0.024;
-
-    const x = side * reachOut;
-    const y = archY - Math.abs(w) * 0.014;
-    const z = cupZ;
-
+    const u = (sy + 1) * 0.5; // 0 at base -> 1 at tip
+    const profile = THREE.MathUtils.lerp(1.0, tipTaper, Math.pow(u, 1.35)) * (1.0 + 0.14 * Math.sin(u * Math.PI));
+    const x = sx * rx * profile;
+    const y = sy * ry;
+    const z = sz * rz * profile + curveBackZ * u * u;
     pos.setXYZ(i, x, y, z);
-    // v = 0 at skull base -> v = 1 at dark feathered tip (note Canvas flipY -> 1 - s puts tip at top of canvas)
-    uv.setXY(i, (w + 1) * 0.5, 1 - s);
   }
 
   pos.needsUpdate = true;
-  uv.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Sculpts Video Udo's cute prominent glossy rounded-triangle black terrier nose with subtle twin nostrils.
+ */
+function createTerrierNoseGeometry(): THREE.BufferGeometry {
+  const geo = new THREE.SphereGeometry(1, 22, 18);
+  const pos = geo.attributes.position;
+
+  for (let i = 0; i < pos.count; i++) {
+    const sx = pos.getX(i);
+    const sy = pos.getY(i);
+    const sz = pos.getZ(i);
+
+    // Classic cute rounded heart/inverted-triangle dog nose silhouette
+    const triWidth = sy > 0 ? 1.24 + sy * 0.06 : 1.24 + sy * 0.44;
+    const topFlat = sy > 0.35 ? -0.14 * (sy - 0.35) : 0;
+    const centerCleft =
+      sz > 0.1 && sy < 0.2
+        ? -0.12 * Math.exp(-Math.pow(sx / 0.18, 2)) * (0.2 - sy) * sz
+        : 0;
+    const nostrilDimple =
+      sz > 0.25
+        ? -0.16 *
+          Math.exp(-Math.pow((Math.abs(sx) - 0.46) / 0.22, 2)) *
+          Math.exp(-Math.pow((sy + 0.04) / 0.26, 2)) *
+          sz
+        : 0;
+
+    const x = sx * 0.056 * triWidth;
+    const y = (sy * 0.044 + topFlat * 0.044);
+    const z = sz * 0.045 + nostrilDimple * 0.032 + centerCleft * 0.025;
+    pos.setXYZ(i, x, y, z);
+  }
+
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Creates a flush curved spherical-cap cornea catchlight sitting smoothly on the eye surface.
+ */
+function createFlushEyeGlintGeometry(eyeRadius: number, angularRadius: number): THREE.BufferGeometry {
+  const geo = new THREE.SphereGeometry(
+    eyeRadius + 0.0016,
+    12,
+    8,
+    0,
+    Math.PI * 2,
+    0,
+    angularRadius,
+  );
+  geo.rotateX(Math.PI / 2);
+  return geo;
+}
+
+/**
+ * Sculpts a happy curved pink terrier tongue peeking out during Video Udo's joyful open-mouth leap/bark.
+ */
+function createSculptedTongueGeometry(): THREE.BufferGeometry {
+  const geo = new THREE.SphereGeometry(1, 14, 10);
+  const pos = geo.attributes.position;
+
+  for (let i = 0; i < pos.count; i++) {
+    const sx = pos.getX(i);
+    const sy = pos.getY(i);
+    const sz = pos.getZ(i); // -1 root .. +1 tip
+
+    const u = (sz + 1) * 0.5;
+    const width = 0.042 * (0.78 + 0.26 * Math.sin(u * Math.PI));
+    const curlDown = -0.032 * u * u;
+    const centerGroove = sy > 0 ? -0.005 * Math.exp(-Math.pow(sx / 0.28, 2)) : 0;
+
+    const x = sx * width;
+    const y = sy * 0.014 + curlDown + centerGroove;
+    const z = u * 0.108;
+    pos.setXYZ(i, x, y, z);
+  }
+
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Sculpts Video Udo's pure-white fluffy tapered carrot terrier tail (pivoting cleanly at y = 0).
+ */
+function createSculptedTerrierTailGeometry(): THREE.BufferGeometry {
+  const geo = new THREE.SphereGeometry(1, 18, 16);
+  const pos = geo.attributes.position;
+
+  for (let i = 0; i < pos.count; i++) {
+    const sx = pos.getX(i);
+    const sy = pos.getY(i); // -1 rump root .. +1 fluffy tapered tip
+    const sz = pos.getZ(i);
+
+    const u = (sy + 1) * 0.5; // 0 base -> 1 tip
+    // Plump fluffy white base tapering smoothly into a lively slightly-curved carrot tip (no dark spot!)
+    const radius = 0.056 * (1 - 0.66 * Math.pow(u, 1.35)) * (1 + 0.12 * Math.sin(u * Math.PI));
+    const shaggy = 1 + 0.06 * Math.sin(u * 14 + sx * 4) * (1 - u);
+    const x = sx * radius * shaggy;
+    const y = u * 0.255;
+    // Jaunty natural backward-and-slightly-upward terrier tail curve
+    const z = sz * radius * shaggy - u * 0.115 + u * u * 0.042;
+    pos.setXYZ(i, x, y, z);
+  }
+
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Sculpts a soft shaggy white terrier upper thigh/shoulder or feathered lower leg segment.
+ */
+function createSculptedLegSegmentGeometry(
+  rxTop: number,
+  rxBot: number,
+  length: number,
+  featherBack: number,
+): THREE.BufferGeometry {
+  const geo = new THREE.SphereGeometry(1, 16, 14);
+  const pos = geo.attributes.position;
+
+  for (let i = 0; i < pos.count; i++) {
+    const sx = pos.getX(i);
+    const sy = pos.getY(i); // +1 top .. -1 bottom
+    const sz = pos.getZ(i);
+
+    const u = (1 - sy) * 0.5; // 0 top -> 1 bottom
+    const r = THREE.MathUtils.lerp(rxTop, rxBot, Math.pow(u, 0.85));
+    // Soft shaggy fur feathering along the back of the leg (like Video Udo's fluffy legs!)
+    const rearFluff = sz < 0 ? 1 + featherBack * Math.sin(u * Math.PI) * (-sz) : 1;
+    const x = sx * r;
+    const y = sy * (length * 0.5);
+    const z = sz * r * 1.08 * rearFluff;
+    pos.setXYZ(i, x, y, z);
+  }
+
+  pos.needsUpdate = true;
   geo.computeVertexNormals();
   return geo;
 }
@@ -597,14 +910,13 @@ interface LaunchSparkleParticle {
 }
 
 /**
- * Procedural 3D likeness of **Udo** (`udo_8d64da14.png`) —
- * Wirehaired Jack / Parson Russell Terrier:
- * - Pure snowy-white rough terrier body, chest, neck ruff, sturdy legs & paws
- * - Symmetrical dark charcoal-and-silver grizzled mask covering eyes, temples, cheeks & crown
- * - Crisp feathered white forehead blaze leading into a fluffy white bearded terrier muzzle
- * - Expressive soulful dark eyes under wispy wirehair eyebrows + wet jet-black oval terrier nose
- * - Signature high-set semi-drop ("airplane") V-shaped dark grizzled ears with feathered tips
- * - Jaunty upright wagging white terrier tail with subtle dark root spot
+ * Procedural 3D likeness of **Video Udo** (the fluffy wirehaired terrier held in Chess Angel's arms):
+ * - Pure snowy-white plush shaggy terrier body, fluffy chest ruff, feathered legs, white paws & carrot tail
+ * - Symmetrical dark charcoal-slate grizzle eye/cheek/crown mask with silvery-grey wirehair streaks
+ * - Crisp snowy-white center forehead blaze flowing into a full, rounded, fluffy white mustache & beard
+ * - Expressive dark eyes nestled under sculpted bushy eyebrows + glossy rounded-triangle black nose
+ * - High-set dark charcoal-slate folded forward-drop ("button") V-ears framing his cheeks
+ * - Cheerful open-mouth smile with curved pink tongue during leaps & barks + golden magical leap sparkles
  *
  * Local coordinate convention:
  * - Forward direction: +Z
@@ -648,103 +960,133 @@ export class WildDogActor {
 
     const tex = getUdoTextures();
 
+    // Warm velvety PBR fur materials matching Video Udo's painterly plush white & charcoal coat
     const bodyCoatMat = this.trackMat(
-      new THREE.MeshStandardMaterial({
+      new THREE.MeshPhysicalMaterial({
         map: tex.bodyColorMap,
         bumpMap: tex.wireBumpMap,
-        bumpScale: 0.016,
+        bumpScale: 0.017,
+        roughnessMap: tex.roughnessMap,
         color: 0xffffff,
-        emissive: 0x201f1d,
-        emissiveIntensity: 0.14,
-        roughness: 0.9,
+        emissive: 0x242320,
+        emissiveIntensity: 0.16,
+        roughness: 0.91,
         metalness: 0.0,
+        sheen: 0.65,
+        sheenRoughness: 0.78,
+        sheenColor: new THREE.Color(0xfffdf8),
       }),
     );
 
     const headCoatMat = this.trackMat(
-      new THREE.MeshStandardMaterial({
+      new THREE.MeshPhysicalMaterial({
         map: tex.headColorMap,
         bumpMap: tex.wireBumpMap,
-        bumpScale: 0.018,
+        bumpScale: 0.019,
+        roughnessMap: tex.roughnessMap,
         color: 0xffffff,
-        emissive: 0x181716,
-        emissiveIntensity: 0.12,
-        roughness: 0.88,
-        metalness: 0.01,
+        emissive: 0x1b1b1a,
+        emissiveIntensity: 0.13,
+        roughness: 0.9,
+        metalness: 0.0,
+        sheen: 0.62,
+        sheenRoughness: 0.8,
+        sheenColor: new THREE.Color(0xe6e8ec),
       }),
     );
 
     const whiteWireTuftMat = this.trackMat(
-      new THREE.MeshStandardMaterial({
+      new THREE.MeshPhysicalMaterial({
         bumpMap: tex.wireBumpMap,
-        bumpScale: 0.014,
-        color: 0xf7f6f2,
-        emissive: 0x22211e,
-        emissiveIntensity: 0.15,
+        bumpScale: 0.015,
+        roughnessMap: tex.roughnessMap,
+        color: 0xf9f8f4,
+        emissive: 0x262522,
+        emissiveIntensity: 0.17,
         roughness: 0.92,
         metalness: 0.0,
+        sheen: 0.68,
+        sheenRoughness: 0.76,
+        sheenColor: new THREE.Color(0xffffff),
       }),
     );
 
     const grizzleDarkTuftMat = this.trackMat(
-      new THREE.MeshStandardMaterial({
+      new THREE.MeshPhysicalMaterial({
         bumpMap: tex.wireBumpMap,
-        bumpScale: 0.014,
-        color: 0x242322,
-        emissive: 0x090909,
+        bumpScale: 0.015,
+        color: 0x2a2c2f,
+        emissive: 0x0b0c0d,
         emissiveIntensity: 0.1,
-        roughness: 0.87,
-        metalness: 0.02,
+        roughness: 0.88,
+        metalness: 0.0,
+        sheen: 0.52,
+        sheenRoughness: 0.82,
+        sheenColor: new THREE.Color(0x9ca2aa),
       }),
     );
 
     const silverWispMat = this.trackMat(
-      new THREE.MeshStandardMaterial({
-        color: 0xdad9d4,
-        emissive: 0x1c1b1a,
+      new THREE.MeshPhysicalMaterial({
+        bumpMap: tex.wireBumpMap,
+        bumpScale: 0.012,
+        color: 0xd6d8dc,
+        emissive: 0x1e1f21,
         emissiveIntensity: 0.12,
-        roughness: 0.88,
+        roughness: 0.89,
         metalness: 0.0,
+        sheen: 0.58,
+        sheenRoughness: 0.78,
+        sheenColor: new THREE.Color(0xf7f8fa),
       }),
     );
 
     const earMat = this.trackMat(
-      new THREE.MeshStandardMaterial({
+      new THREE.MeshPhysicalMaterial({
         map: tex.earColorMap,
         bumpMap: tex.wireBumpMap,
-        bumpScale: 0.014,
+        bumpScale: 0.015,
+        roughnessMap: tex.roughnessMap,
         color: 0xffffff,
-        emissive: 0x0c0c0c,
-        emissiveIntensity: 0.1,
-        roughness: 0.84,
-        metalness: 0.01,
-        side: THREE.DoubleSide,
+        emissive: 0x0d0e10,
+        emissiveIntensity: 0.11,
+        roughness: 0.86,
+        metalness: 0.0,
+        sheen: 0.54,
+        sheenRoughness: 0.8,
+        sheenColor: new THREE.Color(0xaab0b8),
       }),
     );
 
     const noseMat = this.trackMat(
-      new THREE.MeshStandardMaterial({
-        color: 0x111012,
-        emissive: 0x050506,
-        emissiveIntensity: 0.08,
-        roughness: 0.2,
-        metalness: 0.08,
+      new THREE.MeshPhysicalMaterial({
+        color: 0x101113,
+        emissive: 0x040406,
+        emissiveIntensity: 0.06,
+        roughness: 0.14,
+        metalness: 0.04,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.1,
       }),
     );
 
     const eyeDarkMat = this.trackMat(
-      new THREE.MeshStandardMaterial({
-        color: 0x120c09,
-        roughness: 0.07,
-        metalness: 0.14,
+      new THREE.MeshPhysicalMaterial({
+        color: 0x180e08, // warm soulful dark espresso-obsidian like Video Udo's eyes
+        roughness: 0.03,
+        metalness: 0.04,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.02,
+        reflectivity: 1.0,
+        ior: 1.52,
       }),
     );
 
     const eyeRimMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: 0x0e0d0d,
-        roughness: 0.65,
-        metalness: 0.02,
+        color: 0x111112,
+        roughness: 0.62,
+        metalness: 0.0,
       }),
     );
 
@@ -754,27 +1096,31 @@ export class WildDogActor {
       }),
     );
 
-    const hiddenCollarMat = this.trackMat(
+    const mouthInnerMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: 0x1d1e20,
-        roughness: 0.55,
-        metalness: 0.15,
+        color: 0x451f26,
+        roughness: 0.58,
+        metalness: 0.0,
       }),
     );
 
     const tongueMat = this.trackMat(
-      new THREE.MeshStandardMaterial({
-        color: 0xe67a8b,
-        roughness: 0.38,
-        metalness: 0.02,
+      new THREE.MeshPhysicalMaterial({
+        color: 0xed7b90,
+        emissive: 0x3a1019,
+        emissiveIntensity: 0.16,
+        roughness: 0.28,
+        metalness: 0.0,
+        clearcoat: 0.45,
+        clearcoatRoughness: 0.24,
       }),
     );
 
     const pawPadMat = this.trackMat(
       new THREE.MeshStandardMaterial({
-        color: 0x262526,
+        color: 0x353234,
         roughness: 0.72,
-        metalness: 0.02,
+        metalness: 0.0,
       }),
     );
 
@@ -791,7 +1137,7 @@ export class WildDogActor {
     };
 
     // Ground contact shadow (stays flush on chessboard surface)
-    const shadowGeo = this.trackGeo(new THREE.PlaneGeometry(1.12, 1.54));
+    const shadowGeo = this.trackGeo(new THREE.PlaneGeometry(1.14, 2.02));
     this.shadowMat = new THREE.MeshBasicMaterial({
       map: tex.shadowMap,
       transparent: true,
@@ -807,266 +1153,294 @@ export class WildDogActor {
     this.shadowMesh.position.set(0, 0.015, 0.02);
     this.root.add(this.shadowMesh);
 
-    // Agile Jack/Parson Russell Terrier body height
-    this.bodyPivot.position.set(0, 0.44, 0);
+    // Athletic, sleek, long-legged terrier stance matching Video Udo (paws rest flush at y = 0)
+    this.bodyPivot.position.set(0, 0.606, 0);
     this.root.add(this.bodyPivot);
 
-    // 1. Sculpted snowy-white rough-coated terrier torso
+    // 1. Sculpted pure snowy-white shaggy terrier torso (NO dark hip spot, NO black collar!)
     const torsoMesh = makeMesh(createTerrierBodyGeometry(), bodyCoatMat);
-    torsoMesh.position.set(0, 0.02, -0.02);
+    torsoMesh.position.set(0, 0.015, -0.02);
     this.bodyPivot.add(torsoMesh);
 
-    // Scruffy white terrier neck & chest furnishings (broken-coat texture along chest/shoulders)
-    const neckColumn = makeMesh(new THREE.CapsuleGeometry(0.165, 0.16, 8, 12), whiteWireTuftMat);
-    neckColumn.rotation.x = 0.62;
-    neckColumn.position.set(0, 0.165, 0.285);
+    // Lush pure-white shaggy neck & chest ruff seamlessly bridging shoulders and head (matches Video Udo!)
+    const neckColumn = makeMesh(createSculptedLegSegmentGeometry(0.168, 0.195, 0.28, 0.18), whiteWireTuftMat);
+    neckColumn.rotation.x = 0.56;
+    neckColumn.position.set(0, 0.145, 0.418);
     this.bodyPivot.add(neckColumn);
 
-    const bodyScruffTufts: ReadonlyArray<{
+    // Sculpted layered snowy-white chest ruff, shoulder fluff, belly feathering & plump haunch fluff
+    const sharedChestLock = this.trackGeo(createSculptedFurLockGeometry(0.115, 0.135, 0.105, 0.45, -0.02));
+    const sharedFlankLock = this.trackGeo(createSculptedFurLockGeometry(0.088, 0.115, 0.082, 0.36, -0.025));
+
+    const bodyFluffConfigs: ReadonlyArray<{
+      geo: THREE.BufferGeometry;
       p: [number, number, number];
       s: [number, number, number];
-      rot?: [number, number, number];
+      rot: [number, number, number];
     }> = [
-      { p: [0, 0.03, 0.35], s: [1.05, 0.95, 0.92] }, // scruffy white brisket/chest front
-      { p: [-0.14, 0.08, 0.21], s: [0.78, 0.72, 0.95], rot: [0, 0.2, 0] }, // left shoulder wirehair
-      { p: [0.14, 0.08, 0.21], s: [0.78, 0.72, 0.95], rot: [0, -0.2, 0] }, // right shoulder wirehair
-      { p: [0, 0.19, 0.12], s: [0.85, 0.52, 1.15] }, // subtle rough wither coat
+      // Plush layered white chest ruff (prominent in Video Udo sitting & leaping!)
+      { geo: sharedChestLock, p: [0, 0.015, 0.515], s: [1.3, 1.02, 1.05], rot: [0.35, 0, 0] },
+      { geo: sharedFlankLock, p: [-0.085, -0.02, 0.485], s: [0.94, 0.92, 0.9], rot: [0.42, -0.35, 0.28] },
+      { geo: sharedFlankLock, p: [0.085, -0.02, 0.485], s: [0.94, 0.92, 0.9], rot: [0.42, 0.35, -0.28] },
+      // Fluffy upper-neck nape ruff right behind his dark cheek mask
+      { geo: sharedChestLock, p: [0, 0.19, 0.325], s: [1.18, 0.72, 1.12], rot: [-0.45, 0, 0] },
+      { geo: sharedFlankLock, p: [-0.15, 0.095, 0.368], s: [0.96, 0.9, 1.05], rot: [0.18, -0.32, 0.35] },
+      { geo: sharedFlankLock, p: [0.15, 0.095, 0.368], s: [0.96, 0.9, 1.05], rot: [0.18, 0.32, -0.35] },
+      // Soft shaggy white belly & hip feathering
+      { geo: sharedFlankLock, p: [-0.145, -0.05, -0.215], s: [0.9, 0.82, 1.54], rot: [-0.55, -0.25, 0.25] },
+      { geo: sharedFlankLock, p: [0.145, -0.05, -0.215], s: [0.9, 0.82, 1.54], rot: [-0.55, 0.25, -0.25] },
+      { geo: sharedFlankLock, p: [-0.142, 0.02, -0.445], s: [0.94, 0.92, 0.95], rot: [-0.45, -0.22, 0.18] },
+      { geo: sharedFlankLock, p: [0.142, 0.02, -0.445], s: [0.94, 0.92, 0.95], rot: [-0.45, 0.22, -0.18] },
     ];
-    for (const bt of bodyScruffTufts) {
-      const m = makeMesh(new THREE.SphereGeometry(0.15, 10, 8), whiteWireTuftMat);
-      m.position.set(bt.p[0], bt.p[1], bt.p[2]);
-      m.scale.set(bt.s[0], bt.s[1], bt.s[2]);
-      if (bt.rot) m.rotation.set(bt.rot[0], bt.rot[1], bt.rot[2]);
+    for (const bf of bodyFluffConfigs) {
+      const m = new THREE.Mesh(bf.geo, whiteWireTuftMat);
+      m.castShadow = enableShadows;
+      m.receiveShadow = enableShadows;
+      m.position.set(bf.p[0], bf.p[1], bf.p[2]);
+      m.scale.set(bf.s[0], bf.s[1], bf.s[2]);
+      m.rotation.set(bf.rot[0], bf.rot[1], bf.rot[2]);
       this.bodyPivot.add(m);
     }
 
-    // Discreet dark collar tucked mostly beneath his scruffy white neck coat (glimpsed on left in Udo's photo)
-    const subtleCollar = makeMesh(new THREE.TorusGeometry(0.162, 0.018, 8, 18), hiddenCollarMat, false);
-    subtleCollar.position.set(0, 0.16, 0.285);
-    subtleCollar.rotation.x = Math.PI / 2 - 0.58;
-    this.bodyPivot.add(subtleCollar);
-
-    // 2. Udo's Head: dark grizzled mask + white center blaze + snowy-white scruffy bearded muzzle!
-    this.headPivot.position.set(0, 0.295, 0.355);
+    // 2. Video Udo's Head — slightly larger appealing proportions, symmetrical charcoal mask,
+    // crisp white forehead blaze, and iconic round fluffy white wirehair mustache & beard!
+    this.headPivot.position.set(0, 0.28, 0.488);
+    this.headPivot.scale.setScalar(1.09);
     this.bodyPivot.add(this.headPivot);
 
     const headMesh = makeMesh(createUdoHeadGeometry(), headCoatMat);
-    headMesh.position.set(0, 0.02, 0.04);
+    headMesh.position.set(0, 0.02, 0.045);
     this.headPivot.add(headMesh);
 
-    // Sculpted 3D white wirehair muzzle beard & mustache furnishings (gives Udo's unmistakable fluffy white snout!)
-    const muzzleMustacheLeft = makeMesh(new THREE.SphereGeometry(0.102, 12, 10), whiteWireTuftMat);
-    muzzleMustacheLeft.scale.set(0.96, 0.88, 1.24);
-    muzzleMustacheLeft.position.set(-0.068, -0.022, 0.248);
-    muzzleMustacheLeft.rotation.y = -0.14;
-    this.headPivot.add(muzzleMustacheLeft);
+    // Sculpted soft fluffy white mustache/muzzle puffs (no boxy balls, blends warmly into snout!)
+    const sharedMustacheGeo = this.trackGeo(createSculptedFurLockGeometry(0.088, 0.076, 0.105, 0.62, -0.015));
+    const sharedBeardSweepGeo = this.trackGeo(createSculptedFurLockGeometry(0.044, 0.082, 0.046, 0.28, -0.018));
+    const sharedBrowLockGeo = this.trackGeo(createSculptedFurLockGeometry(0.036, 0.068, 0.034, 0.26, 0.016));
+    const sharedCheekLockGeo = this.trackGeo(createSculptedFurLockGeometry(0.048, 0.075, 0.046, 0.3, -0.014));
 
-    const muzzleMustacheRight = makeMesh(new THREE.SphereGeometry(0.102, 12, 10), whiteWireTuftMat);
-    muzzleMustacheRight.scale.set(0.96, 0.88, 1.24);
-    muzzleMustacheRight.position.set(0.068, -0.022, 0.248);
-    muzzleMustacheRight.rotation.y = 0.14;
-    this.headPivot.add(muzzleMustacheRight);
-
-    const snoutBridgeFluff = makeMesh(new THREE.SphereGeometry(0.092, 12, 10), whiteWireTuftMat);
-    snoutBridgeFluff.scale.set(1.04, 0.76, 1.32);
-    snoutBridgeFluff.position.set(0, 0.032, 0.255);
+    // Rounded bushy white upper snout bridge & twin mustache cushions framing the glossy black nose
+    const snoutBridgeFluff = makeMesh(
+      createSculptedFurLockGeometry(0.084, 0.056, 0.098, 0.68, 0),
+      whiteWireTuftMat,
+    );
+    snoutBridgeFluff.position.set(0, 0.032, 0.225);
     this.headPivot.add(snoutBridgeFluff);
 
-    // Feathered radial wirehair furnishings flaring out at the muzzle/cheek border & eyebrows (signature Udo look!)
     for (const side of [-1, 1]) {
-      // Scruffy grizzled-and-silver eyebrow arch above each dark eye
-      const browDark = makeMesh(new THREE.ConeGeometry(0.036, 0.115, 6), grizzleDarkTuftMat, false);
-      browDark.position.set(side * 0.095, 0.125, 0.165);
-      browDark.rotation.set(0.55, side * 0.35, side * -0.82);
-      this.headPivot.add(browDark);
+      // Full rounded fluffy white mustache cushion on each side of the nose
+      const mustache = new THREE.Mesh(sharedMustacheGeo, whiteWireTuftMat);
+      mustache.castShadow = enableShadows;
+      mustache.receiveShadow = enableShadows;
+      mustache.position.set(side * 0.066, -0.018, 0.228);
+      mustache.rotation.set(0.15, side * 0.26, side * -0.18);
+      this.headPivot.add(mustache);
 
-      const browSilver = makeMesh(new THREE.ConeGeometry(0.024, 0.095, 5), silverWispMat, false);
-      browSilver.position.set(side * 0.062, 0.132, 0.178);
-      browSilver.rotation.set(0.62, side * 0.22, side * -0.52);
-      this.headPivot.add(browSilver);
+      // Soft curved white wirehair whisker-beard sweeps flaring outward from the fluffy muzzle
+      const beardSweepUpper = new THREE.Mesh(sharedBeardSweepGeo, whiteWireTuftMat);
+      beardSweepUpper.position.set(side * 0.118, -0.012, 0.195);
+      beardSweepUpper.rotation.set(0.24, side * 0.42, side * -1.32);
+      this.headPivot.add(beardSweepUpper);
 
-      // Wispy white wirehair tufts radiating from upper snout just below the eyes (seen clearly in Udo's photo!)
-      const snoutWisp1 = makeMesh(new THREE.ConeGeometry(0.028, 0.105, 5), whiteWireTuftMat, false);
-      snoutWisp1.position.set(side * 0.105, 0.015, 0.205);
-      snoutWisp1.rotation.set(0.18, side * 0.45, side * -1.18);
-      this.headPivot.add(snoutWisp1);
+      const beardSweepLower = new THREE.Mesh(sharedBeardSweepGeo, whiteWireTuftMat);
+      beardSweepLower.scale.set(0.95, 0.92, 0.9);
+      beardSweepLower.position.set(side * 0.115, -0.056, 0.212);
+      beardSweepLower.rotation.set(-0.18, side * 0.28, side * -1.58);
+      this.headPivot.add(beardSweepLower);
 
-      const snoutWisp2 = makeMesh(new THREE.ConeGeometry(0.026, 0.095, 5), whiteWireTuftMat, false);
-      snoutWisp2.position.set(side * 0.112, -0.038, 0.235);
-      snoutWisp2.rotation.set(-0.1, side * 0.32, side * -1.35);
-      this.headPivot.add(snoutWisp2);
+      // Video Udo's expressive shaggy bushy terrier eyebrows (layered charcoal + warm silver-white wisps!)
+      const browDarkOuter = new THREE.Mesh(sharedBrowLockGeo, grizzleDarkTuftMat);
+      browDarkOuter.position.set(side * 0.098, 0.132, 0.162);
+      browDarkOuter.rotation.set(0.72, side * 0.28, side * -0.96);
+      this.headPivot.add(browDarkOuter);
 
-      // Dark grizzled cheek scruff framing the rear of the white beard
-      const cheekScruff = makeMesh(new THREE.ConeGeometry(0.04, 0.11, 6), grizzleDarkTuftMat, false);
-      cheekScruff.position.set(side * 0.172, -0.018, 0.095);
-      cheekScruff.rotation.set(-0.15, side * -0.25, side * -1.25);
-      this.headPivot.add(cheekScruff);
+      const browSilverInner = new THREE.Mesh(sharedBrowLockGeo, silverWispMat);
+      browSilverInner.scale.set(0.78, 0.85, 0.78);
+      browSilverInner.position.set(side * 0.06, 0.138, 0.174);
+      browSilverInner.rotation.set(0.78, side * 0.16, side * -0.58);
+      this.headPivot.add(browSilverInner);
+
+      // Soft dark-charcoal grizzle cheek scruff framing the side of the face behind the white beard
+      const cheekDark = new THREE.Mesh(sharedCheekLockGeo, grizzleDarkTuftMat);
+      cheekDark.position.set(side * 0.174, -0.008, 0.088);
+      cheekDark.rotation.set(-0.22, side * -0.2, side * -1.34);
+      this.headPivot.add(cheekDark);
     }
 
-    // Tousled center-crown wirehair wisps right along the white blaze at the top of Udo's skull
-    for (const offset of [
-      { x: 0, z: 0.05, rotZ: 0.06, mat: whiteWireTuftMat },
-      { x: -0.032, z: 0.02, rotZ: 0.28, mat: silverWispMat },
-      { x: 0.032, z: 0.02, rotZ: -0.28, mat: silverWispMat },
+    // Soft tousled snowy-white crown fur tufts along the top of the white forehead blaze
+    const sharedCrownTuft = this.trackGeo(createSculptedFurLockGeometry(0.032, 0.052, 0.038, 0.34, -0.012));
+    for (const c of [
+      { x: 0, y: 0.218, z: 0.062, rotZ: 0.04, mat: whiteWireTuftMat },
+      { x: -0.032, y: 0.212, z: 0.038, rotZ: 0.34, mat: silverWispMat },
+      { x: 0.032, y: 0.212, z: 0.038, rotZ: -0.34, mat: silverWispMat },
     ]) {
-      const crestWisp = makeMesh(new THREE.ConeGeometry(0.024, 0.085, 5), offset.mat, false);
-      crestWisp.position.set(offset.x, 0.222, offset.z);
-      crestWisp.rotation.set(-0.28, 0, offset.rotZ);
-      this.headPivot.add(crestWisp);
+      const tuft = new THREE.Mesh(sharedCrownTuft, c.mat);
+      tuft.position.set(c.x, c.y, c.z);
+      tuft.rotation.set(-0.34, 0, c.rotZ);
+      this.headPivot.add(tuft);
     }
 
-    // Prominent heart-oval wet black terrier nose centered in the white scruffy muzzle
-    const nose = makeMesh(new THREE.SphereGeometry(0.052, 14, 12), noseMat);
-    nose.scale.set(1.28, 0.92, 0.92);
-    nose.position.set(0, 0.014, 0.372);
+    // Prominent glossy rounded-triangle wet jet-black nose centered atop the fluffy white mustache
+    const nose = makeMesh(createTerrierNoseGeometry(), noseMat);
+    nose.position.set(0, 0.012, 0.338);
     this.headPivot.add(nose);
 
-    // Subtle nostril curves on nose front
+    // Soulful, slightly larger dark espresso-obsidian terrier eyes with flush curved cornea catchlights
+    const eyeRadius = 0.047;
+    const sharedEyeGeo = this.trackGeo(new THREE.SphereGeometry(eyeRadius, 20, 16));
+    const sharedEyelidGeo = this.trackGeo(new THREE.TorusGeometry(eyeRadius * 0.96, 0.008, 8, 22));
+    const sharedGlintMainGeo = this.trackGeo(createFlushEyeGlintGeometry(eyeRadius, 0.28));
+    const sharedGlintSubGeo = this.trackGeo(createFlushEyeGlintGeometry(eyeRadius, 0.14));
+
     for (const side of [-1, 1]) {
-      const nostril = makeMesh(new THREE.SphereGeometry(0.014, 8, 6), eyeRimMat, false);
-      nostril.scale.set(0.85, 1.05, 0.6);
-      nostril.position.set(side * 0.024, 0.008, 0.412);
-      this.headPivot.add(nostril);
+      const eyeGroup = new THREE.Group();
+      eyeGroup.position.set(side * 0.094, 0.076, 0.178);
+      eyeGroup.rotation.y = side * 0.28;
+      eyeGroup.rotation.x = -0.06;
+      this.headPivot.add(eyeGroup);
+
+      const eyelidRim = new THREE.Mesh(sharedEyelidGeo, eyeRimMat);
+      eyelidRim.scale.set(1.06, 0.94, 0.85);
+      eyelidRim.position.set(0, 0, -0.006);
+      eyeGroup.add(eyelidRim);
+
+      const eye = new THREE.Mesh(sharedEyeGeo, eyeDarkMat);
+      eye.scale.set(1.04, 0.98, 0.95);
+      eyeGroup.add(eye);
+
+      // Flush curved studio catchlights (zero surface protrusion from oblique angles!)
+      const glintMain = new THREE.Mesh(sharedGlintMainGeo, eyeCatchlightMat);
+      glintMain.rotation.x = -0.34;
+      glintMain.rotation.y = -0.22;
+      eyeGroup.add(glintMain);
+
+      const glintSub = new THREE.Mesh(sharedGlintSubGeo, eyeCatchlightMat);
+      glintSub.rotation.x = 0.34;
+      glintSub.rotation.y = 0.24;
+      eyeGroup.add(glintSub);
     }
 
-    // Soulful, expressive dark almond-round terrier eyes nestled inside the dark grizzle patches
-    for (const side of [-1, 1]) {
-      const eyelidRim = makeMesh(new THREE.SphereGeometry(0.05, 12, 10), eyeRimMat, false);
-      eyelidRim.scale.set(1.08, 0.92, 0.86);
-      eyelidRim.position.set(side * 0.094, 0.074, 0.176);
-      this.headPivot.add(eyelidRim);
-
-      const eye = makeMesh(new THREE.SphereGeometry(0.045, 14, 12), eyeDarkMat, false);
-      eye.scale.set(1.04, 0.96, 0.95);
-      eye.position.set(side * 0.095, 0.075, 0.186);
-      this.headPivot.add(eye);
-
-      // Warm lifelike upper catchlight + tiny lower glint
-      const glintBig = makeMesh(new THREE.SphereGeometry(0.013, 8, 8), eyeCatchlightMat, false);
-      glintBig.position.set(side * 0.095 - 0.012, 0.09, 0.226);
-      this.headPivot.add(glintBig);
-
-      const glintSmall = makeMesh(new THREE.SphereGeometry(0.0065, 6, 6), eyeCatchlightMat, false);
-      glintSmall.position.set(side * 0.095 + 0.014, 0.066, 0.228);
-      this.headPivot.add(glintSmall);
-    }
-
-    // Articulated white-bearded lower jaw + happy pink tongue when barking
-    this.jawPivot.position.set(0, -0.062, 0.155);
+    // Articulated fluffy white-bearded lower jaw + happy curved pink tongue (matches Video Udo's leaping smile!)
+    this.jawPivot.position.set(0, -0.058, 0.148);
     this.headPivot.add(this.jawPivot);
 
-    const lowerJawBeard = makeMesh(new THREE.SphereGeometry(0.088, 12, 10), whiteWireTuftMat);
-    lowerJawBeard.scale.set(1.08, 0.72, 1.48);
-    lowerJawBeard.position.set(0, -0.022, 0.105);
+    const lowerJawBeard = makeMesh(
+      createSculptedFurLockGeometry(0.088, 0.056, 0.112, 0.68, 0),
+      whiteWireTuftMat,
+    );
+    lowerJawBeard.position.set(0, -0.028, 0.096);
     this.jawPivot.add(lowerJawBeard);
 
-    // Extra wispy chin-beard tuft underneath jaw
-    const chinTuft = makeMesh(new THREE.ConeGeometry(0.045, 0.09, 6), whiteWireTuftMat, false);
-    chinTuft.position.set(0, -0.068, 0.145);
-    chinTuft.rotation.x = 2.55;
-    this.jawPivot.add(chinTuft);
+    // Soft shaggy rounded chin beard underneath jaw (replaces pointy cone!)
+    const chinBeard = makeMesh(
+      createSculptedFurLockGeometry(0.064, 0.068, 0.062, 0.42, -0.015),
+      whiteWireTuftMat,
+      false,
+    );
+    chinBeard.position.set(0, -0.062, 0.128);
+    chinBeard.rotation.x = 2.68;
+    this.jawPivot.add(chinBeard);
 
-    this.tongueMesh = makeMesh(new THREE.CapsuleGeometry(0.032, 0.082, 5, 8), tongueMat, false);
-    this.tongueMesh.rotation.x = Math.PI / 2 + 0.42;
-    this.tongueMesh.scale.set(1.12, 1.0, 0.38);
-    this.tongueMesh.position.set(0, -0.008, 0.145);
+    const mouthBed = makeMesh(new THREE.SphereGeometry(0.052, 10, 8), mouthInnerMat, false);
+    mouthBed.scale.set(1.02, 0.42, 1.35);
+    mouthBed.position.set(0, 0.002, 0.092);
+    this.jawPivot.add(mouthBed);
+
+    this.tongueMesh = makeMesh(createSculptedTongueGeometry(), tongueMat, false);
+    this.tongueMesh.position.set(0, 0.004, 0.072);
     this.jawPivot.add(this.tongueMesh);
 
-    // 3. Udo's Signature High-Set Side-Folded ("Airplane") Feathered Dark Terrier Ears!
+    // 3. Video Udo's Signature High-Set Folded Forward-Drop ("Button") Dark Charcoal V-Ears!
+    const sharedEarCreaseTuft = this.trackGeo(createSculptedFurLockGeometry(0.032, 0.054, 0.036, 0.32, 0.012));
     const buildUdoEar = (side: number, pivot: THREE.Group) => {
-      pivot.position.set(side * 0.145, 0.178, -0.005);
+      pivot.position.set(side * 0.142, 0.172, 0.015);
 
-      // Sculpted V-shaped semi-drop dark grizzled ear flap arching out sideways & drooping at the tip
-      const earFlap = makeMesh(createUdoFoldedEarGeometry(side), earMat);
+      // Solid sculpted 3D folded V-drop terrier ear framing the cheek (matches Video Udo in arms & mid-leap!)
+      const earFlap = makeMesh(createUdoButtonEarGeometry(side), earMat);
       pivot.add(earFlap);
 
-      // Silver-white wirehair wisps right at the upper ear fold (matches Udo's photo!)
-      const foldSilverWisp = makeMesh(new THREE.ConeGeometry(0.024, 0.095, 5), silverWispMat, false);
-      foldSilverWisp.position.set(side * 0.075, 0.038, 0.025);
-      foldSilverWisp.rotation.z = side * -1.28;
-      foldSilverWisp.rotation.y = side * -0.25;
-      pivot.add(foldSilverWisp);
-
-      // Feathered dark charcoal outer ear-tip fringes drooping gracefully at the pointed outer end
-      const tipFringeMain = makeMesh(new THREE.ConeGeometry(0.022, 0.095, 5), grizzleDarkTuftMat, false);
-      tipFringeMain.position.set(side * 0.258, -0.095, 0.026);
-      tipFringeMain.rotation.z = side * -2.38;
-      tipFringeMain.rotation.x = 0.12;
-      pivot.add(tipFringeMain);
-
-      const tipFringeSub = makeMesh(new THREE.ConeGeometry(0.016, 0.078, 5), grizzleDarkTuftMat, false);
-      tipFringeSub.position.set(side * 0.228, -0.068, 0.012);
-      tipFringeSub.rotation.z = side * -2.18;
-      pivot.add(tipFringeSub);
+      // Soft silvery-grey wirehair tuft tucked naturally at the upper ear crease
+      const creaseWisp = new THREE.Mesh(sharedEarCreaseTuft, silverWispMat);
+      creaseWisp.position.set(side * 0.042, 0.036, 0.022);
+      creaseWisp.rotation.set(0.28, side * 0.22, side * -1.05);
+      pivot.add(creaseWisp);
 
       this.headPivot.add(pivot);
     };
     buildUdoEar(-1, this.earLeftPivot);
     buildUdoEar(1, this.earRightPivot);
 
-    // 4. Jaunty Compact Upright-Angled White Wirehair Terrier Tail (with subtle dark root patch)
-    this.tailPivot.position.set(0, 0.145, -0.375);
+    // 4. Video Udo's Pure Snowy-White Fluffy Tapered Carrot Terrier Tail (NO dark root spot!)
+    this.tailPivot.position.set(0, 0.132, -0.522);
     this.bodyPivot.add(this.tailPivot);
 
-    const tailRootSpot = makeMesh(new THREE.SphereGeometry(0.064, 10, 8), grizzleDarkTuftMat);
-    tailRootSpot.position.set(0.018, 0.008, -0.012);
-    this.tailPivot.add(tailRootSpot);
+    const tailMesh = makeMesh(createSculptedTerrierTailGeometry(), whiteWireTuftMat);
+    this.tailPivot.add(tailMesh);
 
-    const tailShaft = makeMesh(new THREE.CapsuleGeometry(0.045, 0.135, 6, 10), whiteWireTuftMat);
-    tailShaft.rotation.x = -0.46; // jaunty compact terrier tail carriage!
-    tailShaft.position.set(0, 0.082, -0.041);
-    this.tailPivot.add(tailShaft);
+    // 5. Four Long Athletic Snowy-White Shaggy Terrier Legs & Soft Multi-Toed White Paws
+    const sharedFrontUpper = this.trackGeo(createSculptedLegSegmentGeometry(0.08, 0.059, 0.315, 0.24));
+    const sharedBackUpper = this.trackGeo(createSculptedLegSegmentGeometry(0.096, 0.064, 0.322, 0.28));
+    const sharedLowerLeg = this.trackGeo(createSculptedLegSegmentGeometry(0.059, 0.047, 0.296, 0.26));
+    const sharedLegFeather = this.trackGeo(createSculptedFurLockGeometry(0.04, 0.082, 0.042, 0.32, -0.015));
+    const sharedPawMain = this.trackGeo(createSculptedFurLockGeometry(0.068, 0.044, 0.084, 0.78, 0));
+    const sharedToeGeo = this.trackGeo(new THREE.SphereGeometry(0.021, 8, 6));
+    const sharedSolePad = this.trackGeo(new THREE.SphereGeometry(0.046, 8, 6));
 
-    const tailTipTuft = makeMesh(new THREE.ConeGeometry(0.042, 0.072, 6), whiteWireTuftMat);
-    tailTipTuft.rotation.x = -0.46;
-    tailTipTuft.position.set(0, 0.16, -0.079);
-    this.tailPivot.add(tailTipTuft);
-
-    // 5. Four Sturdy, Slightly Fluffy White Wirehair Terrier Legs & Compact Paws
     const buildTerrierLeg = (x: number, y: number, z: number, isBack: boolean): TerrierLegRig => {
       const hip = new THREE.Group();
       hip.position.set(x, y, z);
       this.bodyPivot.add(hip);
 
-      const upper = makeMesh(
-        new THREE.CapsuleGeometry(isBack ? 0.088 : 0.078, 0.12, 6, 10),
-        whiteWireTuftMat,
-      );
-      upper.position.set(0, -0.095, 0);
+      const upper = new THREE.Mesh(isBack ? sharedBackUpper : sharedFrontUpper, whiteWireTuftMat);
+      upper.castShadow = enableShadows;
+      upper.receiveShadow = enableShadows;
+      upper.position.set(0, -0.135, isBack ? -0.012 : 0);
       hip.add(upper);
 
       const shin = new THREE.Group();
-      shin.position.set(0, -0.19, 0);
+      shin.position.set(0, -0.27, 0);
       hip.add(shin);
 
-      const lower = makeMesh(new THREE.CapsuleGeometry(0.064, 0.13, 6, 10), whiteWireTuftMat);
-      lower.position.set(0, -0.085, 0.008);
+      const lower = new THREE.Mesh(sharedLowerLeg, whiteWireTuftMat);
+      lower.castShadow = enableShadows;
+      lower.receiveShadow = enableShadows;
+      lower.position.set(0, -0.126, 0.008);
       shin.add(lower);
 
-      // Scruffy white wirehair feathering on rear of foreleg/pastern
-      const legFeather = makeMesh(new THREE.ConeGeometry(0.036, 0.09, 5), whiteWireTuftMat, false);
-      legFeather.position.set(0, -0.095, -0.048);
-      legFeather.rotation.x = -2.65;
+      // Soft shaggy white fur feathering along back of lower leg/pastern
+      const legFeather = new THREE.Mesh(sharedLegFeather, whiteWireTuftMat);
+      legFeather.position.set(0, -0.13, -0.04);
+      legFeather.rotation.x = -2.55;
       shin.add(legFeather);
 
-      // Compact rounded white terrier cat-paw + dark charcoal sole pad
-      const paw = makeMesh(new THREE.SphereGeometry(0.072, 10, 8), whiteWireTuftMat);
-      paw.scale.set(1.02, 0.72, 1.28);
-      paw.position.set(0, -0.185, 0.034);
+      // Fluffy rounded pure-white terrier paw resting flush at y = 0
+      const paw = new THREE.Mesh(sharedPawMain, whiteWireTuftMat);
+      paw.castShadow = enableShadows;
+      paw.receiveShadow = enableShadows;
+      paw.position.set(0, -0.256, 0.032);
       shin.add(paw);
 
-      const solePad = makeMesh(new THREE.SphereGeometry(0.052, 8, 6), pawPadMat, false);
-      solePad.scale.set(1.0, 0.35, 1.18);
-      solePad.position.set(0, -0.218, 0.032);
+      // 4 soft rounded snowy-white furry toes matching Video Udo's cute paws
+      for (const ang of [-0.42, -0.14, 0.14, 0.42]) {
+        const toe = new THREE.Mesh(sharedToeGeo, whiteWireTuftMat);
+        toe.scale.set(0.92, 0.85, 1.32);
+        toe.position.set(Math.sin(ang) * 0.052, -0.267, 0.078 + Math.cos(ang) * 0.022);
+        toe.rotation.y = ang;
+        shin.add(toe);
+      }
+
+      // Discreet recessed dark paw sole pad tucked strictly underneath (not bulging out sides!)
+      const solePad = new THREE.Mesh(sharedSolePad, pawPadMat);
+      solePad.scale.set(0.92, 0.28, 1.08);
+      solePad.position.set(0, -0.285, 0.032);
       shin.add(solePad);
 
       return { hip, shin };
     };
 
-    this.legFL = buildTerrierLeg(-0.145, -0.03, 0.235, false);
-    this.legFR = buildTerrierLeg(0.145, -0.03, 0.235, false);
-    this.legBL = buildTerrierLeg(-0.152, -0.02, -0.245, true);
-    this.legBR = buildTerrierLeg(0.152, -0.02, -0.245, true);
+    this.legFL = buildTerrierLeg(-0.142, -0.04, 0.38, false);
+    this.legFR = buildTerrierLeg(0.142, -0.04, 0.38, false);
+    this.legBL = buildTerrierLeg(-0.15, -0.04, -0.396, true);
+    this.legBR = buildTerrierLeg(0.15, -0.04, -0.396, true);
 
     // 6. Energetic paw-kick dust puffs as Udo zooms across the chessboard
     const puffGeo = this.trackGeo(new THREE.SphereGeometry(0.072, 8, 6));
@@ -1205,7 +1579,6 @@ export class WildDogActor {
     }
     if (!slot) return;
 
-    // Pick predominantly warm golden-champagne hues (~90%) with rare soft silver-cream glint (~10%)
     const rPick = Math.random();
     const pal =
       rPick < 0.34
@@ -1224,13 +1597,15 @@ export class WildDogActor {
       ? (isInitialBurst ? 0.68 : 0.56) + Math.random() * 0.56
       : (isInitialBurst ? 0.62 : 0.5) + Math.random() * 0.52;
 
-    // Hero star glints + medium & petite star cross flares, paired with delicate golden fairy-dust motes
     const sizeRoll = Math.random();
     slot.baseScale = isStar
-      ? (sizeRoll > 0.82 ? 0.28 + Math.random() * 0.13 : 0.14 + Math.random() * 0.13) * dogScale
-      : (0.055 + Math.random() * 0.075) * dogScale;
+      ? (sizeRoll > 0.86
+          ? 0.2 + Math.random() * 0.08
+          : sizeRoll > 0.42
+            ? 0.085 + Math.random() * 0.07
+            : 0.042 + Math.random() * 0.043) * dogScale
+      : (0.024 + Math.random() * 0.04) * dogScale;
 
-    // Keep 4-point star cross rays mostly upright/horizontal like the video, with gentle magical shimmer tilt
     slot.roll = isStar ? (Math.random() - 0.5) * 0.32 : Math.random() * Math.PI * 2;
     slot.spinSpeed = isStar ? (Math.random() - 0.5) * 0.55 : (Math.random() - 0.5) * 1.4;
     slot.twinklePhase = Math.random() * Math.PI * 2;
@@ -1242,7 +1617,6 @@ export class WildDogActor {
 
     slot.pos.copy(pos);
 
-    // Gentle forward carry + airy dispersion so sparkles form a luminous hanging ribbon from Angel's arms
     const carrySpeed = (isInitialBurst ? 0.55 + Math.random() * 1.25 : 0.35 + Math.random() * 0.85) * dogScale;
     const radialSpread = (isInitialBurst ? 0.62 : 0.42) * dogScale;
     slot.vel.set(
@@ -1268,15 +1642,15 @@ export class WildDogActor {
     this.launchForward.copy(_sparkleFwd);
     _sparkleRight.crossVectors(_sparkleUpAxis, _sparkleFwd).normalize();
 
-    this.sparkleTrailWindowSec = 0.98;
+    this.sparkleTrailWindowSec = 1.15;
     this.sparkleStarAccum = 0;
     this.sparkleMoteAccum = 0;
 
-    // Immediate magical burst right around & behind Udo bridging Chess Angel's elevated arms into 3D space
-    for (let i = 0; i < 24; i++) {
-      const backDist = (-0.06 + Math.random() * 0.78) * dogScale;
-      const sideOffset = (Math.random() - 0.5) * 0.48 * dogScale;
-      const liftOffset = (0.18 + Math.random() * 0.62) * dogScale;
+    // Dense shimmering veil of fine smaller golden stars wrapping right around Udo's portrait-to-3D exit
+    for (let i = 0; i < 54; i++) {
+      const backDist = (-0.24 + Math.random() * 1.16) * dogScale;
+      const sideOffset = (Math.random() - 0.5) * 1.12 * dogScale;
+      const liftOffset = (0.04 + Math.random() * 0.7) * dogScale;
       _sparkleSpawnPos
         .copy(launchOrigin)
         .addScaledVector(_sparkleFwd, -backDist)
@@ -1285,10 +1659,11 @@ export class WildDogActor {
       this.emitSparkleParticle(this.sparkleStars, true, _sparkleSpawnPos, _sparkleFwd, dogScale, true);
     }
 
-    for (let i = 0; i < 30; i++) {
-      const backDist = (-0.08 + Math.random() * 0.85) * dogScale;
-      const sideOffset = (Math.random() - 0.5) * 0.54 * dogScale;
-      const liftOffset = (0.14 + Math.random() * 0.66) * dogScale;
+    // Lush cloud of tiny golden fairy-dust motes camouflaging the transition edge
+    for (let i = 0; i < 82; i++) {
+      const backDist = (-0.26 + Math.random() * 1.2) * dogScale;
+      const sideOffset = (Math.random() - 0.5) * 1.18 * dogScale;
+      const liftOffset = (0.02 + Math.random() * 0.74) * dogScale;
       _sparkleSpawnPos
         .copy(launchOrigin)
         .addScaledVector(_sparkleFwd, -backDist)
@@ -1331,9 +1706,9 @@ export class WildDogActor {
   }
 
   /**
-   * Animates Udo's exuberant Jack/Parson Russell Terrier bound, bouncing semi-drop airplane ears,
-   * rapid terrier tail wag, barking bearded jaw snap, grounded contact shadow, paw puffs, and
-   * golden magical jump sparkles.
+   * Animates Video Udo's joyful terrier bound, bouncing folded V-drop ears,
+   * rapid snowy-white carrot tail wag, cheerful open-mouth barking smile & pink tongue,
+   * grounded contact shadow, paw puffs, and golden magical jump sparkles.
    */
   public update(
     dt: number,
@@ -1345,49 +1720,51 @@ export class WildDogActor {
     cameraQuat?: THREE.Quaternion,
     moveTangent?: THREE.Vector3,
   ): void {
-    const scamperFreq = 25.0; // springy athletic terrier gallop!
+    const scamperFreq = 25.0;
     const phase = elapsedSec * scamperFreq;
     const airHeight = Math.max(0, worldPos.y - groundY);
 
     // Springy terrier bound & shoulder roll
-    const strideBounce = Math.abs(Math.sin(phase)) * 0.145;
-    this.bodyPivot.position.y = 0.44 + strideBounce;
-    this.bodyPivot.rotation.x = Math.cos(phase) * 0.24 - Math.min(0.32, airHeight * 0.2);
-    this.bodyPivot.rotation.z = Math.sin(phase * 0.5) * 0.095;
+    const strideBounce = Math.abs(Math.sin(phase)) * 0.15;
+    this.bodyPivot.position.y = 0.606 + strideBounce;
+    this.bodyPivot.rotation.x = Math.cos(phase) * 0.23 - Math.min(0.3, airHeight * 0.19);
+    this.bodyPivot.rotation.z = Math.sin(phase * 0.5) * 0.09;
 
     // Athletic rotary terrier gallop kinematics
     const setLeg = (rig: TerrierLegRig, p: number, isBack: boolean) => {
-      const swing = Math.sin(p) * (isBack ? 0.96 : 0.92);
+      const swing = Math.sin(p) * (isBack ? 0.94 : 0.9);
       rig.hip.rotation.x = swing;
-      const kneeFlex = Math.max(0, -Math.cos(p)) * (isBack ? 0.88 : 0.96);
-      rig.shin.rotation.x = isBack ? -kneeFlex * 0.82 : kneeFlex;
+      const kneeFlex = Math.max(0, -Math.cos(p)) * (isBack ? 0.86 : 0.94);
+      rig.shin.rotation.x = isBack ? -kneeFlex * 0.8 : kneeFlex;
     };
     setLeg(this.legFL, phase, false);
     setLeg(this.legFR, phase + 0.46, false);
     setLeg(this.legBL, phase + Math.PI, true);
     setLeg(this.legBR, phase + Math.PI + 0.46, true);
 
-    // Alert terrier head carriage, inquisitive tilt & barking bearded lower jaw
+    // Joyful terrier head carriage, expressive open-mouth smile (especially mid-leap!) & barking jaw
     const b = THREE.MathUtils.clamp(barkOpen01, 0, 1);
-    this.headPivot.rotation.x = -0.1 - b * 0.22 + Math.sin(phase + 0.5) * 0.085;
-    this.headPivot.rotation.y = Math.sin(elapsedSec * 9.2) * 0.15;
-    this.headPivot.rotation.z = Math.sin(elapsedSec * 11.5) * 0.085;
-    this.jawPivot.rotation.x = 0.1 + b * 0.56;
-    this.tongueMesh.position.z = 0.145 + b * 0.036;
-    this.tongueMesh.rotation.x = Math.PI / 2 + 0.42 + b * 0.22;
+    const leapSmile = Math.min(0.35, airHeight * 0.16);
+    const mouthOpen = Math.max(b, leapSmile);
+    this.headPivot.rotation.x = -0.09 - b * 0.2 + Math.sin(phase + 0.5) * 0.08;
+    this.headPivot.rotation.y = Math.sin(elapsedSec * 9.2) * 0.14;
+    this.headPivot.rotation.z = Math.sin(elapsedSec * 11.5) * 0.08;
+    this.jawPivot.rotation.x = 0.14 + mouthOpen * 0.52;
+    this.tongueMesh.position.z = 0.072 + mouthOpen * 0.028;
+    this.tongueMesh.rotation.x = 0.12 + mouthOpen * 0.24;
 
-    // Udo's folded semi-drop ("airplane") ears bounce springily up & outward as he bounds!
-    const earLift = Math.abs(Math.sin(phase - 0.32)) * 0.34 + Math.min(0.35, airHeight * 0.24);
-    this.earLeftPivot.rotation.z = -0.06 - earLift;
-    this.earRightPivot.rotation.z = 0.06 + earLift;
-    this.earLeftPivot.rotation.x = 0.04 - b * 0.1;
-    this.earRightPivot.rotation.x = 0.04 - b * 0.1;
+    // Folded forward-drop V-ears bounce playfully outward/upward with each stride & leap
+    const earFlop = Math.abs(Math.sin(phase - 0.3)) * 0.28 + Math.min(0.32, airHeight * 0.2);
+    this.earLeftPivot.rotation.z = -0.04 - earFlop;
+    this.earRightPivot.rotation.z = 0.04 + earFlop;
+    this.earLeftPivot.rotation.x = -0.04 - earFlop * 0.35 - b * 0.08;
+    this.earRightPivot.rotation.x = -0.04 - earFlop * 0.35 - b * 0.08;
 
-    // Classic rapid, spirited terrier tail wag!
-    this.tailPivot.rotation.z = Math.sin(elapsedSec * 36.0) * 0.58;
-    this.tailPivot.rotation.x = -0.08 + Math.cos(phase) * 0.18;
+    // Spirited rapid terrier tail wag
+    this.tailPivot.rotation.z = Math.sin(elapsedSec * 36.0) * 0.56;
+    this.tailPivot.rotation.x = -0.06 + Math.cos(phase) * 0.16;
 
-    // Keep contact shadow flush on the board plane directly below Udo, fading smoothly outside the board rim
+    // Keep contact shadow flush on the board plane directly below Udo
     const dogScale = Math.max(0.5, this.root.scale.x);
     const invScale = 1 / dogScale;
     this.shadowMesh.position.y = (groundY + 0.016 - worldPos.y) * invScale;
@@ -1410,16 +1787,16 @@ export class WildDogActor {
       }
       _sparkleRight.crossVectors(_sparkleUpAxis, _sparkleFwd).normalize();
 
-      const starInterval = THREE.MathUtils.lerp(0.065, 0.02, trailIntensity);
-      const moteInterval = THREE.MathUtils.lerp(0.055, 0.016, trailIntensity);
+      const starInterval = THREE.MathUtils.lerp(0.042, 0.011, trailIntensity);
+      const moteInterval = THREE.MathUtils.lerp(0.032, 0.0085, trailIntensity);
       this.sparkleStarAccum += dt;
       this.sparkleMoteAccum += dt;
 
       while (this.sparkleStarAccum >= starInterval) {
         this.sparkleStarAccum -= starInterval;
-        const backDist = (0.18 + Math.random() * 0.46) * dogScale;
-        const sideOffset = (Math.random() - 0.5) * 0.36 * dogScale;
-        const liftOffset = (0.18 + Math.random() * 0.48) * dogScale;
+        const backDist = (-0.06 + Math.random() * 0.62) * dogScale;
+        const sideOffset = (Math.random() - 0.5) * 0.62 * dogScale;
+        const liftOffset = (0.08 + Math.random() * 0.52) * dogScale;
         _sparkleSpawnPos
           .copy(worldPos)
           .addScaledVector(_sparkleFwd, -backDist)
@@ -1430,9 +1807,9 @@ export class WildDogActor {
 
       while (this.sparkleMoteAccum >= moteInterval) {
         this.sparkleMoteAccum -= moteInterval;
-        const backDist = (0.14 + Math.random() * 0.52) * dogScale;
-        const sideOffset = (Math.random() - 0.5) * 0.42 * dogScale;
-        const liftOffset = (0.14 + Math.random() * 0.52) * dogScale;
+        const backDist = (-0.08 + Math.random() * 0.68) * dogScale;
+        const sideOffset = (Math.random() - 0.5) * 0.68 * dogScale;
+        const liftOffset = (0.06 + Math.random() * 0.56) * dogScale;
         _sparkleSpawnPos
           .copy(worldPos)
           .addScaledVector(_sparkleFwd, -backDist)
@@ -1468,7 +1845,6 @@ export class WildDogActor {
           anySparkleActive = true;
           const k = sp.age / sp.life;
 
-          // Airy deceleration + subtle magical upward float & flutter
           sp.pos.addScaledVector(sp.vel, dt);
           sp.pos.y += Math.sin(elapsedSec * sp.swirlFreq + sp.twinklePhase) * 0.16 * dt;
           sp.vel.multiplyScalar(Math.max(0, 1 - dt * 2.7));

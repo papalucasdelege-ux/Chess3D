@@ -3438,6 +3438,7 @@ export default function App() {
       setCalcShowingPending(false);
       clearForkArrowsTimer();
       sceneRef.current?.stopCalculationPreview(false);
+      sceneRef.current?.stopOpeningFlowchart();
       setCalcPreview(null);
       setCoachArrows([]);
       setIsThinkingAi(false);
@@ -3949,6 +3950,8 @@ export default function App() {
 
       thankJanPlayingUntilRef.current = 0;
       setAngelModalEnabled(false);
+      sceneRef.current?.stopOpeningFlowchart();
+      sceneRef.current?.stopCalcPureTree();
       setCalcPreview(null);
       setTreeBrowser(null);
       if (awaitingDistractionModalRef.current || holdBotUntilRef.current > 0) {
@@ -5532,6 +5535,12 @@ export default function App() {
         forcedIdleUrl={previewIdleUrl}
         forcedIdleCueAtSec={dogRunCueSec}
         onForcedIdleCueReached={handleForcedIdleCueReached}
+        onOpeningVideoProgress={(active, currentTime, portraitRect) => {
+          sceneRef.current?.syncOpeningFlowchart(active, currentTime, portraitRect);
+        }}
+        onCalcPureVideoProgress={(active, currentTime, portraitRect) => {
+          sceneRef.current?.syncCalcPureTree(active, currentTime, portraitRect);
+        }}
         danceWithStarsActive={danceStarsActive}
         onSelectTreeSimulation={handleSelectTreeSimulation}
         onStepTreeSimulation={handleStepTreeSimulation}

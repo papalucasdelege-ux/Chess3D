@@ -59,7 +59,9 @@
     "level_advanced": "/assets/aistudio/builtin_level_advanced.mp4",
     "level_master": "/assets/aistudio/builtin_level_master.mp4",
     "level_grandmaster": "/assets/aistudio/builtin_level_grandmaster.mp4",
-    "seduction_6": "/assets/aistudio/builtin_seduction_6.mp4"
+    "seduction_6": "/assets/aistudio/builtin_seduction_6.mp4",
+    "ask_promotion_2": "/assets/aistudio/angel_case_ask_promotion_2.mp4",
+    "warn_mate": "/assets/aistudio/angel_case_warn_mate.mp4?v=1795710051566"
   },
   "escapes": {
     "point_you": "/assets/aistudio/angel_escape_point_you.mp4",
@@ -108,13 +110,24 @@
     "calc_offer": {
       "point_you": "off",
       "point_me": "off"
+    },
+    "seduction": {
+      "point_you": "off",
+      "point_me": "off",
+      "push_button": "off"
+    },
+    "thank_jan": {
+      "point_you": "off",
+      "point_me": "off",
+      "push_button": "off"
     }
   },
   "lipSync": {
     "defaultEnabled": true,
     "groups": {},
     "cases": {
-      "seduction": "off"
+      "seduction": "off",
+      "thank_jan": "off"
     }
   },
   "videoDurations": {
@@ -129,7 +142,6 @@
     "/assets/aistudio/angel_case_intro.mp4": 5.1,
     "/assets/aistudio/angel_case_lost_queen.mp4": 8.1,
     "/assets/aistudio/angel_case_new_match.mp4": 10.1,
-    "/assets/aistudio/angel_case_opening.mp4": 10.1,
     "/assets/aistudio/angel_case_seduction.mp4": 5.1,
     "/assets/aistudio/angel_case_seduction_2.mp4": 20.1,
     "/assets/aistudio/angel_case_seduction_3.mp4": 15.1,
@@ -183,32 +195,22 @@
     "/assets/aistudio/builtin_default_speaking.mp4": 5.3,
     "/assets/aistudio/builtin_escape_point_me_3.mp4": 3.1,
     "/assets/aistudio/builtin_escape_point_you_3.mp4": 3.1,
-    "/assets/aistudio/angel_case_seduction_4.mp4": 8.1,
-    "/assets/aistudio/angel_idle_idle_8.mp4": 8.1,
     "/assets/aistudio/builtin_idle_8.mp4": 8.1,
     "/assets/aistudio/builtin_seduction_4.mp4": 8.1,
-    "/assets/aistudio/angel_case_hesitate_hint.mp4": 9.1,
     "/assets/aistudio/builtin_hesitate_hint.mp4": 9.1,
-    "/assets/aistudio/angel_case_resign.mp4": 8.1,
     "/assets/aistudio/builtin_thank_jan.mp4": 12.1,
-    "/assets/aistudio/angel_case_clock_timeout.mp4": 6.1,
-    "/assets/aistudio/angel_case_promotion.mp4": 6.1,
     "/assets/aistudio/builtin_promotion.mp4": 6.1,
-    "/assets/aistudio/angel_case_seduction_5.mp4": 12.1,
     "/assets/aistudio/builtin_seduction_5.mp4": 12.1,
     "/assets/aistudio/builtin_dog_run.mp4": 8.9,
-    "/assets/aistudio/angel_case_seduction_6.mp4": 10.1,
     "/assets/aistudio/builtin_seduction_6.mp4": 10.1,
-    "/assets/aistudio/angel_special_dance_stars.mp4": 10.1,
-    "/assets/aistudio/angel_case_undo_done_2.mp4": 5.1,
     "/assets/aistudio/builtin_dance_stars.mp4": 10.1,
-    "/assets/aistudio/builtin_undo_done_2.mp4": 5.1,
-    "/assets/aistudio/angel_case_alt_shown.mp4": 5.1,
-    "/assets/aistudio/builtin_alt_shown.mp4": 5.1
+    "/assets/aistudio/angel_case_ask_promotion_2.mp4": 11.1,
+    "/assets/aistudio/angel_case_warn_mate.mp4": 7.1
   },
   "videoSizes": {
     "/assets/aistudio/angel_case_angel_modal_off.mp4": 2625151,
     "/assets/aistudio/angel_case_angel_modal_on.mp4": 2523863,
+    "/assets/aistudio/angel_case_ask_promotion_2.mp4": 1814617,
     "/assets/aistudio/angel_case_calc_offer.mp4": 1359442,
     "/assets/aistudio/angel_case_calc_pure.mp4": 3000486,
     "/assets/aistudio/angel_case_calc_showing.mp4": 703202,
@@ -230,6 +232,7 @@
     "/assets/aistudio/angel_case_warn_fork_2step.mp4": 1012361,
     "/assets/aistudio/angel_case_warn_fork_2step_2.mp4": 707725,
     "/assets/aistudio/angel_case_warn_king_file.mp4": 655223,
+    "/assets/aistudio/angel_case_warn_mate.mp4": 1335174,
     "/assets/aistudio/angel_case_warn_pawn_promo.mp4": 969780,
     "/assets/aistudio/angel_case_watch_bishop.mp4": 644949,
     "/assets/aistudio/angel_default_speaking_default.mp4": 549651,
@@ -290,6 +293,12 @@
     },
     "/assets/aistudio/angel_case_angel_modal_on.mp4": {
       "size": 2523863,
+      "crf": 21,
+      "width": 560,
+      "height": 752
+    },
+    "/assets/aistudio/angel_case_ask_promotion_2.mp4": {
+      "size": 1814617,
       "crf": 21,
       "width": 560,
       "height": 752
@@ -416,6 +425,12 @@
     },
     "/assets/aistudio/angel_case_warn_king_file.mp4": {
       "size": 655223,
+      "crf": 21,
+      "width": 560,
+      "height": 752
+    },
+    "/assets/aistudio/angel_case_warn_mate.mp4": {
+      "size": 1335174,
       "crf": 21,
       "width": 560,
       "height": 752
@@ -764,7 +779,9 @@
     "case:hesitate_hint": true,
     "case:thank_jan": true,
     "case:resign": true,
-    "case:ask_promotion": true
+    "case:ask_promotion": true,
+    "special:dog_run": true,
+    "special:dance_stars": true
   },
   "seductionAudioUrl": "/assets/aistudio/Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3",
   "seductionAudioDuration": 217.6,

@@ -581,9 +581,9 @@ export const CLIP_TEXT: Record<VoiceClipId, string> = {
 
   // 55. Angel & Modal Turned ON
   angel_modal_on_v1:
-    'Welcome back... your Chess Angel and modal are right beside the board whenever you want to make your move.',
+    'Again, welcome back... I am your Chess Angel. Ready whenever you are.',
   angel_modal_on_v2:
-    'Hi there, I am your Chess Angel... we can pick right back up anytime you like.',
+    'Hi there... I am your Chess Angel. Make your move whenever you are ready.',
   angel_modal_on_v3:
     'Here we go again... make your move whenever you are ready.',
 
@@ -3348,7 +3348,8 @@ class OpponentSpeechController {
     if (!text) return false;
     try {
       window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(text);
+      const spokenText = text.replace(/\bJan\b/g, 'Yahn');
+      const utter = new SpeechSynthesisUtterance(spokenText);
       utter.lang = 'en-US';
       utter.rate = 0.98;
       utter.pitch = 1.06;

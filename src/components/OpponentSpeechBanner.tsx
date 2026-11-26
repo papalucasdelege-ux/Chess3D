@@ -20,6 +20,7 @@ import type { BotSearchReport, EngineLine, PieceColor, PieceType } from '../shar
 import { formatEvalLabel } from '../chess/engine';
 import { getSimulationColorSpec } from '../chess/treeJpgExporter';
 import { DanceWithStarsAura, type ForcedIdleVideoClock } from './DanceWithStarsAura';
+import { CalcPureModalRootVeil, type CalcPureVideoClock } from './CalcPureModalRootVeil';
 import {
   ANGEL_DEFAULT_SPEAKING_VIDEO_SRC,
   ANGEL_IDLE_LISTENING_VIDEO_SRC,
@@ -84,6 +85,17 @@ interface ChessAngelPortraitVideoProps {
   forcedIdleUrl?: string | null;
   forcedIdleCueAtSec?: number | null;
   onForcedIdleCueReached?: () => void;
+  onOpeningVideoProgress?: (
+    active: boolean,
+    currentTime: number,
+    portraitRect: DOMRect | null,
+  ) => void;
+  onCalcPureVideoProgress?: (
+    active: boolean,
+    currentTime: number,
+    portraitRect: DOMRect | null,
+  ) => void;
+  calcPureClockRef?: MutableRefObject<CalcPureVideoClock>;
   forcedIdleClockRef?: MutableRefObject<ForcedIdleVideoClock>;
   portraitCanvasRef?: MutableRefObject<HTMLCanvasElement | null>;
   isSpeaking: boolean;
@@ -294,6 +306,9 @@ function ChessAngelPortraitVideo({
   forcedIdleUrl,
   forcedIdleCueAtSec = null,
   onForcedIdleCueReached,
+  onOpeningVideoProgress,
+  onCalcPureVideoProgress,
+  calcPureClockRef,
   forcedIdleClockRef,
   portraitCanvasRef,
   isSpeaking,
@@ -406,6 +421,16 @@ function ChessAngelPortraitVideo({
   const triggerKeyLiveRef = useRef<string>(triggerKey);
   const forcedIdleCueAtSecLiveRef = useRef<number | null | undefined>(forcedIdleCueAtSec);
   const onForcedIdleCueReachedLiveRef = useRef<(() => void) | undefined>(onForcedIdleCueReached);
+  const onOpeningVideoProgressLiveRef = useRef<
+    ((active: boolean, currentTime: number, portraitRect: DOMRect | null) => void) | undefined
+  >(onOpeningVideoProgress);
+  const wasPlayingOpeningVideoRef = useRef<boolean>(false);
+  onOpeningVideoProgressLiveRef.current = onOpeningVideoProgress;
+  const onCalcPureVideoProgressLiveRef = useRef<
+    ((active: boolean, currentTime: number, portraitRect: DOMRect | null) => void) | undefined
+  >(onCalcPureVideoProgress);
+  const wasPlayingCalcPureVideoRef = useRef<boolean>(false);
+  onCalcPureVideoProgressLiveRef.current = onCalcPureVideoProgress;
   const forcedIdleCueFiredForTriggerRef = useRef<string>('');
   const forcedIdleObservedNearStartRef = useRef<boolean>(false);
   const isInExtendedLipSyncRef = useRef<boolean>(false);
@@ -1352,6 +1377,64 @@ function ChessAngelPortraitVideo({
         forcedIdleCueFiredForTriggerRef.current = lastTriggerRef.current;
         onForcedIdleCueReachedLiveRef.current?.();
       }
+    }
+
+    // 1.0b Live Opening Video Flowchart Sync: project the growing multicolor PCB flowchart
+    //      from builtin_opening.mp4 seamlessly out into the 3D board space.
+    const activeSlotUrlClean = (slotUrlRef.current[activeSlot] || '').split('?')[0];
+    const isPlayingOpeningNow = Boolean(
+      activeVideo &&
+        activeRoleRef.current === 'speaking' &&
+        !isInExtendedLipSyncRef.current &&
+        (/builtin_opening\.mp4$/i.test(activeSlotUrlClean) ||
+          /angel_case_opening\.mp4$/i.test(activeSlotUrlClean)) &&
+        activeReady &&
+        !waitingForIncomingFrameRef.current &&
+        !activeVideo.seeking &&
+        activeVideo.readyState >= 2 &&
+        !activeVideo.ended &&
+        !slotSafeEndedRef.current[activeSlot],
+    );
+    if (isPlayingOpeningNow && activeVideo) {
+      wasPlayingOpeningVideoRef.current = true;
+      const rect = canvasRef.current?.getBoundingClientRect() ?? null;
+      onOpeningVideoProgressLiveRef.current?.(true, activeVideo.currentTime, rect);
+    } else if (wasPlayingOpeningVideoRef.current) {
+      wasPlayingOpeningVideoRef.current = false;
+      onOpeningVideoProgressLiveRef.current?.(false, 0, null);
+    }
+
+    // 1.0c Live Calc-Pure Tree Video Sync: project the unfolding golden-mahogany & glowing
+    //      emerald Tree of Life out above, beside, and through/below the modal in lockstep.
+    const isPlayingCalcPureNow = Boolean(
+      activeVideo &&
+        activeRoleRef.current === 'speaking' &&
+        !isInExtendedLipSyncRef.current &&
+        (/angel_case_calc_pure\.mp4$/i.test(activeSlotUrlClean) ||
+          /builtin_calc_pure\.mp4$/i.test(activeSlotUrlClean)) &&
+        activeReady &&
+        !waitingForIncomingFrameRef.current &&
+        !activeVideo.seeking &&
+        activeVideo.readyState >= 2 &&
+        !activeVideo.ended &&
+        !slotSafeEndedRef.current[activeSlot],
+    );
+    if (isPlayingCalcPureNow && activeVideo) {
+      wasPlayingCalcPureVideoRef.current = true;
+      const rect = canvasRef.current?.getBoundingClientRect() ?? null;
+      if (calcPureClockRef) {
+        calcPureClockRef.current.active = true;
+        calcPureClockRef.current.currentTime = activeVideo.currentTime;
+        calcPureClockRef.current.wake?.();
+      }
+      onCalcPureVideoProgressLiveRef.current?.(true, activeVideo.currentTime, rect);
+    } else if (wasPlayingCalcPureVideoRef.current) {
+      wasPlayingCalcPureVideoRef.current = false;
+      if (calcPureClockRef) {
+        calcPureClockRef.current.active = false;
+        calcPureClockRef.current.currentTime = 0;
+      }
+      onCalcPureVideoProgressLiveRef.current?.(false, 0, null);
     }
 
     // 1a. Incoming Frame Watchdog: give Blob/network retry a fair window on media errors,
@@ -2712,6 +2795,18 @@ function ChessAngelPortraitVideo({
       window.removeEventListener('pageshow', tryResumeActiveVideos);
       document.removeEventListener('visibilitychange', tryResumeActiveVideos);
       stopRenderLoop();
+      if (wasPlayingOpeningVideoRef.current) {
+        wasPlayingOpeningVideoRef.current = false;
+        onOpeningVideoProgressLiveRef.current?.(false, 0, null);
+      }
+      if (wasPlayingCalcPureVideoRef.current) {
+        wasPlayingCalcPureVideoRef.current = false;
+        if (calcPureClockRef) {
+          calcPureClockRef.current.active = false;
+          calcPureClockRef.current.currentTime = 0;
+        }
+        onCalcPureVideoProgressLiveRef.current?.(false, 0, null);
+      }
       clearIdleCycleTimer();
       resetEscapeOverlayState(false);
       revokeObjectUrlSafely(slotBlobUrlRef.current[0]);
@@ -3223,6 +3318,16 @@ interface OpponentSpeechBannerProps {
   forcedIdleUrl?: string | null;
   forcedIdleCueAtSec?: number | null;
   onForcedIdleCueReached?: () => void;
+  onOpeningVideoProgress?: (
+    active: boolean,
+    currentTime: number,
+    portraitRect: DOMRect | null,
+  ) => void;
+  onCalcPureVideoProgress?: (
+    active: boolean,
+    currentTime: number,
+    portraitRect: DOMRect | null,
+  ) => void;
   danceWithStarsActive?: boolean;
   onSelectTreeSimulation: (index: number | null) => void;
   onStepTreeSimulation: (delta: -1 | 1) => void;
@@ -3279,6 +3384,8 @@ export function OpponentSpeechBanner({
   forcedIdleUrl = null,
   forcedIdleCueAtSec = null,
   onForcedIdleCueReached,
+  onOpeningVideoProgress,
+  onCalcPureVideoProgress,
   danceWithStarsActive = false,
   onSelectTreeSimulation,
   onStepTreeSimulation,
@@ -3315,6 +3422,10 @@ export function OpponentSpeechBanner({
     currentTime: 0,
     duration: 0,
     active: false,
+  });
+  const calcPureClockRef = useRef<CalcPureVideoClock>({
+    active: false,
+    currentTime: 0,
   });
   const lastSteppedTierKeyRef = useRef<string>('');
   const [tierDowngrade, setTierDowngrade] = useState(0);
@@ -4228,6 +4339,9 @@ export function OpponentSpeechBanner({
           forcedIdleUrl={forcedIdleUrl}
           forcedIdleCueAtSec={forcedIdleCueAtSec}
           onForcedIdleCueReached={onForcedIdleCueReached}
+          onOpeningVideoProgress={onOpeningVideoProgress}
+          onCalcPureVideoProgress={onCalcPureVideoProgress}
+          calcPureClockRef={calcPureClockRef}
           forcedIdleClockRef={forcedIdleClockRef}
           portraitCanvasRef={portraitCanvasRef}
           isSpeaking={isSpeaking}
@@ -4250,7 +4364,15 @@ export function OpponentSpeechBanner({
         />
       </div>
 
-      {showModalBelow ? modalCardContent : null}
+      {showModalBelow ? (
+        <div className="relative w-full">
+          {modalCardContent}
+          <CalcPureModalRootVeil
+            clockRef={calcPureClockRef}
+            powerSaveMode={powerSaveMode}
+          />
+        </div>
+      ) : null}
     </aside>
   );
 }

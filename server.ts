@@ -3459,6 +3459,7 @@ async function startServer(): Promise<void> {
   const LOCKED_AISTUDIO_VIDEOS = new Set<string>([
     'angel_case_angel_modal_off.mp4',
     'angel_case_angel_modal_on.mp4',
+    'angel_case_ask_promotion_2.mp4',
     'angel_case_calc_offer.mp4',
     'angel_case_calc_pure.mp4',
     'angel_case_calc_showing.mp4',
@@ -3476,10 +3477,12 @@ async function startServer(): Promise<void> {
     'angel_case_trial_confirm_1.mp4',
     'angel_case_trial_confirm_2.mp4',
     'angel_case_undo_done.mp4',
+    'angel_case_undo_done_2.mp4',
     'angel_case_warn_double.mp4',
     'angel_case_warn_fork_2step.mp4',
     'angel_case_warn_fork_2step_2.mp4',
     'angel_case_warn_king_file.mp4',
+    'angel_case_warn_mate.mp4',
     'angel_case_warn_pawn_promo.mp4',
     'angel_case_watch_bishop.mp4',
     'angel_default_speaking_default.mp4',
@@ -3501,6 +3504,77 @@ async function startServer(): Promise<void> {
     'angel_idle_idle_7.mp4',
   ]);
 
+  const LOCKED_AISTUDIO_SLOTS = new Set<string>([
+    'default:speaking_default',
+    'default:default',
+    'mouse_idle:sleep',
+    'mouse_idle:wake',
+    'special:dog_run',
+    'special:dance_stars',
+    'idle:idle_2',
+    'idle:idle_3',
+    'idle:idle_4',
+    'idle:idle_5',
+    'idle:idle_6',
+    'idle:idle_7',
+    'idle:idle_8',
+    'case:angel_modal_off',
+    'case:angel_modal_on',
+    'case:ask_promotion',
+    'case:ask_promotion_2',
+    'case:calc_offer',
+    'case:calc_pure',
+    'case:calc_showing',
+    'case:castled',
+    'case:checkmate_win',
+    'case:clock_timeout',
+    'case:draw',
+    'case:hesitate_hint',
+    'case:intro',
+    'case:level_advanced',
+    'case:level_beginner',
+    'case:level_grandmaster',
+    'case:level_intermediate',
+    'case:level_master',
+    'case:load_game',
+    'case:lost_queen',
+    'case:new_match',
+    'case:opening',
+    'case:promotion',
+    'case:resign',
+    'case:save_game',
+    'case:seduction',
+    'case:seduction_2',
+    'case:seduction_3',
+    'case:seduction_4',
+    'case:seduction_5',
+    'case:seduction_6',
+    'case:stalemate',
+    'case:thank_jan',
+    'case:tree_browse',
+    'case:trial_confirm_1',
+    'case:trial_confirm_2',
+    'case:undo_done',
+    'case:undo_done_2',
+    'case:warn_double',
+    'case:warn_fork_2step',
+    'case:warn_fork_2step_2',
+    'case:warn_king_file',
+    'case:warn_mate',
+    'case:warn_pawn_promo',
+    'case:watch_bishop',
+    'escape:point_me',
+    'escape:point_me_2',
+    'escape:point_me_3',
+    'escape:point_you',
+    'escape:point_you_2',
+    'escape:point_you_3',
+    'escape:point_you_5',
+    'escape:point_you_6',
+    'escape:push_button',
+    'escape:push_button_2',
+  ]);
+
   app.delete('/api/angel-videos/:kind/:key', (req, res) => {
     if (!requireStudioDeveloperAuth(req, res)) return;
     const kind = String(req.params.kind || '');
@@ -3515,7 +3589,7 @@ async function startServer(): Promise<void> {
     }
 
     const fileName = `angel_${kind}_${key}.mp4`;
-    if (LOCKED_AISTUDIO_VIDEOS.has(fileName)) {
+    if (LOCKED_AISTUDIO_VIDEOS.has(fileName) || LOCKED_AISTUDIO_SLOTS.has(`${kind}:${key}`)) {
       res.json({ ok: true, locked: true, map: readAngelVideoMap() });
       return;
     }

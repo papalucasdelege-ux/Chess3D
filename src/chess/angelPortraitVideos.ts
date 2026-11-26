@@ -394,9 +394,9 @@ export const VOICE_CLIP_DURATION_SEC: Record<VoiceClipId, number> = {
   clock_timeout_v1: 8.5,
   clock_timeout_v2: 8.0,
   clock_timeout_v3: 6.1,
-  angel_modal_on_v1: 5.9,
-  angel_modal_on_v2: 5.3,
-  angel_modal_on_v3: 3.8,
+  angel_modal_on_v1: 5.0,
+  angel_modal_on_v2: 5.0,
+  angel_modal_on_v3: 3.7,
   angel_modal_off_v1: 6.7,
   angel_modal_off_v2: 6.4,
   angel_modal_off_v3: 4.8,
@@ -558,6 +558,7 @@ export const ANGEL_CASE_VIDEO_MAP: Partial<Record<CommentaryCaseId, string>> = {
   warn_double: '/assets/aistudio/angel_case_warn_double.mp4',
   warn_fork_2step: '/assets/aistudio/angel_case_warn_fork_2step.mp4',
   warn_king_file: '/assets/aistudio/angel_case_warn_king_file.mp4',
+  warn_mate: '/assets/aistudio/angel_case_warn_mate.mp4',
   warn_pawn_promo: '/assets/aistudio/angel_case_warn_pawn_promo.mp4',
   watch_bishop: '/assets/aistudio/angel_case_watch_bishop.mp4',
   resign: '/assets/aistudio/builtin_resign.mp4',
@@ -590,15 +591,15 @@ export const ANGEL_LOCKED_IDLE_VARIANTS: Readonly<Record<string, string>> = {
   idle_8: '/assets/aistudio/builtin_idle_8.mp4',
 };
 
-const { ask_promotion: _unlockedAskPromotionFallback, ...LOCKED_BASE_CASES } = ANGEL_CASE_VIDEO_MAP;
-
 export const ANGEL_LOCKED_CASES: Readonly<Partial<Record<AnyCaseSlotKey, string>>> = {
-  ...LOCKED_BASE_CASES,
+  ...ANGEL_CASE_VIDEO_MAP,
+  ask_promotion_2: '/assets/aistudio/angel_case_ask_promotion_2.mp4',
   seduction_2: '/assets/aistudio/angel_case_seduction_2.mp4',
   seduction_3: '/assets/aistudio/angel_case_seduction_3.mp4',
   seduction_4: '/assets/aistudio/builtin_seduction_4.mp4',
   seduction_5: '/assets/aistudio/builtin_seduction_5.mp4',
   seduction_6: '/assets/aistudio/builtin_seduction_6.mp4',
+  undo_done_2: '/assets/aistudio/angel_case_undo_done_2.mp4',
   warn_fork_2step_2: '/assets/aistudio/angel_case_warn_fork_2step_2.mp4',
 };
 
@@ -1150,11 +1151,12 @@ let runtimeOverrides: AngelVideoMapPayload = {
   lipSync: {
     defaultEnabled: true,
     groups: {},
-    cases: { seduction: 'off' },
+    cases: { seduction: 'off', thank_jan: 'off' },
   },
   videoDurations: {
     '/assets/aistudio/angel_case_angel_modal_off.mp4': 12.1,
     '/assets/aistudio/angel_case_angel_modal_on.mp4': 9.1,
+    '/assets/aistudio/angel_case_ask_promotion_2.mp4': 11.1,
     '/assets/aistudio/angel_case_calc_offer.mp4': 9.1,
     '/assets/aistudio/angel_case_calc_pure.mp4': 8.1,
     '/assets/aistudio/angel_case_calc_showing.mp4': 5.1,
@@ -1180,10 +1182,12 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/angel_case_trial_confirm_1.mp4': 5.1,
     '/assets/aistudio/angel_case_trial_confirm_2.mp4': 5.1,
     '/assets/aistudio/angel_case_undo_done.mp4': 5.1,
+    '/assets/aistudio/angel_case_undo_done_2.mp4': 7.1,
     '/assets/aistudio/angel_case_warn_double.mp4': 5.1,
     '/assets/aistudio/angel_case_warn_fork_2step.mp4': 5.1,
     '/assets/aistudio/angel_case_warn_fork_2step_2.mp4': 5.1,
     '/assets/aistudio/angel_case_warn_king_file.mp4': 5.1,
+    '/assets/aistudio/angel_case_warn_mate.mp4': 7.1,
     '/assets/aistudio/angel_case_warn_pawn_promo.mp4': 5.1,
     '/assets/aistudio/angel_case_watch_bishop.mp4': 5.1,
     '/assets/aistudio/angel_default_speaking_default.mp4': 5.3,
@@ -1620,6 +1624,7 @@ export function resetGameVideoPlayCounts(): void {
   lastCaseTriggerKey.warn_fork_2step = undefined;
   lastCaseTriggerKey.warn_double = undefined;
   lastCaseTriggerKey.undo_done = undefined;
+  lastCaseTriggerKey.ask_promotion = undefined;
   for (const g of Object.keys(lastGroupTriggerKey) as AngelExpressionGroup[]) {
     delete lastGroupTriggerKey[g];
   }
