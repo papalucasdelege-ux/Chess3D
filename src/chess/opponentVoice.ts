@@ -2582,8 +2582,14 @@ class OpponentSpeechController {
     const audio = this.bgMusicAudio;
     if (!audio || audio.paused || audio.ended) return;
 
-    const startVol = audio.volume;
-    const clampedTarget = Math.max(0, Math.min(1, targetVolume));
+    const clampedTarget = Math.max(
+      0,
+      Math.min(1, Number.isFinite(targetVolume) ? targetVolume : 0.68),
+    );
+    const startVol = Math.max(
+      0,
+      Math.min(1, Number.isFinite(audio.volume) ? audio.volume : clampedTarget),
+    );
     if (Math.abs(startVol - clampedTarget) < 0.01 || durationMs <= 0) {
       audio.volume = clampedTarget;
       return;
@@ -2594,8 +2600,10 @@ class OpponentSpeechController {
         this.bgMusicFadeRaf = null;
         return;
       }
-      const t = Math.min(1, (now - startMs) / durationMs);
-      audio.volume = startVol + (clampedTarget - startVol) * t;
+      const elapsed = Math.max(0, now - startMs);
+      const t = Math.max(0, Math.min(1, elapsed / durationMs));
+      const nextVol = startVol + (clampedTarget - startVol) * t;
+      audio.volume = Math.max(0, Math.min(1, Number.isFinite(nextVol) ? nextVol : clampedTarget));
       if (t < 1) {
         this.bgMusicFadeRaf = window.requestAnimationFrame(step);
       } else {
