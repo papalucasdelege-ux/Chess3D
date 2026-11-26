@@ -29,6 +29,14 @@ interface NavigatorWithWakeLock {
 const SILENT_WAKE_MP4_BASE64 =
   'AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAMPbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAA+gAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAjl0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAA+gAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAABAAAAAQAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAPoAAAAAAABAAAAAAGxbWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAABAAAAAQABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABXG1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAARxzdGJsAAAAuHN0c2QAAAAAAAAAAQAAAKhhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAABAAEABIAAAASAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGP//AAAALmF2Y0MBQsAe/+EAFmdCwB7ZHsBEAAADAAQAAAMACDxYuSABAAVoy4DksgAAABBwYXNwAAAAAQAAAAEAAAAUYnRydAAAAAAAABQYAAAUGAAAABhzdHRzAAAAAAAAAAEAAAABAABAAAAAABxzdHNjAAAAAAAAAAEAAAABAAAAAQAAAAEAAAAUc3RzegAAAAAAAAKDAAAAAQAAABRzdGNvAAAAAAAAAAEAAAM/AAAAYnVkdGEAAABabWV0YQAAAAAAAAAhaGRscgAAAAAAAAAAbWRpcmFwcGwAAAAAAAAAAAAAAAAtaWxzdAAAACWpdG9vAAAAHWRhdGEAAAABAAAAAExhdmY1OC43Ni4xMDAAAAAIZnJlZQAAAottZGF0AAACcAYF//9s3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2MyByMzA2MCA1ZGI2YWE2IC0gSC4yNjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyMSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlvbnM6IGNhYmFjPTAgcmVmPTMgZGVibG9jaz0xOjA6MCBhbmFseXNlPTB4MToweDExMSBtZT1oZXggc3VibWU9NyBwc3k9MSBwc3lfcmQ9MS4wMDowLjAwIG1peGVkX3JlZj0xIG1lX3JhbmdlPTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MSA4eDhkY3Q9MCBjcW09MCBkZWFkem9uZT0yMSwxMSBmYXN0X3Bza2lwPTEgY2hyb21hX3FwX29mZnNldD0tMiB0aHJlYWRzPTEgbG9va2FoZWFkX3RocmVhZHM9MSBzbGljZWRfdGhyZWFkcz0wIG5yPTAgZGVjaW1hdGU9MSBpbnRlcmxhY2VkPTAgYmx1cmF5X2NvbXBhdD0wIGNvbnN0cmFpbmVkX2ludHJhPTAgYmZyYW1lcz0wIHdlaWdodHA9MCBrZXlpbnQ9MjUwIGtleWludF9taW49MSBzY2VuZWN1dD00MCBpbnRyYV9yZWZyZXNoPTAgcmNfbG9va2FoZWFkPTQwIHJjPWNyZiBtYnRyZWU9MSBjcmY9NDAuMCBxY29tcD0wLjYwIHFwbWluPTAgcXBtYXg9NjkgcXBzdGVwPTQgaXBfcmF0aW89MS40MCBhcT0xOjEuMDAAgAAAAAtliIQFfJigACTXgA==';
 
+/**
+ * After 5 minutes (300,000 ms) of zero pointer/touch/keyboard/game movement,
+ * allow both the OS display/system and Chess Angel's idle animation to sleep.
+ * While active (< 5 minutes since last movement), keep-awake stays continuously locked
+ * across Windows, macOS, Linux, Android, iOS/iPadOS, and ChromeOS.
+ */
+export const INACTIVITY_SLEEP_MS = 5 * 60 * 1000;
+
 let installed = false;
 let sentinel: WakeLockSentinelLike | null = null;
 let acquiring = false;
@@ -36,9 +44,33 @@ let fallbackVideoEl: HTMLVideoElement | null = null;
 let fallbackBlobUrl: string | null = null;
 let keepAliveAudioCtx: AudioContext | null = null;
 let hasUserActivated = false;
+let lastActivityAtMs = typeof Date !== 'undefined' ? Date.now() : 0;
+let lastMoveStampMs = 0;
+let currentlyInactivityAsleep = false;
+const activityWakeListeners = new Set<() => void>();
+
+export function getMsSinceLastUserActivity(): number {
+  if (typeof Date === 'undefined') return 0;
+  return Math.max(0, Date.now() - lastActivityAtMs);
+}
+
+export function isUserInactiveForSleep(): boolean {
+  return getMsSinceLastUserActivity() >= INACTIVITY_SLEEP_MS;
+}
+
+export function subscribeActivityWake(listener: () => void): () => void {
+  activityWakeListeners.add(listener);
+  return () => {
+    activityWakeListeners.delete(listener);
+  };
+}
 
 function isAppVisible(): boolean {
   return typeof document !== 'undefined' && document.visibilityState === 'visible';
+}
+
+function canStayAwakeNow(): boolean {
+  return isAppVisible() && !isUserInactiveForSleep();
 }
 
 function getFallbackBlobUrl(): string | null {
@@ -66,8 +98,20 @@ function stopFallbackVideo(): void {
   }
 }
 
+function releaseNativeWakeLock(): void {
+  if (!sentinel) return;
+  const s = sentinel;
+  sentinel = null;
+  if (!s.released) {
+    void s.release().catch(() => {});
+  }
+}
+
 function startFallbackVideoIfNeeded(): void {
-  if (!hasUserActivated || !isAppVisible()) return;
+  if (!hasUserActivated || !canStayAwakeNow()) {
+    stopFallbackVideo();
+    return;
+  }
   if (sentinel && !sentinel.released) {
     stopFallbackVideo();
     return;
@@ -121,7 +165,7 @@ function syncSubAudibleAudioKeepAlive(): void {
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioCtxCtor) return;
 
-  if (!isAppVisible()) {
+  if (!canStayAwakeNow()) {
     if (keepAliveAudioCtx && keepAliveAudioCtx.state === 'running') {
       void keepAliveAudioCtx.suspend().catch(() => {});
     }
@@ -159,7 +203,12 @@ function syncSubAudibleAudioKeepAlive(): void {
 }
 
 async function acquireWakeLock(): Promise<void> {
-  if (typeof navigator === 'undefined' || !isAppVisible()) return;
+  if (typeof navigator === 'undefined') return;
+  if (!canStayAwakeNow()) {
+    releaseNativeWakeLock();
+    stopFallbackVideo();
+    return;
+  }
   if (sentinel && !sentinel.released) {
     stopFallbackVideo();
     return;
@@ -175,6 +224,10 @@ async function acquireWakeLock(): Promise<void> {
   acquiring = true;
   try {
     const nextSentinel = await nav.wakeLock.request('screen');
+    if (!canStayAwakeNow()) {
+      void nextSentinel.release().catch(() => {});
+      return;
+    }
     sentinel = nextSentinel;
     // Native wake lock succeeded — ensure fallback video decoder is idle
     stopFallbackVideo();
@@ -182,7 +235,7 @@ async function acquireWakeLock(): Promise<void> {
       if (sentinel === nextSentinel) {
         sentinel = null;
       }
-      if (isAppVisible()) {
+      if (canStayAwakeNow()) {
         void acquireWakeLock();
       }
     });
@@ -194,23 +247,57 @@ async function acquireWakeLock(): Promise<void> {
   }
 }
 
+function refreshAllKeepAwake(): void {
+  if (!canStayAwakeNow()) {
+    if (isUserInactiveForSleep()) {
+      currentlyInactivityAsleep = true;
+    }
+    releaseNativeWakeLock();
+    stopFallbackVideo();
+    syncSubAudibleAudioKeepAlive();
+    return;
+  }
+  void acquireWakeLock();
+  syncSubAudibleAudioKeepAlive();
+}
+
+export function markUserActivity(isActivationGesture = false): void {
+  const now = Date.now();
+  const wasAsleep = currentlyInactivityAsleep;
+  lastActivityAtMs = now;
+  currentlyInactivityAsleep = false;
+  if (isActivationGesture) {
+    hasUserActivated = true;
+  }
+  if (wasAsleep) {
+    refreshAllKeepAwake();
+    for (const listener of activityWakeListeners) {
+      try {
+        listener();
+      } catch {
+        // ignore listener errors
+      }
+    }
+  } else if (isActivationGesture) {
+    refreshAllKeepAwake();
+  }
+}
+
 export function installGlobalKeepAwake(): void {
   if (installed || typeof window === 'undefined' || typeof document === 'undefined') return;
   installed = true;
-
-  const refreshAll = (): void => {
-    if (!isAppVisible()) {
-      stopFallbackVideo();
-      syncSubAudibleAudioKeepAlive();
-      return;
-    }
-    void acquireWakeLock();
-    syncSubAudibleAudioKeepAlive();
-  };
+  lastActivityAtMs = Date.now();
+  currentlyInactivityAsleep = false;
 
   const onUserGesture = (): void => {
-    hasUserActivated = true;
-    refreshAll();
+    markUserActivity(true);
+  };
+
+  const onPointerMovement = (): void => {
+    const now = Date.now();
+    if (!currentlyInactivityAsleep && now - lastMoveStampMs < 250) return;
+    lastMoveStampMs = now;
+    markUserActivity(false);
   };
 
   // Attempt immediately (succeeds without gesture on installed PWAs, Android Chrome, Desktop Chrome/Edge)
@@ -222,18 +309,22 @@ export function installGlobalKeepAwake(): void {
     window.addEventListener(evt, onUserGesture, { capture: true, passive: true });
   }
 
-  document.addEventListener('visibilitychange', refreshAll);
-  window.addEventListener('focus', refreshAll);
-  window.addEventListener('pageshow', refreshAll);
-  document.addEventListener('fullscreenchange', refreshAll);
+  // Movement hooks reset the 5-minute inactivity sleep timer on every OS (mouse, trackpad, touch, scroll)
+  const moveEvents = ['pointermove', 'mousemove', 'touchmove', 'wheel'] as const;
+  for (const evt of moveEvents) {
+    window.addEventListener(evt, onPointerMovement, { capture: true, passive: true });
+  }
 
-  // Periodic 20s watchdog ensures wake lock stays active across OS power/monitor transitions
+  document.addEventListener('visibilitychange', refreshAllKeepAwake);
+  window.addEventListener('focus', () => {
+    markUserActivity(false);
+    refreshAllKeepAwake();
+  });
+  window.addEventListener('pageshow', refreshAllKeepAwake);
+  document.addEventListener('fullscreenchange', refreshAllKeepAwake);
+
+  // Periodic 15s watchdog enforces keep-awake while active and releases cleanly after 5 minutes of no movement
   window.setInterval(() => {
-    if (isAppVisible()) {
-      if (!sentinel || sentinel.released) {
-        void acquireWakeLock();
-      }
-      syncSubAudibleAudioKeepAlive();
-    }
-  }, 20_000);
+    refreshAllKeepAwake();
+  }, 15_000);
 }

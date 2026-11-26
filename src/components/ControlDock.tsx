@@ -298,7 +298,11 @@ export function ControlDock(props: ControlDockProps) {
   const currentMoveRec = props.viewPly > 0 ? props.moveHistory[props.viewPly - 1] : null;
 
   return (
-    <div className="fixed bottom-0 left-1/2 -translate-x-1/2 z-30 w-[min(960px,95vw)] pointer-events-none flex flex-col items-center">
+    <div
+      className={`fixed bottom-0 left-1/2 -translate-x-1/2 ${
+        props.collapsed ? 'z-30' : 'z-[45]'
+      } w-[min(940px,calc(100vw-16px))] sm:w-[min(960px,95vw)] pointer-events-none flex flex-col items-center`}
+    >
       {/* Bottom Rollout Arrow Tab (only opens/retracts menu when touched) */}
       <button
         type="button"
@@ -307,7 +311,7 @@ export function ControlDock(props: ControlDockProps) {
         aria-label={props.collapsed ? 'Roll out game menu' : 'Retract game menu'}
         title={props.collapsed ? 'Open menu (H)' : 'Retract menu (H)'}
         className={`pointer-events-auto inline-flex items-center justify-center min-w-[48px] min-h-[28px] px-3.5 py-1 bg-[#11151d]/92 hover:bg-[#1a202c] border-x border-t border-white/14 text-[#d6ae63] transition-colors cursor-pointer shadow-md focus-visible:outline-2 focus-visible:outline-[#e3be78] ${
-          props.collapsed ? 'rounded-t-md' : 'rounded-md border-b mb-1.5'
+          props.collapsed ? 'rounded-t-md' : 'rounded-md border-b mb-1 sm:mb-1.5'
         }`}
       >
         {props.collapsed ? (
@@ -327,14 +331,14 @@ export function ControlDock(props: ControlDockProps) {
 
       {/* Unified Horizontal Bottom Control Dock (solid/rgba surface — zero backdrop-filter over WebGL) */}
       <div
-        className={`pointer-events-auto w-full rounded-t-xl mb-0 sm:rounded-xl sm:mb-3 bg-[#11151d]/95 border border-white/12 shadow-2xl transition-all duration-200 ease-out ${
+        className={`pointer-events-auto w-full rounded-t-xl mb-0 sm:rounded-xl sm:mb-3 pb-[env(safe-area-inset-bottom,0px)] bg-[#11151d]/95 border border-white/12 shadow-2xl transition-all duration-200 ease-out ${
           props.collapsed
             ? 'max-h-0 opacity-0 translate-y-4 pointer-events-none border-transparent sm:mb-0 overflow-hidden'
-            : 'max-h-[82dvh] sm:max-h-[480px] opacity-100 translate-y-0 overflow-y-auto thin-scroll'
+            : 'max-h-[46dvh] sm:max-h-[54dvh] md:max-h-[480px] opacity-100 translate-y-0 overflow-y-auto thin-scroll'
         }`}
       >
         {/* Unified Menu Header Bar: Logo + ChessAngel 3D + Version + Copyright on Left | Controls + Play/Analysis/Replay on Far Right */}
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 border-b border-white/10 bg-[#0d1017]/95">
+        <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-3 px-2.5 py-2 sm:px-4 sm:py-2.5 border-b border-white/10 bg-[#0d1017]/95">
           <div className="flex flex-wrap items-center gap-2 select-none">
             {/* ChessAngel 3D Logo Emblem + Interactive Title & Version */}
             <button
@@ -619,7 +623,7 @@ export function ControlDock(props: ControlDockProps) {
           </div>
         </div>
 
-        <div className="p-4">
+        <div className="p-2.5 sm:p-4">
           {/* ==================== PLAY TAB (OR INLINE LOAD DRAWER) ==================== */}
           {props.activeTab === 'play' && loadDrawerOpen && (
             <div className="flex flex-col gap-3">

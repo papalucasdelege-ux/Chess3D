@@ -59,9 +59,7 @@
     "level_advanced": "/assets/aistudio/builtin_level_advanced.mp4",
     "level_master": "/assets/aistudio/builtin_level_master.mp4",
     "level_grandmaster": "/assets/aistudio/builtin_level_grandmaster.mp4",
-    "seduction_6": "/assets/aistudio/builtin_seduction_6.mp4",
-    "undo_done_2": "/assets/aistudio/builtin_undo_done_2.mp4",
-    "alt_shown": "/assets/aistudio/builtin_alt_shown.mp4"
+    "seduction_6": "/assets/aistudio/builtin_seduction_6.mp4"
   },
   "escapes": {
     "point_you": "/assets/aistudio/angel_escape_point_you.mp4",
@@ -116,10 +114,7 @@
     "defaultEnabled": true,
     "groups": {},
     "cases": {
-      "lost_queen": "off",
-      "calc_showing": "off",
-      "seduction": "off",
-      "thank_jan": "off"
+      "seduction": "off"
     }
   },
   "videoDurations": {
@@ -254,7 +249,6 @@
     "/assets/aistudio/angel_idle_idle_5.mp4": 676224,
     "/assets/aistudio/angel_idle_idle_6.mp4": 586678,
     "/assets/aistudio/angel_idle_idle_7.mp4": 670046,
-    "/assets/aistudio/angel_special_dance_stars.mp4": 2293525,
     "/assets/aistudio/builtin_angel_modal_off.mp4": 2625151,
     "/assets/aistudio/builtin_angel_modal_on.mp4": 2523863,
     "/assets/aistudio/builtin_calc_offer.mp4": 1359442,
@@ -540,12 +534,6 @@
       "width": 560,
       "height": 752
     },
-    "/assets/aistudio/angel_special_dance_stars.mp4": {
-      "size": 2293525,
-      "crf": 21,
-      "width": 560,
-      "height": 752
-    },
     "/assets/aistudio/builtin_angel_modal_off.mp4": {
       "size": 2625151,
       "crf": 21,
@@ -787,19 +775,24 @@
   "thankJanAudioDuration": 8.9,
   "musicTracks": [
     {
-      "id": "chess_angle_a_beautiful_queen_and_her_infinite_re_8a3d493b",
+      "id": "queen_infinite_reign",
       "title": "Queen's Infinite Reign",
       "url": "/assets/aistudio/Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3"
     },
     {
-      "id": "chess_angel_rap_d8f30f60",
+      "id": "chess_angel_rap",
       "title": "Chess Angel Rap",
       "url": "/assets/aistudio/Chess_Angel_Rap_d8f30f60.mp3"
     },
     {
-      "id": "angle_45923f8a",
+      "id": "chess_angel_theme",
       "title": "Chess Angel",
-      "url": "/assets/aistudio/Angle_45923f8a.mp3"
+      "url": "/assets/aistudio/Chess_Angle_2f568dfd.mp3"
+    },
+    {
+      "id": "meditational",
+      "title": "Meditational",
+      "url": "/assets/aistudio/meditational.mp3"
     }
   ]
 }

@@ -575,7 +575,6 @@ export const ANGEL_CASE_VIDEO_MAP: Partial<Record<CommentaryCaseId, string>> = {
   angel_modal_off: '/assets/aistudio/angel_case_angel_modal_off.mp4',
   hesitate_hint: '/assets/aistudio/builtin_hesitate_hint.mp4',
   thank_jan: '/assets/aistudio/builtin_thank_jan.mp4',
-  alt_shown: '/assets/aistudio/builtin_alt_shown.mp4',
 };
 
 export const ANGEL_SEDUCTION_AUDIO_SRC =
@@ -601,8 +600,6 @@ export const ANGEL_LOCKED_CASES: Readonly<Partial<Record<AnyCaseSlotKey, string>
   seduction_5: '/assets/aistudio/builtin_seduction_5.mp4',
   seduction_6: '/assets/aistudio/builtin_seduction_6.mp4',
   warn_fork_2step_2: '/assets/aistudio/angel_case_warn_fork_2step_2.mp4',
-  undo_done_2: '/assets/aistudio/builtin_undo_done_2.mp4',
-  ask_promotion_2: '/assets/aistudio/angel_case_ask_promotion_2.mp4',
 };
 
 export const ANGEL_LOCKED_ESCAPES: Readonly<Partial<Record<AngelEscapeSlotKey, string>>> = {
@@ -1153,7 +1150,7 @@ let runtimeOverrides: AngelVideoMapPayload = {
   lipSync: {
     defaultEnabled: true,
     groups: {},
-    cases: { calc_showing: 'off', lost_queen: 'off', seduction: 'off', thank_jan: 'off' },
+    cases: { seduction: 'off' },
   },
   videoDurations: {
     '/assets/aistudio/angel_case_angel_modal_off.mp4': 12.1,
@@ -3084,14 +3081,12 @@ export function resolveDefaultSpeakingLipVideo(): string {
 /**
  * Returns true if Chess Angel should morph into `Default Speaking Lip` whenever a custom/group
  * speaking video ends while she still has spoken words remaining.
+ * Always true for every spoken message (only `seduction` is music/dance without spoken voice).
  */
 export function shouldExtendWithDefaultLipSync(clipId?: VoiceClipId | null): boolean {
   const caseId = extractCaseIdFromClip(clipId);
-  if (!caseId) {
-    const lip = runtimeOverrides.lipSync || { defaultEnabled: true, groups: {}, cases: {} };
-    return lip.defaultEnabled !== false;
-  }
-  return isCaseUsingDefaultLipSync(caseId, runtimeOverrides);
+  if (caseId === 'seduction') return false;
+  return true;
 }
 
 export function getCaseSlotKeys(
@@ -3307,7 +3302,6 @@ export function resolveAngelSpeakingVideo(
   triggerKey?: string,
 ): string | null {
   const defaultSpeakSrc = resolveDefaultSpeakingLipVideo();
-  const lip = runtimeOverrides.lipSync || { defaultEnabled: true, groups: {}, cases: {} };
   const caseId = extractCaseIdFromClip(clipId);
 
   // Stages 3..6 of tree_browse are short follow-ups without "I am a computer", so use continuous
@@ -3319,7 +3313,7 @@ export function resolveAngelSpeakingVideo(
       clipId === 'tree_browse_v5' ||
       clipId === 'tree_browse_v6')
   ) {
-    return lip.cases.tree_browse === 'off' ? null : defaultSpeakSrc;
+    return defaultSpeakSrc;
   }
 
   if (caseId) {
@@ -3327,14 +3321,9 @@ export function resolveAngelSpeakingVideo(
     if (runtimeCase) return runtimeCase;
 
     const staticCase = ANGEL_CASE_VIDEO_MAP[caseId];
-    const caseLipRule = lip.cases[caseId];
-
     if (staticCase) {
       return withAssetBuildVersion(staticCase);
     }
-
-    if (caseLipRule === 'off') return null;
-    if (caseLipRule === 'on') return defaultSpeakSrc;
 
     const group = CASE_TO_GROUP[caseId];
     if (group) {
@@ -3355,14 +3344,11 @@ export function resolveAngelSpeakingVideo(
           return candidateGroupUrl;
         }
       }
-
-      const groupLipRule = lip.groups[group];
-      if (groupLipRule === 'off') return null;
-      if (groupLipRule === 'on') return defaultSpeakSrc;
     }
   }
 
-  return lip.defaultEnabled !== false ? defaultSpeakSrc : null;
+  // Every spoken message without a special video clip attached ALWAYS plays lip movements.
+  return defaultSpeakSrc;
 }
 
 /**

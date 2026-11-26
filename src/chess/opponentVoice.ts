@@ -2471,6 +2471,9 @@ class OpponentSpeechController {
   private speakSeq = 0;
   private sourceStartedAtCtxTime = 0;
   private sourceDurationSec = 0;
+  private activeClipId: VoiceClipId | null = null;
+  private speechStartedAtMs = 0;
+  private pendingSpeechClip = false;
 
   private pendingGestureClip: {
     clipId: VoiceClipId;
@@ -3306,6 +3309,8 @@ class OpponentSpeechController {
     }
     this.sourceStartedAtCtxTime = 0;
     this.sourceDurationSec = 0;
+    this.speechStartedAtMs = 0;
+    this.pendingSpeechClip = false;
     if (this.activeHtmlAudio) {
       try {
         this.activeHtmlAudio.onended = null;
@@ -3374,6 +3379,8 @@ class OpponentSpeechController {
       utter.onend = finish;
       utter.onerror = finish;
       this.activeUtterance = utter;
+      this.pendingSpeechClip = false;
+      this.speechStartedAtMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
       this.pendingGestureClip = null;
       this.setPlaybackState('speaking');
       window.speechSynthesis.speak(utter);
@@ -3413,6 +3420,8 @@ class OpponentSpeechController {
     this.activeSource = source;
     this.sourceStartedAtCtxTime = ctx.currentTime;
     this.sourceDurationSec = buffer.duration;
+    this.pendingSpeechClip = false;
+    this.speechStartedAtMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
     this.pendingGestureClip = null;
     this.setPlaybackState('speaking');
     source.start(0);
@@ -3457,6 +3466,8 @@ class OpponentSpeechController {
         await playPromise;
       }
       if (seq === this.speakSeq) {
+        this.pendingSpeechClip = false;
+        this.speechStartedAtMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
         this.pendingGestureClip = null;
         this.setPlaybackState('speaking');
       }
@@ -3467,6 +3478,7 @@ class OpponentSpeechController {
       const isAutoplayBlocked =
         err instanceof DOMException && err.name === 'NotAllowedError';
       if (seq === this.speakSeq) {
+        this.pendingSpeechClip = false;
         if (isAutoplayBlocked) {
           this.pendingGestureClip = clipInfo;
           this.setPlaybackState('awaiting-gesture');
@@ -3486,6 +3498,7 @@ class OpponentSpeechController {
   ): void {
     if (!soundEnabled || voiceMode === 'off') {
       this.pendingGestureClip = null;
+      this.pendingSpeechClip = false;
       return;
     }
 
@@ -3498,10 +3511,15 @@ class OpponentSpeechController {
     // so it plays all the way until its natural end and continues smoothly in the background
     // across subsequent moves and Chess Angel voice lines (softly ducking while she speaks).
     if (clipId.startsWith('seduction_')) {
+      this.activeClipId = null;
+      this.pendingSpeechClip = false;
       this.setPlaybackState('idle');
       this.playSeductionBackgroundMusic(url);
       return;
     }
+
+    this.activeClipId = clipId;
+    this.pendingSpeechClip = true;
 
     const graph = this.ensureAudioGraph();
     const cachedBuffer = this.bufferCache.get(url);
@@ -3509,6 +3527,12 @@ class OpponentSpeechController {
     if (cachedBuffer && graph && (graph.ctx.state as string) === 'running') {
       void this.playDecodedBuffer(cachedBuffer, seq);
       return;
+    }
+
+    // Emit 'idle' while preparing a new async clip so secondary messages cleanly transition
+    // false -> true on audio start (while `isPreparingSpeech()` keeps portrait lip-sync active).
+    if (this.playbackState === 'speaking') {
+      this.setPlaybackState('idle');
     }
 
     const controller = new AbortController();
@@ -3537,6 +3561,7 @@ class OpponentSpeechController {
         await this.playViaHtmlAudio(url, seq, clipInfo, !mp3Bytes);
       } catch {
         if (!controller.signal.aborted && seq === this.speakSeq) {
+          this.pendingSpeechClip = false;
           this.setPlaybackState('idle');
         }
       } finally {
@@ -3545,6 +3570,18 @@ class OpponentSpeechController {
         }
       }
     })();
+  }
+
+  /**
+   * True while a newly triggered spoken voice clip is being fetched or decoded before frame 0 of audio.
+   * Prevents the portrait from prematurely settling to closed-mouth idle between consecutive messages.
+   */
+  public isPreparingSpeech(): boolean {
+    return this.pendingSpeechClip;
+  }
+
+  public getActiveClipId(): VoiceClipId | null {
+    return this.activeClipId;
   }
 
   /**
@@ -3563,14 +3600,20 @@ class OpponentSpeechController {
       return Math.max(0, this.activeHtmlAudio.currentTime);
     }
 
+    if (this.activeUtterance && this.speechStartedAtMs > 0) {
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      return Math.max(0, (now - this.speechStartedAtMs) / 1000);
+    }
+
     return 0;
   }
 
   /**
    * Returns exact remaining spoken audio time in seconds for the currently playing voice line,
-   * or 0 when Chess Angel is silent.
+   * or a positive buffer while an active spoken clip is still preparing/playing.
    */
   public getRemainingSpeechSeconds(): number {
+    if (this.pendingSpeechClip) return 2.0;
     if (this.playbackState !== 'speaking') return 0;
 
     if (this.activeSource && this.audioCtx && this.sourceDurationSec > 0) {
@@ -3583,9 +3626,19 @@ class OpponentSpeechController {
       if (Number.isFinite(dur) && dur > 0) {
         return Math.max(0, dur - this.activeHtmlAudio.currentTime);
       }
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const elapsed = this.speechStartedAtMs > 0 ? Math.max(0, (now - this.speechStartedAtMs) / 1000) : 0;
+      return Math.max(0.8, 5.5 - elapsed);
     }
 
-    return 0;
+    if (this.activeUtterance) {
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const elapsed = this.speechStartedAtMs > 0 ? Math.max(0, (now - this.speechStartedAtMs) / 1000) : 0;
+      return Math.max(0.8, 6.0 - elapsed);
+    }
+
+    // playbackState is explicitly 'speaking' — never under-report 0 while voice is active
+    return 0.8;
   }
 
   public invalidateSeductionCache(): void {
