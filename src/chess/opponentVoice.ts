@@ -1689,6 +1689,8 @@ export interface HumanCommentaryContext {
   humanEvalAdvantageCp?: number;
   canTriggerSeductionNow?: boolean;
   seductionTriggerMode?: SeductionTriggerMode;
+  /** True when the player is retrying a turn after an Undo ("Rewind & Better Line") or Hint — never propose another Undo! */
+  suppressUndoOffer?: boolean;
 }
 
 export type SeductionTriggerMode = 'balanced' | 'frequent' | 'dominant' | 'tactical';
@@ -1786,18 +1788,53 @@ export function evaluateHumanMoveCommentary(ctx: HumanCommentaryContext): Oppone
   const movedDestAttacked = postChess.isAttacked(lastMove.to as Square, aiColor);
   const cpLossVal = audit?.cpLoss ?? 0;
 
+  // Never propose an Undo if:
+  //  1) The player just rewound via "Rewind & Better Line" or followed a Hint (you cannot undo an undo!),
+  //  2) The engine audit confirms this was already an accurate/best move (cpLoss < 45 and didn't walk into mate), or
+  //  3) The engine audit found zero genuinely better alternative moves in preFen.
+  const canOfferUndo =
+    !ctx.suppressUndoOffer &&
+    !(audit !== null && audit.cpLoss < 45 && !audit.walkedIntoMate) &&
+    !(audit !== null && alts.length === 0);
+
+  // Only treat mate-in-1 as a blunder if preFen actually had at least one move that avoided immediate mate-in-1
+  const avoidableMateInOne =
+    canOfferUndo &&
+    aiCanMateImmediately &&
+    (() => {
+      const preMoves = preChess.moves({ verbose: true });
+      for (const m of preMoves) {
+        if (`${m.from}${m.to}${m.promotion || ''}` === lastMove.uci) continue;
+        preChess.move(m);
+        let replyMates = false;
+        const replies = preChess.moves({ verbose: true });
+        for (const r of replies) {
+          preChess.move(r);
+          if (preChess.isCheckmate()) {
+            replyMates = true;
+          }
+          preChess.undo();
+          if (replyMates) break;
+        }
+        preChess.undo();
+        if (!replyMates) return true;
+      }
+      return false;
+    })();
+
   // Severe blunder ("almost by distraction"): walking into forced mate, leaving Queen/Rook/minor
   // completely en prise, moving a piece straight into a losing capture, or dropping >= 240 cp.
   const isSevereDistractionBlunder =
-    aiCanMateImmediately ||
-    Boolean(audit?.walkedIntoMate) ||
-    (Boolean(newlyExposed) &&
-      (newlyExposed!.type === 'q' ||
-        (newlyExposed!.type === 'r' && (audit === null || cpLossVal >= 130)) ||
-        ((newlyExposed!.type === 'b' || newlyExposed!.type === 'n') &&
-          (audit === null || cpLossVal >= 210)))) ||
-    (movedDestAttacked && cpLossVal >= 220) ||
-    cpLossVal >= 240;
+    canOfferUndo &&
+    (avoidableMateInOne ||
+      Boolean(audit?.walkedIntoMate) ||
+      (Boolean(newlyExposed) &&
+        (newlyExposed!.type === 'q' ||
+          (newlyExposed!.type === 'r' && (audit === null || cpLossVal >= 130)) ||
+          ((newlyExposed!.type === 'b' || newlyExposed!.type === 'n') &&
+            (audit === null || cpLossVal >= 210)))) ||
+      (movedDestAttacked && cpLossVal >= 220) ||
+      cpLossVal >= 240);
 
   if (isSevereDistractionBlunder) {
     const entry = tryPickCaseClip('wrong_distracted');
@@ -1866,7 +1903,7 @@ export function evaluateHumanMoveCommentary(ctx: HumanCommentaryContext): Oppone
     }
   }
 
-  if (newlyExposed && (audit === null || audit.cpLoss >= 95)) {
+  if (canOfferUndo && newlyExposed && (audit === null || audit.cpLoss >= 95)) {
     if (
       (newlyExposed.type === 'b' || newlyExposed.type === 'n') &&
       (audit?.cpLoss ?? 200) >= 135
@@ -1898,7 +1935,7 @@ export function evaluateHumanMoveCommentary(ctx: HumanCommentaryContext): Oppone
   }
 
   // Audit evaluation swings (missed tactic, positional mistake, or clear inaccuracy)
-  if (audit && alts.length > 0) {
+  if (canOfferUndo && audit && alts.length > 0) {
     const pawnsLost = (audit.cpLoss / 100).toFixed(1);
     const altOriginSq =
       alts[0].uci.length >= 4 && postChess.get(alts[0].uci.slice(0, 2) as Square)?.color === humanColor
@@ -3189,24 +3226,54 @@ class OpponentSpeechController {
       const nextClipId = resolveClipIdForOccurrence(caseId, nextCount);
       void this.fetchMp3Bytes(buildVoiceUrl(nextClipId));
     }
+    // Always preload all 6 hesitation stages + hint_shown + angel_modal_on so they play instantly in Angel's real MP3 voice
+    const alwaysPreloadClips: VoiceClipId[] = [
+      'hesitate_hint_v1',
+      'hesitate_hint_v2',
+      'hesitate_hint_v3',
+      'hesitate_hint_v4',
+      'hesitate_hint_v5',
+      'hesitate_hint_v6',
+      'hint_shown_v1',
+      'hint_shown_v2',
+      'hint_shown_v3',
+      'angel_modal_on_v1',
+      'angel_modal_on_v2',
+      'angel_modal_on_v3',
+    ];
+    for (const cid of alwaysPreloadClips) {
+      void this.fetchMp3Bytes(buildVoiceUrl(cid));
+    }
   }
 
   private async fetchMp3Bytes(url: string, signal?: AbortSignal): Promise<ArrayBuffer | null> {
     const existing = this.rawBytesCache.get(url);
     if (existing) return existing;
 
-    try {
-      const res = await fetch(url, { signal });
-      if (!res.ok) return null;
-      const contentType = (res.headers.get('content-type') || '').toLowerCase();
-      if (contentType.includes('text/html')) return null;
-      const bytes = await res.arrayBuffer();
-      if (bytes.byteLength < 256) return null;
-      this.rawBytesCache.set(url, bytes);
-      return bytes;
-    } catch {
-      return null;
+    const attemptUrls = [url];
+    const cleanUrl = url.split('?')[0];
+    if (cleanUrl && cleanUrl !== url) {
+      attemptUrls.push(cleanUrl);
     }
+
+    for (let idx = 0; idx < attemptUrls.length; idx++) {
+      try {
+        const res = await fetch(attemptUrls[idx], {
+          signal,
+          cache: idx === 0 ? 'default' : 'no-store',
+        });
+        if (!res.ok) continue;
+        const contentType = (res.headers.get('content-type') || '').toLowerCase();
+        if (contentType.includes('text/html')) continue;
+        const bytes = await res.arrayBuffer();
+        if (bytes.byteLength < 256) continue;
+        this.rawBytesCache.set(url, bytes);
+        return bytes;
+      } catch {
+        if (signal?.aborted) return null;
+      }
+    }
+    return null;
   }
 
   private ensureAudioGraph(): { ctx: AudioContext; input: AudioNode } | null {
@@ -3441,7 +3508,6 @@ class OpponentSpeechController {
     url: string,
     seq: number,
     clipInfo: { clipId: VoiceClipId; voiceMode: AngelVoiceMode; soundEnabled: boolean },
-    allowSpeechFallback = false,
   ): Promise<void> {
     if (seq !== this.speakSeq) return;
     const audio = new Audio(url);
@@ -3461,9 +3527,8 @@ class OpponentSpeechController {
       if (this.activeHtmlAudio === audio) {
         this.activeHtmlAudio = null;
         if (seq === this.speakSeq) {
-          if (allowSpeechFallback && this.speakViaSpeechSynthesis(clipInfo.clipId, seq)) {
-            return;
-          }
+          // Never fall back to robotic browser SpeechSynthesis — Angel only speaks in her own recorded MP3 voice.
+          this.pendingSpeechClip = false;
           this.setPlaybackState('idle');
         }
       }
@@ -3491,8 +3556,6 @@ class OpponentSpeechController {
         if (isAutoplayBlocked) {
           this.pendingGestureClip = clipInfo;
           this.setPlaybackState('awaiting-gesture');
-        } else if (allowSpeechFallback && this.speakViaSpeechSynthesis(clipInfo.clipId, seq)) {
-          return;
         } else {
           this.setPlaybackState('idle');
         }
@@ -3567,7 +3630,7 @@ class OpponentSpeechController {
           }
         }
 
-        await this.playViaHtmlAudio(url, seq, clipInfo, !mp3Bytes);
+        await this.playViaHtmlAudio(url, seq, clipInfo);
       } catch {
         if (!controller.signal.aborted && seq === this.speakSeq) {
           this.pendingSpeechClip = false;

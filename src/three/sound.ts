@@ -253,10 +253,228 @@ class ChessSoundEngine {
   private lastMoveIdx = -1;
   private lastCaptureIdx = -1;
   private lastCheckIdx = -1;
+  private udoBarkAudioUrl: string | null = null;
+  private udoBarkRawBytes: ArrayBuffer | null = null;
+  private udoBarkDecodedBuffer: AudioBuffer | null = null;
+  private udoBarkFetchPromise: Promise<ArrayBuffer | null> | null = null;
+  private udoBarkLoopSource: AudioBufferSourceNode | null = null;
+  private udoBarkLoopGain: GainNode | null = null;
+  private udoBarkLoopPanner: StereoPannerNode | null = null;
+  private udoBarkLoopHtmlAudio: HTMLAudioElement | null = null;
+  private udoBarkLoopSeq = 0;
   public enabled = true;
 
   public unlock(): void {
     this.ensureContext();
+  }
+
+  public setUdoBarkAudioUrl(url: string | null): void {
+    const clean = url && url.trim().length > 0 ? url.trim() : null;
+    if (clean === this.udoBarkAudioUrl) return;
+    this.stopWildDogBarkLoop();
+    this.udoBarkAudioUrl = clean;
+    this.udoBarkRawBytes = null;
+    this.udoBarkDecodedBuffer = null;
+    this.udoBarkFetchPromise = null;
+    if (clean && typeof window !== 'undefined') {
+      void this.preloadUdoBarkBytes(clean);
+    }
+  }
+
+  public getUdoBarkAudioUrl(): string | null {
+    return this.udoBarkAudioUrl;
+  }
+
+  public hasCustomUdoBarkAudio(): boolean {
+    return Boolean(this.udoBarkAudioUrl);
+  }
+
+  private async preloadUdoBarkBytes(url: string): Promise<ArrayBuffer | null> {
+    if (this.udoBarkRawBytes && this.udoBarkAudioUrl === url) {
+      return this.udoBarkRawBytes;
+    }
+    if (this.udoBarkFetchPromise && this.udoBarkAudioUrl === url) {
+      return this.udoBarkFetchPromise;
+    }
+    const p = (async () => {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (ct.includes('text/html')) return null;
+        const bytes = await res.arrayBuffer();
+        if (bytes.byteLength < 64) return null;
+        if (this.udoBarkAudioUrl === url) {
+          this.udoBarkRawBytes = bytes;
+        }
+        return bytes;
+      } catch {
+        return null;
+      }
+    })();
+    this.udoBarkFetchPromise = p;
+    return p;
+  }
+
+  public startWildDogBarkLoop(initialPan = 0): boolean {
+    if (!this.enabled || !this.udoBarkAudioUrl || typeof window === 'undefined') {
+      return false;
+    }
+    this.stopWildDogBarkLoop();
+    const seq = ++this.udoBarkLoopSeq;
+    const url = this.udoBarkAudioUrl;
+    const clampedPan = Math.max(-0.95, Math.min(0.95, initialPan));
+
+    const startHtmlLoop = () => {
+      if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
+      try {
+        const audio = new Audio(url);
+        audio.loop = true;
+        audio.preload = 'auto';
+        audio.volume = 0.92;
+        this.udoBarkLoopHtmlAudio = audio;
+        void audio.play().catch(() => {
+          if (this.udoBarkLoopHtmlAudio === audio) {
+            this.udoBarkLoopHtmlAudio = null;
+          }
+        });
+      } catch {
+        // ignore
+      }
+    };
+
+    const startWebAudioLoop = (ctx: AudioContext, buf: AudioBuffer) => {
+      if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
+      try {
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.loop = true;
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.01, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.95, ctx.currentTime + 0.04);
+
+        let panner: StereoPannerNode | null = null;
+        if (typeof ctx.createStereoPanner === 'function') {
+          panner = ctx.createStereoPanner();
+          panner.pan.setValueAtTime(clampedPan, ctx.currentTime);
+          src.connect(gain);
+          gain.connect(panner);
+          panner.connect(ctx.destination);
+        } else {
+          src.connect(gain);
+          gain.connect(ctx.destination);
+        }
+
+        this.udoBarkLoopSource = src;
+        this.udoBarkLoopGain = gain;
+        this.udoBarkLoopPanner = panner;
+        src.start(0);
+      } catch {
+        startHtmlLoop();
+      }
+    };
+
+    const ctx = this.ensureContext();
+    if (ctx && this.udoBarkDecodedBuffer) {
+      startWebAudioLoop(ctx, this.udoBarkDecodedBuffer);
+      return true;
+    }
+
+    if (ctx) {
+      void (async () => {
+        const bytes = await this.preloadUdoBarkBytes(url);
+        if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
+        if (bytes) {
+          try {
+            const decoded = await ctx.decodeAudioData(bytes.slice(0));
+            if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
+            if (this.udoBarkAudioUrl === url) {
+              this.udoBarkDecodedBuffer = decoded;
+            }
+            startWebAudioLoop(ctx, decoded);
+            return;
+          } catch {
+            // Fall through to HTMLAudio loop
+          }
+        }
+        startHtmlLoop();
+      })();
+      return true;
+    }
+
+    startHtmlLoop();
+    return true;
+  }
+
+  public updateWildDogBarkLoopPan(pan: number): void {
+    if (!this.udoBarkLoopPanner || !this.ctx) return;
+    const clampedPan = Math.max(-0.95, Math.min(0.95, pan));
+    try {
+      this.udoBarkLoopPanner.pan.setTargetAtTime(clampedPan, this.ctx.currentTime, 0.04);
+    } catch {
+      // ignore
+    }
+  }
+
+  public stopWildDogBarkLoop(): void {
+    this.udoBarkLoopSeq++;
+    const src = this.udoBarkLoopSource;
+    const gain = this.udoBarkLoopGain;
+    const panner = this.udoBarkLoopPanner;
+    this.udoBarkLoopSource = null;
+    this.udoBarkLoopGain = null;
+    this.udoBarkLoopPanner = null;
+
+    if (src) {
+      try {
+        if (gain && this.ctx) {
+          const now = this.ctx.currentTime;
+          gain.gain.cancelScheduledValues(now);
+          gain.gain.setValueAtTime(Math.max(0.001, gain.gain.value), now);
+          gain.gain.linearRampToValueAtTime(0.0001, now + 0.06);
+          src.stop(now + 0.07);
+        } else {
+          src.stop();
+        }
+      } catch {
+        // already stopped
+      }
+      if (panner) {
+        window.setTimeout(() => {
+          try {
+            src.disconnect();
+            gain?.disconnect();
+            panner.disconnect();
+          } catch {
+            // ignore
+          }
+        }, 120);
+      }
+    }
+
+    if (this.udoBarkLoopHtmlAudio) {
+      try {
+        this.udoBarkLoopHtmlAudio.pause();
+        this.udoBarkLoopHtmlAudio.currentTime = 0;
+      } catch {
+        // ignore
+      }
+      this.udoBarkLoopHtmlAudio = null;
+    }
+  }
+
+  public previewUdoBarkAudio(durationMs = 2600): void {
+    if (!this.hasCustomUdoBarkAudio()) {
+      this.playWildDogBark(0, 1);
+      return;
+    }
+    this.startWildDogBarkLoop(0);
+    const activeSeq = this.udoBarkLoopSeq;
+    window.setTimeout(() => {
+      if (this.udoBarkLoopSeq === activeSeq) {
+        this.stopWildDogBarkLoop();
+      }
+    }, Math.max(800, durationMs));
   }
 
   private ensureContext(): AudioContext | null {

@@ -326,6 +326,7 @@ export default defineConfig(() => {
               'seduction_6.mp3',
               'thank_jan.mp3',
               'angle_45923f8a.mp3',
+              'udo_bark.mp3',
             ]);
             const rawMp3Candidates = fs
               .readdirSync(aistudioDir, { withFileTypes: true })

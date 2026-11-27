@@ -1,9 +1,11 @@
-import { useEffect, useState, type ChangeEvent, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Check,
   ChevronDown,
   ChevronRight,
   Clock,
+  Crosshair,
   Crown,
   Film,
   Hand,
@@ -14,6 +16,7 @@ import {
   Plus,
   Repeat,
   RotateCcw,
+  Ruler,
   Sparkles,
   Trash2,
   Unlock,
@@ -26,11 +29,21 @@ import {
   ANGEL_DEFAULT_SPEAKING_VIDEO_SRC,
   ANGEL_GROUP_VIDEO_MAP,
   ANGEL_IDLE_LISTENING_VIDEO_SRC,
+  ANGEL_VIDEO_NATIVE_H,
+  ANGEL_VIDEO_NATIVE_W,
   ANGEL_VIDEO_STUDIO_GROUPS,
   ALL_ESCAPE_CUE_KEYS,
+  DEFAULT_ANGEL_BG_TRANSPARENCY,
+  DEFAULT_DOG_RUN_EXIT_X_PX,
+  DEFAULT_DOG_RUN_EXIT_Y_PX,
+  DEFAULT_OPENING_FLOWCHART_DENSITY,
+  DEFAULT_OPENING_FLOWCHART_START_SEC,
   caseHasAlternativeSlotUI,
   compressAngelStudioVideos,
+  getAngelBgTransparency,
   getAngelDanceStarsVideoUrl,
+  getAngelDogRunExitXPx,
+  getAngelDogRunExitYPx,
   getAngelDogRunJumpSec,
   getAngelDogRunVideoUrl,
   getAngelIdleVideoPool,
@@ -42,6 +55,8 @@ import {
   getEscapeSlotKey,
   getEscapeVideoApexSec,
   getEscapeVideoPool,
+  getOpeningFlowchartDensity,
+  getOpeningFlowchartStartSec,
   getSeductionCaseEntries,
   getSeductionSlotKey,
   getVideoFileDurationSec,
@@ -64,16 +79,21 @@ import {
   primeNextEscapeSlotPreview,
   refreshAngelVideoOverrides,
   resetAngelPortraitVideo,
+  resetUdoBarkAudio,
   subscribeAngelVideoOverrides,
+  updateAngelBgTransparency,
   updateAngelCaseEscapeCue,
   updateAngelCompressionPreset,
+  updateAngelDogRunExitPx,
   updateAngelDogRunJumpSec,
   updateAngelEscapeEnabled,
   updateAngelLipSyncRule,
   updateAngelSeductionTriggerMode,
   updateAngelVideoMaxPlays,
   updateAngelVideoPlayToEnd,
+  updateOpeningFlowchartConfig,
   uploadAngelPortraitVideo,
+  uploadUdoBarkAudio,
   type AngelCompressionPreset,
   type AngelEscapeCueKey,
   type AngelEscapeSlotKey,
@@ -81,6 +101,7 @@ import {
   type AngelVideoMapPayload,
   type CompressAngelVideosResult,
 } from '../chess/angelPortraitVideos';
+import { soundEngine } from '../three/sound';
 import {
   CLIP_TEXT,
   type CommentaryCaseId,
@@ -119,6 +140,290 @@ function getTargetCrfForPreset(preset: AngelCompressionPreset): number {
   if (preset === 'balanced_24') return 24;
   if (preset === 'mobile_27') return 27;
   return 21;
+}
+
+interface UdoPortraitPixelRulerProps {
+  exitYPx: number;
+  exitXPx: number;
+  onChangeExitY: (yPx: number, immediate?: boolean) => void;
+  onTestJump?: () => void;
+  onHide: () => void;
+}
+
+/**
+ * Dev-only on-screen pixel scale glued flush to the left border of the live Chess Angel portrait video.
+ * Lets the developer read exact pixels (0..752 native video px + live rendered CSS px) and click/drag
+ * the horizontal laser crosshair to define Udo's exact jump-out height by the pixel.
+ */
+function UdoPortraitPixelRuler({
+  exitYPx,
+  exitXPx,
+  onChangeExitY,
+  onTestJump,
+  onHide,
+}: UdoPortraitPixelRulerProps) {
+  const [rect, setRect] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const [hoverY, setHoverY] = useState<{ nativePx: number; screenPx: number } | null>(null);
+  const draggingRef = useRef<boolean>(false);
+  const rulerElRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const measure = () => {
+      const el =
+        document.querySelector('[data-angel-portrait-canvas="true"]') ??
+        document.querySelector('[data-angel-portrait-modal="true"]');
+      if (!el) {
+        setRect(null);
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      if (r.width < 20 || r.height < 20) {
+        setRect(null);
+        return;
+      }
+      const portraitH = Math.min(r.height, r.width * (ANGEL_VIDEO_NATIVE_H / ANGEL_VIDEO_NATIVE_W));
+      setRect((prev) => {
+        if (
+          prev &&
+          Math.abs(prev.left - r.left) < 0.5 &&
+          Math.abs(prev.top - r.top) < 0.5 &&
+          Math.abs(prev.width - r.width) < 0.5 &&
+          Math.abs(prev.height - portraitH) < 0.5
+        ) {
+          return prev;
+        }
+        return { left: r.left, top: r.top, width: r.width, height: portraitH };
+      });
+    };
+
+    measure();
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, true);
+    const intervalId = window.setInterval(measure, 240);
+    let ro: ResizeObserver | null = null;
+    const target = document.querySelector('[data-angel-portrait-canvas="true"]');
+    if (target && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(measure);
+      ro.observe(target);
+    }
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure, true);
+      window.clearInterval(intervalId);
+      ro?.disconnect();
+    };
+  }, []);
+
+  if (!rect || typeof document === 'undefined') return null;
+
+  const rulerWidth = 54;
+  const rulerLeft = Math.max(4, rect.left - rulerWidth - 2);
+  const yFrac = Math.max(0, Math.min(1, exitYPx / ANGEL_VIDEO_NATIVE_H));
+  const xFrac = Math.max(-0.15, Math.min(1, exitXPx / ANGEL_VIDEO_NATIVE_W));
+  const markerScreenY = yFrac * rect.height;
+  const markerScreenX = xFrac * rect.width;
+
+  const clientYToPixels = (clientY: number) => {
+    const rel = Math.max(0, Math.min(rect.height, clientY - rect.top));
+    const nativePx = Math.max(
+      0,
+      Math.min(ANGEL_VIDEO_NATIVE_H, Math.round((rel / rect.height) * ANGEL_VIDEO_NATIVE_H)),
+    );
+    return { nativePx, screenPx: Math.round(rel) };
+  };
+
+  const ticks: number[] = [];
+  for (let px = 0; px <= ANGEL_VIDEO_NATIVE_H; px += 10) {
+    ticks.push(px);
+  }
+  if (ticks[ticks.length - 1] !== ANGEL_VIDEO_NATIVE_H) {
+    ticks.push(ANGEL_VIDEO_NATIVE_H);
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[65] pointer-events-none select-none">
+      {/* Compact top control pill right above the pixel ruler */}
+      <div
+        style={{
+          left: Math.max(6, Math.min(window.innerWidth - 230, rulerLeft - 2)),
+          top: Math.max(6, rect.top - 30),
+        }}
+        className="fixed pointer-events-auto inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border border-rose-400/70 bg-[#1a0b12]/95 shadow-xl text-[10px] font-mono-tabular text-rose-100 whitespace-nowrap"
+      >
+        <Ruler className="w-3 h-3 text-rose-300 shrink-0" />
+        <span className="font-semibold text-rose-200">
+          Udo Y:{exitYPx}px
+        </span>
+        <span className="text-[#a9989f]">
+          (scr {Math.round(markerScreenY)}/{Math.round(rect.height)})
+        </span>
+        {onTestJump && (
+          <button
+            type="button"
+            onClick={onTestJump}
+            title="Test Udo jumping out from this exact pixel"
+            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-rose-500/25 hover:bg-rose-500/45 border border-rose-400/60 text-[9.5px] font-semibold text-rose-100 cursor-pointer"
+          >
+            <Play className="w-2.5 h-2.5 text-rose-200" />
+            Test
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onHide}
+          title="Hide pixel scale"
+          className="p-0.5 rounded text-rose-300/80 hover:text-white hover:bg-white/10 cursor-pointer"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      </div>
+
+      {/* Interactive graduated pixel ruler flush to the left border of Chess Angel's video */}
+      <div
+        ref={rulerElRef}
+        style={{
+          left: rulerLeft,
+          top: rect.top,
+          width: rulerWidth,
+          height: rect.height,
+        }}
+        onPointerDown={(e) => {
+          draggingRef.current = true;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          const { nativePx, screenPx } = clientYToPixels(e.clientY);
+          setHoverY({ nativePx, screenPx });
+          onChangeExitY(nativePx, false);
+        }}
+        onPointerMove={(e) => {
+          const { nativePx, screenPx } = clientYToPixels(e.clientY);
+          setHoverY({ nativePx, screenPx });
+          if (draggingRef.current) {
+            onChangeExitY(nativePx, false);
+          }
+        }}
+        onPointerUp={(e) => {
+          if (draggingRef.current) {
+            draggingRef.current = false;
+            const { nativePx } = clientYToPixels(e.clientY);
+            onChangeExitY(nativePx, true);
+          }
+        }}
+        onPointerCancel={() => {
+          draggingRef.current = false;
+        }}
+        onPointerLeave={() => {
+          if (!draggingRef.current) setHoverY(null);
+        }}
+        title="Click or drag along this pixel scale to set Udo's exact jump-out Y pixel (0–752 px)"
+        className="fixed pointer-events-auto cursor-ns-resize rounded-l-md border border-r-rose-400/75 border-white/25 bg-[#080a10]/90 shadow-2xl overflow-visible"
+      >
+        {/* Graduated tick marks (0..752 native video px) */}
+        {ticks.map((px) => {
+          const topPct = (px / ANGEL_VIDEO_NATIVE_H) * 100;
+          const isMajor = px % 50 === 0 || px === ANGEL_VIDEO_NATIVE_H;
+          const isMedium = !isMajor && px % 25 === 0;
+          return (
+            <div
+              key={px}
+              style={{ top: `${topPct}%` }}
+              className="absolute left-0 right-0 pointer-events-none"
+            >
+              <div
+                className={`absolute right-0 h-px ${
+                  isMajor
+                    ? 'w-3.5 bg-amber-300/90'
+                    : isMedium
+                      ? 'w-2 bg-white/55'
+                      : 'w-1 bg-white/25'
+                }`}
+              />
+              {isMajor && (
+                <span
+                  style={{ transform: 'translateY(-50%)' }}
+                  className="absolute right-4 font-mono-tabular text-[9px] leading-none text-amber-100/90 [text-shadow:0_1px_2px_#000]"
+                >
+                  {px}
+                </span>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Hover preview crosshair tick */}
+        {hoverY && (
+          <div
+            style={{ top: `${(hoverY.nativePx / ANGEL_VIDEO_NATIVE_H) * 100}%` }}
+            className="absolute left-0 right-0 pointer-events-none z-10"
+          >
+            <div className="h-px w-full bg-cyan-300/90" />
+            <span
+              style={{ transform: 'translate(-100%, -50%)' }}
+              className="absolute -left-1.5 px-1.5 py-0.5 rounded bg-[#091822]/95 border border-cyan-400/70 font-mono-tabular text-[9.5px] font-semibold text-cyan-200 whitespace-nowrap shadow-lg"
+            >
+              {hoverY.nativePx}px · scr {hoverY.screenPx}px
+            </span>
+          </div>
+        )}
+
+        {/* Active Udo jump-out Y handle on the ruler */}
+        <div
+          style={{ top: `${yFrac * 100}%` }}
+          className="absolute left-0 right-0 pointer-events-none z-20"
+        >
+          <div className="h-[2px] w-full bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.95)]" />
+          <div
+            style={{ transform: 'translate(-100%, -50%)' }}
+            className="absolute -left-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-600/95 border border-rose-200/80 font-mono-tabular text-[10px] font-bold text-white whitespace-nowrap shadow-[0_0_12px_rgba(244,63,94,0.75)]"
+          >
+            <span>🐾 {exitYPx}px</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Horizontal laser guide & exact (X, Y) crosshair overlaid directly over the portrait video */}
+      <div
+        style={{
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+        }}
+        className="fixed pointer-events-none overflow-visible"
+      >
+        {/* Subtle portrait frame outline */}
+        <div className="absolute inset-0 border border-rose-400/45" />
+        {/* Hover horizontal preview line across video */}
+        {hoverY && (
+          <div
+            style={{ top: `${(hoverY.nativePx / ANGEL_VIDEO_NATIVE_H) * 100}%` }}
+            className="absolute left-0 right-0 h-px border-t border-dashed border-cyan-300/70"
+          />
+        )}
+        {/* Active Udo jump-out horizontal line across video */}
+        <div
+          style={{ top: markerScreenY }}
+          className="absolute left-0 right-0 h-[1.5px] bg-rose-400/85 shadow-[0_0_8px_rgba(251,113,133,0.9)]"
+        />
+        {/* Exact (X, Y) launch target crosshair */}
+        <div
+          style={{
+            left: markerScreenX,
+            top: markerScreenY,
+            transform: 'translate(-50%, -50%)',
+          }}
+          className="absolute w-5 h-5 rounded-full border-2 border-rose-300 bg-rose-500/30 shadow-[0_0_12px_rgba(244,63,94,0.95)] flex items-center justify-center"
+        >
+          <div className="w-1.5 h-1.5 rounded-full bg-white" />
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 export function AngelVideoStudioModal({
@@ -161,6 +466,7 @@ export function AngelVideoStudioModal({
   const [compressingAll, setCompressingAll] = useState<boolean>(false);
   const [compressingUrl, setCompressingUrl] = useState<string | null>(null);
   const [lastCompressRun, setLastCompressRun] = useState<CompressAngelVideosResult | null>(null);
+  const [showPixelScale, setShowPixelScale] = useState<boolean>(true);
 
   useEffect(() => {
     void refreshAngelVideoOverrides();
@@ -741,6 +1047,20 @@ export function AngelVideoStudioModal({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowPixelScale((v) => !v)}
+            aria-pressed={showPixelScale}
+            title="Show or hide the on-screen pixel ruler next to Chess Angel's video for calibrating Udo's exact jump-out pixel"
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] font-medium transition-colors cursor-pointer ${
+              showPixelScale
+                ? 'border-rose-400/65 bg-rose-950/55 text-rose-100'
+                : 'border-white/15 bg-white/5 hover:bg-white/10 text-[#cbd5e1]'
+            }`}
+          >
+            <Ruler className="w-3 h-3 text-rose-300" />
+            <span>Px Scale</span>
+          </button>
           {onLockStudio && (
             <button
               type="button"
@@ -762,6 +1082,20 @@ export function AngelVideoStudioModal({
           </button>
         </div>
       </div>
+
+      {showPixelScale && (
+        <UdoPortraitPixelRuler
+          exitYPx={getAngelDogRunExitYPx(overrides)}
+          exitXPx={getAngelDogRunExitXPx(overrides)}
+          onChangeExitY={(yPx, immediate) =>
+            void updateAngelDogRunExitPx({ yPx }, { immediate })
+          }
+          onTestJump={
+            onTriggerDogEvent ? () => onTriggerDogEvent({ playVideo: true }) : undefined
+          }
+          onHide={() => setShowPixelScale(false)}
+        />
+      )}
 
       {!IS_VIDEO_STUDIO_DEV_ENV ? (
         <div className="px-4 py-2.5 bg-[#29170a] border-b border-amber-500/55 text-[11px] text-amber-200 leading-snug">
@@ -1602,6 +1936,343 @@ export function AngelVideoStudioModal({
                     Locked directly to the video&rsquo;s playback clock — the 3D puppy waits until the video reaches exactly {jumpSec.toFixed(1)}s.
                   </span>
                 </div>
+
+                {/* Exact-pixel jump-out calibration (0..752px vertical Y, -80..560px horizontal X) */}
+                {(() => {
+                  const exitYPx = getAngelDogRunExitYPx(overrides);
+                  const exitXPx = getAngelDogRunExitXPx(overrides);
+                  return (
+                    <div className="space-y-2 pt-2 border-t border-white/10">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 text-[11px] text-[#e6cbd5]">
+                          <Crosshair className="w-3.5 h-3.5 text-rose-300 shrink-0" />
+                          <span className="font-medium">
+                            Exact Udo Jump-Out Pixel (560×752 video):
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setShowPixelScale((v) => !v)}
+                            aria-pressed={showPixelScale}
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10.5px] font-semibold cursor-pointer ${
+                              showPixelScale
+                                ? 'border-rose-400/65 bg-rose-950/55 text-rose-100'
+                                : 'border-white/20 bg-white/5 hover:bg-white/10 text-[#cbd5e1]'
+                            }`}
+                          >
+                            <Ruler className="w-3 h-3 text-rose-300" />
+                            On-Screen Scale: {showPixelScale ? 'ON' : 'OFF'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void updateAngelDogRunExitPx(
+                                {
+                                  xPx: DEFAULT_DOG_RUN_EXIT_X_PX,
+                                  yPx: DEFAULT_DOG_RUN_EXIT_Y_PX,
+                                },
+                                { immediate: true },
+                              )
+                            }
+                            title={`Reset to default (${DEFAULT_DOG_RUN_EXIT_X_PX}px, ${DEFAULT_DOG_RUN_EXIT_Y_PX}px)`}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-white/15 bg-white/5 hover:bg-white/10 text-[10px] text-[#d6bac4] cursor-pointer"
+                          >
+                            <RotateCcw className="w-2.5 h-2.5" />
+                            Reset
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Vertical Y Pixel (0 = top, 752 = bottom) */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-mono-tabular text-[11px] font-semibold text-rose-200 w-16 shrink-0">
+                          Y Height:
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={ANGEL_VIDEO_NATIVE_H}
+                          step={1}
+                          value={exitYPx}
+                          onChange={(e) => {
+                            const next = Number(e.target.value);
+                            if (Number.isFinite(next)) {
+                              void updateAngelDogRunExitPx({ yPx: next });
+                            }
+                          }}
+                          onPointerUp={(e) => {
+                            const next = Number((e.target as HTMLInputElement).value);
+                            if (Number.isFinite(next)) {
+                              void updateAngelDogRunExitPx({ yPx: next }, { immediate: true });
+                            }
+                          }}
+                          className="w-36 sm:w-44 accent-rose-400 cursor-pointer"
+                          aria-label="Udo jump-out vertical Y pixel"
+                        />
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void updateAngelDogRunExitPx(
+                                { yPx: Math.max(0, exitYPx - 10) },
+                                { immediate: true },
+                              )
+                            }
+                            className="px-1.5 py-0.5 rounded border border-rose-400/35 bg-[#221018] hover:bg-[#351825] text-rose-200 font-mono-tabular text-[11px] cursor-pointer"
+                          >
+                            −10
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void updateAngelDogRunExitPx(
+                                { yPx: Math.max(0, exitYPx - 1) },
+                                { immediate: true },
+                              )
+                            }
+                            className="px-1.5 py-0.5 rounded border border-rose-400/35 bg-[#221018] hover:bg-[#351825] text-rose-200 font-mono-tabular text-[11px] cursor-pointer"
+                          >
+                            −1
+                          </button>
+                          <input
+                            type="number"
+                            min={0}
+                            max={ANGEL_VIDEO_NATIVE_H}
+                            step={1}
+                            value={exitYPx}
+                            onChange={(e) => {
+                              const next = Number(e.target.value);
+                              if (Number.isFinite(next)) {
+                                void updateAngelDogRunExitPx({ yPx: next }, { immediate: true });
+                              }
+                            }}
+                            aria-label="Exact Udo jump-out Y pixel"
+                            className="w-16 font-mono-tabular text-xs font-semibold text-center px-1 py-0.5 rounded border border-rose-400/50 bg-[#221018] text-rose-100 focus:outline-none focus:border-rose-300"
+                          />
+                          <span className="font-mono-tabular text-[11px] text-rose-200">
+                            / {ANGEL_VIDEO_NATIVE_H}px
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void updateAngelDogRunExitPx(
+                                { yPx: Math.min(ANGEL_VIDEO_NATIVE_H, exitYPx + 1) },
+                                { immediate: true },
+                              )
+                            }
+                            className="px-1.5 py-0.5 rounded border border-rose-400/35 bg-[#221018] hover:bg-[#351825] text-rose-200 font-mono-tabular text-[11px] cursor-pointer"
+                          >
+                            +1
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void updateAngelDogRunExitPx(
+                                { yPx: Math.min(ANGEL_VIDEO_NATIVE_H, exitYPx + 10) },
+                                { immediate: true },
+                              )
+                            }
+                            className="px-1.5 py-0.5 rounded border border-rose-400/35 bg-[#221018] hover:bg-[#351825] text-rose-200 font-mono-tabular text-[11px] cursor-pointer"
+                          >
+                            +10
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Horizontal X Pixel (-80 = left outside edge, 0 = left edge, 560 = right edge) */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-mono-tabular text-[11px] font-semibold text-amber-200 w-16 shrink-0">
+                          X Edge:
+                        </span>
+                        <input
+                          type="range"
+                          min={-80}
+                          max={ANGEL_VIDEO_NATIVE_W}
+                          step={1}
+                          value={exitXPx}
+                          onChange={(e) => {
+                            const next = Number(e.target.value);
+                            if (Number.isFinite(next)) {
+                              void updateAngelDogRunExitPx({ xPx: next });
+                            }
+                          }}
+                          onPointerUp={(e) => {
+                            const next = Number((e.target as HTMLInputElement).value);
+                            if (Number.isFinite(next)) {
+                              void updateAngelDogRunExitPx({ xPx: next }, { immediate: true });
+                            }
+                          }}
+                          className="w-36 sm:w-44 accent-amber-400 cursor-pointer"
+                          aria-label="Udo jump-out horizontal X pixel"
+                        />
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void updateAngelDogRunExitPx(
+                                { xPx: Math.max(-80, exitXPx - 10) },
+                                { immediate: true },
+                              )
+                            }
+                            className="px-1.5 py-0.5 rounded border border-amber-400/35 bg-[#20190c] hover:bg-[#302410] text-amber-200 font-mono-tabular text-[11px] cursor-pointer"
+                          >
+                            −10
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void updateAngelDogRunExitPx(
+                                { xPx: Math.max(-80, exitXPx - 1) },
+                                { immediate: true },
+                              )
+                            }
+                            className="px-1.5 py-0.5 rounded border border-amber-400/35 bg-[#20190c] hover:bg-[#302410] text-amber-200 font-mono-tabular text-[11px] cursor-pointer"
+                          >
+                            −1
+                          </button>
+                          <input
+                            type="number"
+                            min={-80}
+                            max={ANGEL_VIDEO_NATIVE_W}
+                            step={1}
+                            value={exitXPx}
+                            onChange={(e) => {
+                              const next = Number(e.target.value);
+                              if (Number.isFinite(next)) {
+                                void updateAngelDogRunExitPx({ xPx: next }, { immediate: true });
+                              }
+                            }}
+                            aria-label="Exact Udo jump-out X pixel"
+                            className="w-16 font-mono-tabular text-xs font-semibold text-center px-1 py-0.5 rounded border border-amber-400/50 bg-[#20190c] text-amber-100 focus:outline-none focus:border-amber-300"
+                          />
+                          <span className="font-mono-tabular text-[11px] text-amber-200">
+                            / {ANGEL_VIDEO_NATIVE_W}px
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void updateAngelDogRunExitPx(
+                                { xPx: Math.min(ANGEL_VIDEO_NATIVE_W, exitXPx + 1) },
+                                { immediate: true },
+                              )
+                            }
+                            className="px-1.5 py-0.5 rounded border border-amber-400/35 bg-[#20190c] hover:bg-[#302410] text-amber-200 font-mono-tabular text-[11px] cursor-pointer"
+                          >
+                            +1
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void updateAngelDogRunExitPx(
+                                { xPx: Math.min(ANGEL_VIDEO_NATIVE_W, exitXPx + 10) },
+                                { immediate: true },
+                              )
+                            }
+                            className="px-1.5 py-0.5 rounded border border-amber-400/35 bg-[#20190c] hover:bg-[#302410] text-amber-200 font-mono-tabular text-[11px] cursor-pointer"
+                          >
+                            +10
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-[#a9989f]">
+                        Click or drag directly on the live pixel scale next to Chess Angel&rsquo;s video to position Udo&rsquo;s launch height by the exact pixel.
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                {/* Custom Looping Barking Audio for Udo's 3D Animation */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/10">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[#e6cbd5]">
+                      <Music className="w-3.5 h-3.5 text-rose-300 shrink-0" />
+                      <span className="font-medium">Udo 3D Barking Sound (Loops while running):</span>
+                      <span
+                        className={`font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border ${
+                          overrides.udoBarkAudioUrl
+                            ? 'border-emerald-500/45 bg-emerald-950/40 text-emerald-200'
+                            : 'border-white/15 bg-white/5 text-[#b7a7ae]'
+                        }`}
+                      >
+                        {overrides.udoBarkAudioUrl ? '✓ Custom Bark Loop Active' : 'Default SFX'}
+                      </span>
+                    </div>
+                    {overrides.udoBarkAudioUrl && (
+                      <div className="font-mono-tabular text-[10px] text-emerald-300/85 truncate mt-0.5">
+                        {overrides.udoBarkAudioUrl.split('?')[0]}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => soundEngine.previewUdoBarkAudio(2600)}
+                      title="Preview Udo's looping barking audio"
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-black hover:bg-[#221018] border border-rose-400/40 text-[11px] text-rose-200 cursor-pointer"
+                    >
+                      <Play className="w-3 h-3 text-rose-300" />
+                      Test Bark
+                    </button>
+                    <label className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#26121b] hover:bg-[#381928] border border-rose-400/55 text-[11px] font-semibold text-rose-100 cursor-pointer">
+                      <Upload className="w-3 h-3 text-rose-300" />
+                      <span>{overrides.udoBarkAudioUrl ? 'Replace Bark Audio' : 'Upload Bark Audio'}</span>
+                      <input
+                        type="file"
+                        accept="audio/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = '';
+                          if (!file) return;
+                          setBusySlot('udo_bark_audio');
+                          setStatusNote(`Uploading Udo barking sound (${file.name})...`);
+                          void uploadUdoBarkAudio(file)
+                            .then(() => {
+                              setStatusNote(
+                                'Saved Udo barking sound! It will loop with stereo panning during Udo’s 3D run.',
+                              );
+                              soundEngine.previewUdoBarkAudio(2400);
+                            })
+                            .catch((err) => {
+                              setStatusNote(
+                                err instanceof Error
+                                  ? err.message
+                                  : 'Failed to upload Udo barking audio.',
+                              );
+                            })
+                            .finally(() => setBusySlot(null));
+                        }}
+                      />
+                    </label>
+                    {overrides.udoBarkAudioUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBusySlot('udo_bark_audio');
+                          void resetUdoBarkAudio()
+                            .then(() => {
+                              setStatusNote(
+                                'Cleared custom Udo barking audio (reverted to default).',
+                              );
+                            })
+                            .catch((err) => {
+                              setStatusNote(
+                                err instanceof Error
+                                  ? err.message
+                                  : 'Failed to clear Udo barking audio.',
+                              );
+                            })
+                            .finally(() => setBusySlot(null));
+                        }}
+                        title="Remove custom barking audio"
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-black hover:bg-rose-950/50 border border-white/15 text-[11px] text-[#c7b7be] hover:text-rose-200 cursor-pointer"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           );
@@ -1723,6 +2394,391 @@ export function AngelVideoStudioModal({
                       previewDanceStars(),
                     )}
                   </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Transparent Black Background — All Chess Angel Videos (GPU Exterior Flood Keyer) */}
+        {(() => {
+          const bgTrans = getAngelBgTransparency(overrides);
+          const bgTransPct = Math.round(bgTrans * 100);
+          const isBgTransparent = bgTrans > 0.001;
+
+          return (
+            <div className="rounded-xl border border-violet-400/50 bg-[#0d0a16] overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#150f24] border-b border-violet-400/30">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-violet-300 shrink-0" />
+                    <span className="text-xs font-semibold text-[#f3ecff]">
+                      Transparent Black Background — All Angel Videos
+                    </span>
+                    <span
+                      className={`font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+                        isBgTransparent
+                          ? 'border-emerald-400/50 bg-emerald-950/45 text-emerald-200'
+                          : 'border-white/15 bg-white/5 text-[#b7b0c4]'
+                      }`}
+                    >
+                      {isBgTransparent ? `✓ Transparent (${bgTransPct}%)` : 'Off (Solid Black)'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#c7bddb] mt-0.5 leading-snug">
+                    Real-time GPU exterior flood-mask removes studio black backgrounds from every Angel video over the 3D chessboard while protecting her eyes, dark hair, and outfit.
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void updateAngelBgTransparency(
+                        isBgTransparent ? 0 : DEFAULT_ANGEL_BG_TRANSPARENCY,
+                        { immediate: true },
+                      )
+                    }
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border text-[11px] font-semibold cursor-pointer ${
+                      isBgTransparent
+                        ? 'bg-emerald-950/60 hover:bg-emerald-900/60 border-emerald-400/55 text-emerald-100'
+                        : 'bg-[#1f1833] hover:bg-[#2b2147] border-violet-400/55 text-violet-100'
+                    }`}
+                  >
+                    {isBgTransparent ? 'Transparent: ON' : 'Transparent: OFF'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void updateAngelBgTransparency(DEFAULT_ANGEL_BG_TRANSPARENCY, {
+                        immediate: true,
+                      })
+                    }
+                    className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-violet-400/35 bg-[#120d20] hover:bg-[#1e1635] text-[10px] text-violet-200 cursor-pointer"
+                  >
+                    <RotateCcw className="w-2.5 h-2.5" />
+                    Reset ({Math.round(DEFAULT_ANGEL_BG_TRANSPARENCY * 100)}%)
+                  </button>
+                </div>
+              </div>
+
+              <div className="px-3 py-2.5 bg-black">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] font-medium text-[#d4c9ea] shrink-0">
+                    Keying Cutoff:
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={bgTransPct}
+                    onChange={(e) => {
+                      const pct = Number(e.target.value);
+                      if (Number.isFinite(pct)) {
+                        void updateAngelBgTransparency(pct / 100);
+                      }
+                    }}
+                    aria-label="Angel video black background transparency cutoff percentage"
+                    className="flex-1 min-w-[140px] accent-violet-400 cursor-pointer"
+                  />
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void updateAngelBgTransparency(Math.max(0, (bgTransPct - 5) / 100), {
+                          immediate: true,
+                        })
+                      }
+                      className="px-1.5 py-0.5 rounded border border-violet-400/35 bg-[#120d20] hover:bg-[#1e1635] text-violet-200 font-mono-tabular text-[11px] cursor-pointer"
+                    >
+                      −5%
+                    </button>
+                    <span className="w-11 text-center font-mono-tabular text-xs font-semibold text-violet-100">
+                      {bgTransPct}%
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void updateAngelBgTransparency(Math.min(1, (bgTransPct + 5) / 100), {
+                          immediate: true,
+                        })
+                      }
+                      className="px-1.5 py-0.5 rounded border border-violet-400/35 bg-[#120d20] hover:bg-[#1e1635] text-violet-200 font-mono-tabular text-[11px] cursor-pointer"
+                    >
+                      +5%
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Special 3D Extension — Opening Flowchart (Timer & Density Scaler) */}
+        {(() => {
+          const startSec = getOpeningFlowchartStartSec(overrides);
+          const density = getOpeningFlowchartDensity(overrides);
+          const openingUrl =
+            overrides.cases?.opening || ANGEL_CASE_VIDEO_MAP.opening || undefined;
+          const openingClipSec = getVideoFileDurationSec(openingUrl, overrides) ?? 10.1;
+          const maxStartSec = Math.min(15, Math.max(10, Math.ceil(openingClipSec)));
+          const densityPct = Math.round(density * 100);
+
+          const previewOpeningFlowchart = () => {
+            primeNextCaseSlotPreview('opening', openingUrl);
+            onPreviewCase('opening_v1', CLIP_TEXT.opening_v1, 'OPENING');
+          };
+
+          return (
+            <div className="rounded-xl border border-emerald-400/50 bg-[#081312] overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#0c1e1c] border-b border-emerald-400/30">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+                    <span className="text-xs font-semibold text-[#e8fff7]">
+                      Opening 3D Flowchart Extension — Timer &amp; Density Scaler
+                    </span>
+                    <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-emerald-400/45 bg-emerald-950/45 text-emerald-200 font-medium">
+                      Start: {startSec.toFixed(2)}s
+                    </span>
+                    <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-cyan-400/45 bg-cyan-950/45 text-cyan-200 font-medium">
+                      Density: {density.toFixed(2)}× ({densityPct}%)
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#b4d6ce] mt-0.5 leading-snug">
+                    Tune the exact playback second when the 3D neon PCB flowchart emerges from the Opening video border and scale its branch/comb density live to match the video flowchart.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={previewOpeningFlowchart}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[#0f2924] hover:bg-[#163c35] border border-emerald-400/55 text-[11px] font-semibold text-emerald-100 cursor-pointer shrink-0"
+                >
+                  <Play className="w-3 h-3 text-emerald-300" />
+                  Test Opening + 3D Flowchart
+                </button>
+              </div>
+
+              <div className="px-3 py-2.5 bg-black space-y-2.5">
+                {/* 1. Start Timer Control */}
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-[11px] text-[#c7ece2]">
+                      <Clock className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+                      <span className="font-medium">3D Flowchart Start Timer:</span>
+                      <span className="font-mono-tabular text-[10px] text-emerald-300/80">
+                        (Video: {formatSec(openingClipSec)})
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void updateOpeningFlowchartConfig(
+                          { startSec: DEFAULT_OPENING_FLOWCHART_START_SEC },
+                          { immediate: true },
+                        )
+                      }
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-emerald-400/35 bg-[#0b1f1c] hover:bg-[#12332e] text-[10px] text-emerald-200 cursor-pointer"
+                    >
+                      <RotateCcw className="w-2.5 h-2.5" />
+                      Reset ({DEFAULT_OPENING_FLOWCHART_START_SEC.toFixed(2)}s)
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="range"
+                      min={0}
+                      max={maxStartSec}
+                      step={0.05}
+                      value={Math.min(maxStartSec, startSec)}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        if (Number.isFinite(next)) {
+                          void updateOpeningFlowchartConfig({ startSec: next });
+                        }
+                      }}
+                      aria-label="Opening 3D flowchart start second"
+                      className="flex-1 min-w-[140px] accent-emerald-400 cursor-pointer"
+                    />
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateOpeningFlowchartConfig(
+                            { startSec: Math.max(0, Math.round((startSec - 0.5) * 100) / 100) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-emerald-400/35 bg-[#0b1f1c] hover:bg-[#12332e] text-emerald-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        −0.5
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateOpeningFlowchartConfig(
+                            { startSec: Math.max(0, Math.round((startSec - 0.1) * 100) / 100) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-emerald-400/35 bg-[#0b1f1c] hover:bg-[#12332e] text-emerald-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        −0.1
+                      </button>
+                      <input
+                        type="number"
+                        min={0}
+                        max={15}
+                        step={0.05}
+                        value={startSec}
+                        onChange={(e) => {
+                          const next = Number(e.target.value);
+                          if (Number.isFinite(next)) {
+                            void updateOpeningFlowchartConfig({ startSec: next }, { immediate: true });
+                          }
+                        }}
+                        aria-label="Exact opening 3D flowchart start second"
+                        className="w-16 font-mono-tabular text-xs font-semibold text-center px-1 py-0.5 rounded border border-emerald-400/50 bg-[#0b1f1c] text-emerald-100 focus:outline-none focus:border-emerald-300"
+                      />
+                      <span className="font-mono-tabular text-[11px] text-emerald-200">s</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateOpeningFlowchartConfig(
+                            { startSec: Math.min(15, Math.round((startSec + 0.1) * 100) / 100) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-emerald-400/35 bg-[#0b1f1c] hover:bg-[#12332e] text-emerald-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        +0.1
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateOpeningFlowchartConfig(
+                            { startSec: Math.min(15, Math.round((startSec + 0.5) * 100) / 100) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-emerald-400/35 bg-[#0b1f1c] hover:bg-[#12332e] text-emerald-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        +0.5
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Density Scaler Control */}
+                <div className="space-y-1 pt-2 border-t border-white/10">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-[11px] text-[#c7ece2]">
+                      <Zap className="w-3.5 h-3.5 text-cyan-300 shrink-0" />
+                      <span className="font-medium">Flowchart Density Scaler:</span>
+                      <span className="font-mono-tabular text-[10px] text-cyan-200/85">
+                        ({densityPct}% · highways, lanes, comb prongs &amp; pulses)
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void updateOpeningFlowchartConfig(
+                          { density: DEFAULT_OPENING_FLOWCHART_DENSITY },
+                          { immediate: true },
+                        )
+                      }
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-cyan-400/35 bg-[#0a1d24] hover:bg-[#102d38] text-[10px] text-cyan-200 cursor-pointer"
+                    >
+                      <RotateCcw className="w-2.5 h-2.5" />
+                      Reset ({DEFAULT_OPENING_FLOWCHART_DENSITY.toFixed(2)}×)
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="range"
+                      min={0.25}
+                      max={2.5}
+                      step={0.05}
+                      value={density}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        if (Number.isFinite(next)) {
+                          void updateOpeningFlowchartConfig({ density: next });
+                        }
+                      }}
+                      aria-label="Opening 3D flowchart density scale"
+                      className="flex-1 min-w-[140px] accent-cyan-400 cursor-pointer"
+                    />
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateOpeningFlowchartConfig(
+                            { density: Math.max(0.25, Math.round((density - 0.25) * 100) / 100) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-cyan-400/35 bg-[#0a1d24] hover:bg-[#102d38] text-cyan-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        −0.25
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateOpeningFlowchartConfig(
+                            { density: Math.max(0.25, Math.round((density - 0.05) * 100) / 100) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-cyan-400/35 bg-[#0a1d24] hover:bg-[#102d38] text-cyan-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        −0.05
+                      </button>
+                      <input
+                        type="number"
+                        min={0.25}
+                        max={2.5}
+                        step={0.05}
+                        value={density}
+                        onChange={(e) => {
+                          const next = Number(e.target.value);
+                          if (Number.isFinite(next)) {
+                            void updateOpeningFlowchartConfig({ density: next }, { immediate: true });
+                          }
+                        }}
+                        aria-label="Exact opening 3D flowchart density scale"
+                        className="w-16 font-mono-tabular text-xs font-semibold text-center px-1 py-0.5 rounded border border-cyan-400/50 bg-[#0a1d24] text-cyan-100 focus:outline-none focus:border-cyan-300"
+                      />
+                      <span className="font-mono-tabular text-[11px] text-cyan-200">×</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateOpeningFlowchartConfig(
+                            { density: Math.min(2.5, Math.round((density + 0.05) * 100) / 100) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-cyan-400/35 bg-[#0a1d24] hover:bg-[#102d38] text-cyan-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        +0.05
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateOpeningFlowchartConfig(
+                            { density: Math.min(2.5, Math.round((density + 0.25) * 100) / 100) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-cyan-400/35 bg-[#0a1d24] hover:bg-[#102d38] text-cyan-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        +0.25
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-[#8daea6]">
+                    Tip: Click &ldquo;Test Opening + 3D Flowchart&rdquo; and drag the Density slider live while the opening video plays to match the 3D PCB density directly to the video.
+                  </p>
                 </div>
               </div>
             </div>

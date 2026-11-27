@@ -33,7 +33,6 @@ import {
   Leaf,
   Lightbulb,
   Music,
-  Crown,
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 import {
@@ -337,45 +336,85 @@ export function ControlDock(props: ControlDockProps) {
             : 'max-h-[46dvh] sm:max-h-[54dvh] md:max-h-[480px] opacity-100 translate-y-0 overflow-y-auto thin-scroll'
         }`}
       >
-        {/* Unified Menu Header Bar: Logo + ChessAngel 3D + Version + Copyright on Left | Controls + Play/Analysis/Replay on Far Right */}
-        <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-3 px-2.5 py-2 sm:px-4 sm:py-2.5 border-b border-white/10 bg-[#0d1017]/95">
-          <div className="flex flex-wrap items-center gap-2 select-none">
-            {/* ChessAngel 3D Logo Emblem + Interactive Title & Version */}
-            <button
-              type="button"
-              onClick={handleBrandSecretTap}
-              title={`ChessAngel 3D v${APP_VERSION}`}
-              className="group inline-flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer rounded-md focus-visible:outline-2 focus-visible:outline-[#e3be78]"
-            >
-              {!emblemBroken ? (
-                <img
-                  src={withAssetBuildVersion('/assets/aistudio/chess3D-angel_414f5812.png')}
-                  alt="ChessAngel 3D logo"
-                  draggable={false}
-                  onContextMenu={(e) => e.preventDefault()}
-                  referrerPolicy="no-referrer"
-                  onError={() => setEmblemBroken(true)}
-                  className="w-7 h-7 rounded-md object-cover border border-white/15 group-hover:border-[#d6ae63]/65 shadow-sm shrink-0 transition-colors"
-                />
-              ) : (
-                <span
-                  aria-hidden="true"
-                  className="w-7 h-7 rounded-md bg-[#261d12] border border-[#d6ae63]/40 inline-flex items-center justify-center text-xs text-[#e6c47f] font-display shrink-0"
-                >
-                  ♞
+        {/* Unified Menu Header Bar: Row 1 = Brand Left | New Match Centered | Tabs Far Right; Row 2 = Compact Utility Toggles */}
+        <div className="flex flex-col gap-2 px-2.5 py-2 sm:px-4 sm:py-2.5 border-b border-white/10 bg-[#0d1017]/95">
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 select-none justify-center sm:justify-start">
+              {/* ChessAngel 3D Logo Emblem + Interactive Title & Version */}
+              <button
+                type="button"
+                onClick={handleBrandSecretTap}
+                title={`ChessAngel 3D v${APP_VERSION}`}
+                className="group inline-flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer rounded-md focus-visible:outline-2 focus-visible:outline-[#e3be78]"
+              >
+                {!emblemBroken ? (
+                  <img
+                    src={withAssetBuildVersion('/assets/aistudio/chess3D-angel_414f5812.png')}
+                    alt="ChessAngel 3D logo"
+                    draggable={false}
+                    onContextMenu={(e) => e.preventDefault()}
+                    referrerPolicy="no-referrer"
+                    onError={() => setEmblemBroken(true)}
+                    className="w-7 h-7 rounded-md object-cover border border-white/15 group-hover:border-[#d6ae63]/65 shadow-sm shrink-0 transition-colors"
+                  />
+                ) : (
+                  <span
+                    aria-hidden="true"
+                    className="w-7 h-7 rounded-md bg-[#261d12] border border-[#d6ae63]/40 inline-flex items-center justify-center text-xs text-[#e6c47f] font-display shrink-0"
+                  >
+                    ♞
+                  </span>
+                )}
+                <span className="font-display text-base font-medium tracking-tight text-[#f5f0e6] group-hover:text-[#f3d38b] transition-colors whitespace-nowrap">
+                  ChessAngel 3D v{APP_VERSION}
                 </span>
-              )}
-              <span className="font-display text-base font-medium tracking-tight text-[#f5f0e6] group-hover:text-[#f3d38b] transition-colors whitespace-nowrap">
-                ChessAngel 3D v{APP_VERSION}
-              </span>
-            </button>
+              </button>
 
-            <span className="text-[11px] text-[#9aa3b2] whitespace-nowrap">
-              © Jan Rom 2026
-            </span>
+              <span className="text-[11px] text-[#9aa3b2] whitespace-nowrap">
+                © Jan Rom 2026
+              </span>
+            </div>
+
+            {/* Central Primary Action Button ("New Match") centered in the middle of the header */}
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={props.onPrimaryAction}
+                className="px-4 py-1.5 text-xs font-semibold text-[#111419] bg-[#d6ae63] hover:bg-[#e3be78] rounded-md shadow-sm transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#e3be78]"
+              >
+                {props.isReplayMode
+                  ? 'Exit Replay'
+                  : props.gameMode === 'tactical'
+                    ? 'Next Puzzle'
+                    : 'New Match'}
+              </button>
+            </div>
+
+            {/* Tab Switcher at the Far Right End of the Rollout Header */}
+            <div className="flex justify-center sm:justify-end">
+              <div className="flex items-center gap-1 bg-[#171c26] border border-white/8 rounded-md p-0.5 text-xs">
+                {(['play', 'training', 'analysis', 'replay'] as DockTab[]).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => {
+                      setLoadDrawerOpen(false);
+                      props.onSelectTab(t);
+                    }}
+                    className={`px-3 py-1 rounded capitalize transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      props.activeTab === t && !(t === 'play' && loadDrawerOpen)
+                        ? 'bg-[#d6ae63] text-[#111419] font-semibold'
+                        : 'text-[#9aa3b2] hover:text-white'
+                    }`}
+                  >
+                    {t === 'training' ? 'Tactical Training' : t}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 pt-1.5 border-t border-white/8">
             <PWAInstallButton variant="dock" />
 
             <button
@@ -587,39 +626,6 @@ export function ControlDock(props: ControlDockProps) {
                 </>
               )}
             </button>
-
-            <button
-              type="button"
-              onClick={props.onPrimaryAction}
-              className="px-3.5 py-1 text-xs font-semibold text-[#111419] bg-[#d6ae63] hover:bg-[#e3be78] rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#e3be78]"
-            >
-              {props.isReplayMode
-                ? 'Exit Replay'
-                : props.gameMode === 'tactical'
-                  ? 'Next Puzzle'
-                  : 'New Match'}
-            </button>
-
-            {/* Tab Switcher at the Far Right End of the Rollout Header */}
-            <div className="flex items-center gap-1 bg-[#171c26] border border-white/8 rounded-md p-0.5 text-xs">
-              {(['play', 'training', 'analysis', 'replay'] as DockTab[]).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => {
-                    setLoadDrawerOpen(false);
-                    props.onSelectTab(t);
-                  }}
-                  className={`px-3 py-1 rounded capitalize transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                    props.activeTab === t && !(t === 'play' && loadDrawerOpen)
-                      ? 'bg-[#d6ae63] text-[#111419] font-semibold'
-                      : 'text-[#9aa3b2] hover:text-white'
-                  }`}
-                >
-                  {t === 'training' ? 'Tactical Training' : t}
-                </button>
-              ))}
-            </div>
           </div>
         </div>
 
@@ -988,28 +994,6 @@ export function ControlDock(props: ControlDockProps) {
 
                 {/* Match actions */}
                 <div className="flex flex-wrap items-center gap-2">
-                  {props.onSimulatePawnPromotion && props.gameMode !== 'multiplayer' && (
-                    <button
-                      type="button"
-                      onClick={props.onSimulatePawnPromotion}
-                      title="Simulate a live match where a pawn marches to the 8th rank for promotion"
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-[#181d27] hover:bg-[#222937] border border-[#d6ae63]/45 text-[#f0d192] hover:text-[#fff3d6] cursor-pointer whitespace-nowrap"
-                    >
-                      <Crown className="w-3.5 h-3.5 text-[#d6ae63]" />
-                      Simulate 8th-Rank Pawn
-                    </button>
-                  )}
-                  {props.onExportAngelUdoVideo && (
-                    <button
-                      type="button"
-                      onClick={props.onExportAngelUdoVideo}
-                      title="Export the portrait video of Chess Angel and Udo (.mp4)"
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-[#181d27] hover:bg-[#222937] border border-[#d6ae63]/45 text-[#f0d192] hover:text-[#fff3d6] cursor-pointer whitespace-nowrap"
-                    >
-                      <Download className="w-3.5 h-3.5 text-[#d6ae63]" />
-                      Export Angel &amp; Udo Video
-                    </button>
-                  )}
                   <button
                     type="button"
                     onClick={props.onUndo}

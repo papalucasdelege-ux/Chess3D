@@ -17,7 +17,6 @@ export const StudioPasswordGateModal: React.FC<StudioPasswordGateModalProps> = (
 }) => {
   const [mode, setMode] = useState<'loading' | 'login' | 'setup' | 'unavailable'>('loading');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,12 +60,8 @@ export const StudioPasswordGateModal: React.FC<StudioPasswordGateModalProps> = (
     setError(null);
 
     if (mode === 'setup') {
-      if (password.length < 6) {
-        setError('Developer password must be at least 6 characters.');
-        return;
-      }
-      if (password !== confirmPassword) {
-        setError('Passwords do not match.');
+      if (password.length < 1) {
+        setError('Please enter a developer passcode.');
         return;
       }
       setSubmitting(true);
@@ -164,8 +159,8 @@ export const StudioPasswordGateModal: React.FC<StudioPasswordGateModalProps> = (
             <form onSubmit={handleSubmit} className="space-y-4">
               <p className="text-xs text-white/70 leading-relaxed">
                 {mode === 'setup'
-                  ? 'Set a developer password for this preview session (or configure STUDIO_DEV_PASSWORD in Settings → Secrets).'
-                  : 'Enter the developer password to unlock the Angel Video Studio.'}
+                  ? 'Set your developer passcode for this studio (saved securely on the server, or configure STUDIO_DEV_PASSWORD in Settings → Secrets).'
+                  : 'Enter your developer passcode to unlock the Angel Video Studio.'}
               </p>
 
               <div className="space-y-2.5">
@@ -174,7 +169,7 @@ export const StudioPasswordGateModal: React.FC<StudioPasswordGateModalProps> = (
                     htmlFor="studio-dev-password"
                     className="block text-[11px] font-medium text-white/65 mb-1"
                   >
-                    Developer Password
+                    Developer Passcode
                   </label>
                   <div className="relative">
                     <input
@@ -185,40 +180,19 @@ export const StudioPasswordGateModal: React.FC<StudioPasswordGateModalProps> = (
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       disabled={submitting}
-                      placeholder={mode === 'setup' ? 'At least 6 characters' : 'Enter password'}
+                      placeholder={mode === 'setup' ? 'Choose passcode (e.g. 8)' : 'Enter passcode'}
                       className="w-full rounded-lg bg-[#0a0d13] border border-white/15 focus:border-[#d6ae63]/70 focus:outline-none px-3 py-2 pr-9 text-sm text-white placeholder:text-white/30"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword((v) => !v)}
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      aria-label={showPassword ? 'Hide passcode' : 'Show passcode'}
                       className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-white/45 hover:text-white/80 cursor-pointer"
                     >
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
                 </div>
-
-                {mode === 'setup' && (
-                  <div>
-                    <label
-                      htmlFor="studio-dev-password-confirm"
-                      className="block text-[11px] font-medium text-white/65 mb-1"
-                    >
-                      Confirm Password
-                    </label>
-                    <input
-                      id="studio-dev-password-confirm"
-                      type={showPassword ? 'text' : 'password'}
-                      autoComplete="new-password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      disabled={submitting}
-                      placeholder="Re-enter password"
-                      className="w-full rounded-lg bg-[#0a0d13] border border-white/15 focus:border-[#d6ae63]/70 focus:outline-none px-3 py-2 text-sm text-white placeholder:text-white/30"
-                    />
-                  </div>
-                )}
               </div>
 
               {error && (

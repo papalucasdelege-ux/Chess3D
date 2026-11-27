@@ -1,5 +1,12 @@
 import * as THREE from 'three';
 
+export const DEFAULT_OPENING_FLOWCHART_START_SEC = 4.65;
+export const DEFAULT_OPENING_FLOWCHART_DENSITY = 1.0;
+export const MIN_OPENING_FLOWCHART_START_SEC = 0.0;
+export const MAX_OPENING_FLOWCHART_START_SEC = 15.0;
+export const MIN_OPENING_FLOWCHART_DENSITY = 0.25;
+export const MAX_OPENING_FLOWCHART_DENSITY = 2.5;
+
 interface FlowchartPaletteColor {
   rgb: readonly [number, number, number];
 }
@@ -614,14 +621,39 @@ export class OpeningFlowchart3D {
   private clockSec = 0;
   private currentOpacity = 0;
 
-  // Exact timeline synced to `builtin_opening.mp4` (10.08s):
-  // Left/top border traces begin hitting the portrait edge at ~4.65s and reach full encyclopedic end-state by ~9.35s
-  private readonly BORDER_START_SEC = 4.65;
+  // Timeline synced to `builtin_opening.mp4` (10.08s), tunable from Chess Angel Video Studio:
+  // Default: border traces emerge at 4.65s and reach full encyclopedic end-state by ~9.35s
+  private borderStartSec = DEFAULT_OPENING_FLOWCHART_START_SEC;
+  private densityScale = DEFAULT_OPENING_FLOWCHART_DENSITY;
   private readonly FULL_GROW_SPAN_SEC = 4.65;
 
   constructor() {
     this.root.name = 'OpeningFlowchart3D';
     this.root.visible = false;
+  }
+
+  public setConfig(startSec: number, density: number): void {
+    const nextStart = Number.isFinite(startSec)
+      ? THREE.MathUtils.clamp(
+          Math.round(startSec * 100) / 100,
+          MIN_OPENING_FLOWCHART_START_SEC,
+          MAX_OPENING_FLOWCHART_START_SEC,
+        )
+      : DEFAULT_OPENING_FLOWCHART_START_SEC;
+    const nextDensity = Number.isFinite(density)
+      ? THREE.MathUtils.clamp(
+          Math.round(density * 100) / 100,
+          MIN_OPENING_FLOWCHART_DENSITY,
+          MAX_OPENING_FLOWCHART_DENSITY,
+        )
+      : DEFAULT_OPENING_FLOWCHART_DENSITY;
+    this.borderStartSec = nextStart;
+    this.densityScale = nextDensity;
+  }
+
+  private getEffectiveGrowSpanSec(): number {
+    // Finish smoothly near the ~9.35s video end state when delayed, while keeping 4.65s max span
+    return Math.max(1.5, Math.min(this.FULL_GROW_SPAN_SEC, 9.35 - this.borderStartSec));
   }
 
   public isActive(): boolean {
@@ -630,7 +662,7 @@ export class OpeningFlowchart3D {
 
   /**
    * Synchronizes the 3D flowchart with live playback of `builtin_opening.mp4`.
-   * Rebuilds camera-projected border anchors automatically once per trigger / portrait layout.
+   * Rebuilds camera-projected border anchors automatically once per trigger / portrait layout / density change.
    */
   public syncWithOpeningVideo(
     isPlayingOpening: boolean,
@@ -642,23 +674,32 @@ export class OpeningFlowchart3D {
   ): void {
     if (isPlayingOpening) {
       this.videoTimeSec = currentTimeSec;
-      if (currentTimeSec >= this.BORDER_START_SEC - 0.12) {
+      const startSec = this.borderStartSec;
+      const growSpan = this.getEffectiveGrowSpanSec();
+      if (currentTimeSec >= startSec - 0.12) {
+        const densityTag = Math.round(this.densityScale * 100);
         const layoutKey =
           portraitRect && canvasRect
-            ? `${Math.round(portraitRect.left / 10)}_${Math.round(portraitRect.top / 10)}_${Math.round(portraitRect.width / 10)}_${Math.round(canvasRect.width / 16)}`
-            : 'fallback';
+            ? `${Math.round(portraitRect.left / 10)}_${Math.round(portraitRect.top / 10)}_${Math.round(portraitRect.width / 10)}_${Math.round(canvasRect.width / 16)}_d${densityTag}`
+            : `fallback_d${densityTag}`;
+        const densityChanged = this.builtForKey !== layoutKey;
         if (
           !this.active ||
           (!this.ribbonMesh && !this.fadingOut && !this.holdingPostEnd) ||
-          (this.builtForKey !== layoutKey && !this.active)
+          densityChanged
         ) {
           this.buildGeometry(portraitRect, canvasRect, camera, boardTopY);
           this.builtForKey = layoutKey;
-          this.smoothProgress = Math.max(
+          this.smoothProgress = THREE.MathUtils.clamp(
+            (currentTimeSec - startSec) / growSpan,
             0,
-            (currentTimeSec - this.BORDER_START_SEC) / this.FULL_GROW_SPAN_SEC,
+            1.05,
           );
-          this.currentOpacity = 1;
+          this.currentOpacity = THREE.MathUtils.clamp(
+            (currentTimeSec - (startSec - 0.1)) / 0.3,
+            0,
+            1,
+          );
         }
         this.active = true;
         this.holdingPostEnd = false;
@@ -666,8 +707,8 @@ export class OpeningFlowchart3D {
         this.fadingOut = false;
         this.fadeOutElapsed = 0;
         this.root.visible = true;
-      } else if ((this.active || this.holdingPostEnd || this.fadingOut) && currentTimeSec < 1.2) {
-        // Opening video restarted from t=0: cleanly reset so the bloom grows fresh again
+      } else if (this.active || this.holdingPostEnd || this.fadingOut) {
+        // Opening video restarted from t=0 or start timer was pushed past current playback time: cleanly reset
         this.smoothProgress = 0;
         this.active = false;
         this.holdingPostEnd = false;
@@ -897,14 +938,22 @@ export class OpeningFlowchart3D {
     const dirDepth = _camForward.clone();
 
     let listTileCounter = 0;
+    const density = this.densityScale;
+    // Gently refine ribbon line width as density increases so tightly packed PCB traces stay razor-crisp
+    const widthDensityFactor =
+      density > 1.0
+        ? 1 / Math.pow(density, 0.24)
+        : density < 1.0
+          ? Math.min(1.16, 1 / Math.pow(density, 0.12))
+          : 1.0;
 
     /**
      * Spawns a dense orthogonal tournament-comb bracket cluster — the exact signature visual motif
      * of the final frame of `builtin_opening.mp4`!
      * Structure:
      *   - Short orthogonal feed stub into a vertical spine
-     *   - 6–9 tightly stacked horizontal prongs branching leftward
-     *   - Optional nested secondary mini-bracket off the top/bottom prong
+     *   - Tightly stacked horizontal prongs branching leftward (scaled by `densityScale`)
+     *   - Optional nested secondary mini-bracket off the outer/mid prongs
      *   - Crisp borderless micro-typography opening-variation list tucked directly beside the prongs!
      */
     const addCombBracketCluster = (
@@ -915,13 +964,23 @@ export class OpeningFlowchart3D {
       verticalBias: number,
       attachList: boolean,
     ) => {
-      const prongCount = 5 + Math.floor(rand() * 4); // 5..8 tightly stacked prongs per bracket
-      const prongSpacing = (0.088 + rand() * 0.024) * unitScale * scaleFactor;
+      const baseProngs = 5 + Math.floor(rand() * 4); // 5..8 tightly stacked prongs at 1.0x density
+      const prongCount =
+        density === 1.0
+          ? baseProngs
+          : Math.max(2, Math.min(16, Math.round(baseProngs * THREE.MathUtils.clamp(density, 0.35, 1.9))));
+      const spacingScale =
+        density > 1.0
+          ? 1 / Math.pow(density, 0.42)
+          : density < 1.0
+            ? 1 / Math.pow(density, 0.18)
+            : 1.0;
+      const prongSpacing = (0.088 + rand() * 0.024) * unitScale * scaleFactor * spacingScale;
       const totalH = (prongCount - 1) * prongSpacing;
       const spineCenterOffset = verticalBias * totalH * 0.35;
       const feedLen = (0.14 + rand() * 0.14) * unitScale * scaleFactor;
       const prongLen = (0.16 + rand() * 0.12) * unitScale * scaleFactor;
-      const lineW = 0.0145 * unitScale * Math.max(0.78, scaleFactor);
+      const lineW = 0.0145 * unitScale * Math.max(0.78, scaleFactor) * widthDensityFactor;
 
       const spineMid = origin.clone().addScaledVector(dirLeft, feedLen);
       clampAboveBoard(spineMid);
@@ -942,6 +1001,9 @@ export class OpeningFlowchart3D {
       // Draw spine expanding both upward and downward simultaneously from the feed junction!
       addPolyline([spineMid.clone(), spineTop], tFeedEnd, tSpineEnd, lineW, rgb, false, false, false);
       addPolyline([spineMid.clone(), spineBot], tFeedEnd, tSpineEnd, lineW, rgb, false, false, false);
+
+      const subForkProb = THREE.MathUtils.clamp(0.64 * density, 0.14, 0.96);
+      const midProngIdx = Math.floor(prongCount / 2);
 
       // Draw every horizontal comb prong radiating left off the vertical spine
       for (let p = 0; p < prongCount; p++) {
@@ -966,8 +1028,10 @@ export class OpeningFlowchart3D {
           p === 0 || p === prongCount - 1 || p % 3 === 0,
         );
 
-        // Nested secondary mini-fork (2-prong micro-bracket) on alternating outer rungs for authentic fractal density!
-        if ((p === 0 || p === prongCount - 1) && scaleFactor > 0.72 && rand() > 0.36) {
+        // Nested secondary mini-fork (2-prong micro-bracket) on outer rungs (plus mid rung at high density)
+        const eligibleForSubFork =
+          p === 0 || p === prongCount - 1 || (density >= 1.45 && p === midProngIdx);
+        if (eligibleForSubFork && scaleFactor > 0.72 && rand() < subForkProb) {
           const subSpan = prongSpacing * 1.15;
           const subStub = prongLen * 0.55;
           for (const subSign of [-1, 1]) {
@@ -990,10 +1054,12 @@ export class OpeningFlowchart3D {
       }
 
       // Attach an ultra-crisp micro-typography chess-opening variation column directly next to the comb prongs!
-      if (attachList) {
+      const shouldAttachList = attachList && (density >= 0.85 || rand() < density * 1.15);
+      if (shouldAttachList) {
         const tileIdx = listTileCounter++ % 16;
         const listCenter = spineBot.clone().lerp(spineTop, 0.5);
-        const listH = Math.max(0.56 * unitScale, totalH * 1.16);
+        const listScaleDensity = density > 1.0 ? 1 / Math.pow(density, 0.12) : 1.0;
+        const listH = Math.max(0.46 * unitScale, totalH * 1.16 * listScaleDensity);
         const listW = listH * 0.96;
         // Tuck the text column neatly to the left of the prong tips so lines & text interlock seamlessly
         listCenter.addScaledVector(dirLeft, prongLen + listW * 0.5);
@@ -1012,12 +1078,20 @@ export class OpeningFlowchart3D {
       }
     };
 
-    // Build all 22 multi-lane border-exit highways + parallel sibling lanes + dense comb clusters!
+    // Build multi-lane border-exit highways + parallel sibling lanes + dense comb clusters scaled by density!
     const lanePitchPx = Math.max(2.6, pH * 0.0095);
+    const highwayKeepStride = density < 0.38 ? 3 : density < 0.62 ? 2 : 1;
 
     for (let hIdx = 0; hIdx < BORDER_HIGHWAYS.length; hIdx++) {
+      if (highwayKeepStride > 1 && hIdx % highwayKeepStride !== 0) {
+        continue;
+      }
       const hw = BORDER_HIGHWAYS[hIdx];
-      const laneCount = hw.lanes.length;
+      const laneCount =
+        density === 1.0
+          ? hw.lanes.length
+          : Math.max(1, Math.min(6, Math.round(hw.lanes.length * density)));
+      const laneSpacingScale = laneCount > hw.lanes.length ? hw.lanes.length / laneCount : 1.0;
       const depthShift = hw.depthLayer * unitScale * 0.95;
 
       // Shared highway geometry template so parallel lanes stay tightly bundled like real PCB ribbon tracks!
@@ -1032,10 +1106,11 @@ export class OpeningFlowchart3D {
       const ySign2 = (hIdx % 2 === 0 ? 1 : -1) * (Math.abs(hw.fanBias) > 0.26 ? ySign1 : 1);
 
       for (let laneIdx = 0; laneIdx < laneCount; laneIdx++) {
-        const colKey = hw.lanes[laneIdx];
+        const colKey = hw.lanes[laneIdx % hw.lanes.length];
         const col = FLOWCHART_COLORS[colKey].rgb;
-        const laneOffset = (laneIdx - (laneCount - 1) * 0.5) * lanePitchPx;
-        const laneWorldOffset = (laneIdx - (laneCount - 1) * 0.5) * 0.042 * unitScale;
+        const laneOffset = (laneIdx - (laneCount - 1) * 0.5) * lanePitchPx * laneSpacingScale;
+        const laneWorldOffset =
+          (laneIdx - (laneCount - 1) * 0.5) * 0.042 * unitScale * laneSpacingScale;
 
         // Overlap 1.5px inside the portrait frame so there is ZERO gap at the video boundary!
         const clientX =
@@ -1119,7 +1194,7 @@ export class OpeningFlowchart3D {
         }
 
         const tTrunkEnd = THREE.MathUtils.clamp(t0 + 0.42 + rand() * 0.14, 0.36, 0.68);
-        const trunkWidth = (laneIdx === 0 ? 0.024 : 0.0185) * unitScale;
+        const trunkWidth = (laneIdx === 0 ? 0.024 : 0.0185) * unitScale * widthDensityFactor;
         addPolyline(trunkPts, t0, tTrunkEnd, trunkWidth, col, laneIdx === 0, true, false);
 
         // Attach a dense comb-bracket + micro-typography list right at the tip of every lane!
@@ -1133,7 +1208,11 @@ export class OpeningFlowchart3D {
         );
 
         // Dense mid-highway orthogonal 45°/90° spurs + comb clusters (matching the packed interior of the video!)
-        const spurCount = laneIdx === 0 ? hw.combClusters : Math.max(1, hw.combClusters - 2);
+        const baseSpurCount = laneIdx === 0 ? hw.combClusters : Math.max(1, hw.combClusters - 2);
+        const spurCount =
+          density === 1.0
+            ? baseSpurCount
+            : Math.max(density < 0.45 ? 0 : 1, Math.min(8, Math.round(baseSpurCount * density)));
         for (let sIdx = 0; sIdx < spurCount; sIdx++) {
           const segIdx = Math.min(trunkPts.length - 2, 1 + (sIdx % Math.max(1, trunkPts.length - 2)));
           const segLerp = 0.25 + ((sIdx * 0.37 + laneIdx * 0.23) % 0.65);
@@ -1160,7 +1239,7 @@ export class OpeningFlowchart3D {
             .addScaledVector(dirDepth, spurDepth * 0.5);
           clampAboveBoard(pEnd);
 
-          const spurW = 0.017 * unitScale;
+          const spurW = 0.017 * unitScale * widthDensityFactor;
           addPolyline([spurOrigin, pKnee, pEnd], tSpurStart, tSpurEnd, spurW, col, laneIdx === 0 && sIdx === 0, true, false);
 
           // Spawn a crisp comb-bracket + micro-text column at the spur's end!
@@ -1174,7 +1253,10 @@ export class OpeningFlowchart3D {
           );
 
           // Add tight cross-tie hairline connectors between nearby parallel levels (authentic PCB schematic richness)
-          if (sIdx % 2 === 1) {
+          const addCrossTie =
+            density >= 0.55 &&
+            (sIdx % 2 === 1 || (density >= 1.5 && sIdx % 2 === 0 && laneIdx === 0));
+          if (addCrossTie) {
             const tapPt = pKnee.clone().lerp(pEnd, 0.45);
             const dropPt = tapPt
               .clone()
@@ -1184,7 +1266,16 @@ export class OpeningFlowchart3D {
             clampAboveBoard(tailPt);
             const tTieStart = THREE.MathUtils.lerp(tSpurStart, tSpurEnd, 0.55);
             const tTieEnd = Math.min(0.95, tTieStart + 0.11);
-            addPolyline([tapPt, dropPt, tailPt], tTieStart, tTieEnd, 0.013 * unitScale, col, false, false, true);
+            addPolyline(
+              [tapPt, dropPt, tailPt],
+              tTieStart,
+              tTieEnd,
+              0.013 * unitScale * widthDensityFactor,
+              col,
+              false,
+              false,
+              true,
+            );
           }
         }
       }
@@ -1355,7 +1446,11 @@ export class OpeningFlowchart3D {
     this.root.add(this.listMesh);
 
     // 4. InstancedMesh for Tiny Racing Data-Signal Photons traveling along the parallel opening buses
-    const pulseCount = Math.min(88, Math.max(28, this.pulsePaths.length * 2));
+    const basePulseCount = Math.min(88, Math.max(28, this.pulsePaths.length * 2));
+    const pulseCount =
+      density === 1.0
+        ? basePulseCount
+        : Math.min(180, Math.max(12, Math.round(basePulseCount * THREE.MathUtils.clamp(density, 0.4, 2.0))));
     this.pulseGeo = new THREE.PlaneGeometry(1, 1);
     this.pulseMat = new THREE.MeshBasicMaterial({
       map: tex.nodeDotTex,
@@ -1403,8 +1498,10 @@ export class OpeningFlowchart3D {
     this.clockSec += dt;
 
     if (this.active) {
+      const startSec = this.borderStartSec;
+      const growSpan = this.getEffectiveGrowSpanSec();
       const targetProgress = THREE.MathUtils.clamp(
-        (this.videoTimeSec - this.BORDER_START_SEC) / this.FULL_GROW_SPAN_SEC,
+        (this.videoTimeSec - startSec) / growSpan,
         0,
         1.05,
       );
@@ -1414,7 +1511,7 @@ export class OpeningFlowchart3D {
         Math.min(1, dt * 11.5),
       );
       this.currentOpacity = THREE.MathUtils.clamp(
-        (this.videoTimeSec - (this.BORDER_START_SEC - 0.1)) / 0.3,
+        (this.videoTimeSec - (startSec - 0.1)) / 0.3,
         0,
         1,
       );

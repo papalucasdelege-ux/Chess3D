@@ -857,37 +857,57 @@ export function quickEvaluateHumanMove(
       multiPv: 1,
     });
 
-    const bestBeforeWhite = preRes.lines[0].scoreCp;
+    const bestLine = preRes.lines[0];
+    const bestBeforeWhite = bestLine.scoreCp;
     const afterWhite =
       postRes.lines.length > 0
         ? postRes.lines[0].scoreCp
         : evaluatePositionWhitePerspective(new Chess(postFen));
 
     const bestForMover = bestBeforeWhite * sign;
-    const afterForMover = afterWhite * sign;
-    const cpLoss = Math.max(0, Math.round(bestForMover - afterForMover));
+    const playedPreLine = preRes.lines.find((l) => l.bestMoveUci === playedUci) || null;
+    const playedIsBestMove = bestLine.bestMoveUci === playedUci;
+
+    // Use same-depth comparison when playedUci was already scored in preRes.lines to avoid
+    // depth-2 vs depth-3 horizon swings falsely penalizing the engine's own top recommendation.
+    const afterForMover = playedPreLine ? playedPreLine.scoreCp * sign : afterWhite * sign;
+    const cpLoss = playedIsBestMove ? 0 : Math.max(0, Math.round(bestForMover - afterForMover));
+
+    const bestAlreadyMated =
+      bestLine.mateIn !== null &&
+      bestLine.mateIn !== undefined &&
+      Math.sign(bestLine.mateIn) === -sign &&
+      Math.abs(bestLine.mateIn) <= 2;
 
     const walkedIntoMate =
+      !playedIsBestMove &&
+      !bestAlreadyMated &&
       postRes.lines[0]?.mateIn !== null &&
       postRes.lines[0]?.mateIn !== undefined &&
       Math.sign(postRes.lines[0].mateIn) === -sign &&
       Math.abs(postRes.lines[0].mateIn) <= 2;
 
-    const bestLine = preRes.lines[0];
     const bestFirstSan = bestLine.pvSan[0] || '';
     const missedTacticalCapture =
-      bestLine.bestMoveUci !== playedUci &&
+      !playedIsBestMove &&
       cpLoss >= 145 &&
       (bestFirstSan.includes('x') || bestFirstSan.includes('+'));
 
-    const alternatives = preRes.lines
-      .filter((l) => l.bestMoveUci !== playedUci && (l.scoreCp * sign - afterForMover >= 55 || l.multipv === 1))
-      .slice(0, 2)
-      .map((l) => ({
-        uci: l.bestMoveUci,
-        san: l.pvSan[0] || l.bestMoveUci,
-        scoreCp: l.scoreCp,
-      }));
+    const alternatives = playedIsBestMove
+      ? []
+      : preRes.lines
+          .filter(
+            (l) =>
+              l.bestMoveUci !== playedUci &&
+              (l.scoreCp * sign - afterForMover >= 55 ||
+                (l.multipv === 1 && (cpLoss >= 55 || walkedIntoMate))),
+          )
+          .slice(0, 2)
+          .map((l) => ({
+            uci: l.bestMoveUci,
+            san: l.pvSan[0] || l.bestMoveUci,
+            scoreCp: l.scoreCp,
+          }));
 
     return {
       cpLoss,

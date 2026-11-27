@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { APP_VERSION } from './chess/assetVersion';
-import { Maximize2, Minimize2, X } from 'lucide-react';
+import { Maximize2, Minimize2, Music, Volume2, VolumeX, X } from 'lucide-react';
 import { Chess, type Move, type Square } from 'chess.js';
 import { ChessScene3D, type SuggestionArrow } from './three/ChessScene3D';
 import { soundEngine } from './three/sound';
@@ -59,9 +59,13 @@ import {
   VOICE_CLIP_DURATION_SEC,
   extractCaseIdFromClip,
   getAngelDanceStarsVideoUrl,
+  getAngelDogRunExitXPx,
+  getAngelDogRunExitYPx,
   getAngelDogRunJumpSec,
   getAngelDogRunVideoUrl,
   getAngelVideoOverridesSnapshot,
+  getOpeningFlowchartDensity,
+  getOpeningFlowchartStartSec,
   getVideoFileDurationSec,
   isStudioDeveloperUnlocked,
   logoutStudioDeveloperSession,
@@ -639,6 +643,17 @@ export default function App() {
   const [studioPasswordGateOpen, setStudioPasswordGateOpen] = useState(false);
   const [videoStudioOpen, setVideoStudioOpen] = useState(false);
   const [idlePreviewNonce, setIdlePreviewNonce] = useState(0);
+  const [gamePortraitPulse, setGamePortraitPulse] = useState<{
+    nonce: number;
+    kind: 'move' | 'heartbeat' | 'event';
+  }>({ nonce: 0, kind: 'heartbeat' });
+  const gamePortraitHeartbeatAccumMsRef = useRef<number>(0);
+  const emitGamePortraitPulse = useCallback((kind: 'move' | 'heartbeat' | 'event') => {
+    gamePortraitHeartbeatAccumMsRef.current = 0;
+    setGamePortraitPulse((prev) => ({ nonce: prev.nonce + 1, kind }));
+  }, []);
+  const emitGamePortraitPulseRef = useRef(emitGamePortraitPulse);
+  emitGamePortraitPulseRef.current = emitGamePortraitPulse;
   const [previewIdleUrl, setPreviewIdleUrl] = useState<string | null>(null);
   const [dogRunCueSec, setDogRunCueSec] = useState<number | null>(null);
   const [danceStarsActive, setDanceStarsActive] = useState(false);
@@ -910,6 +925,12 @@ export default function App() {
   const awaitingDistractionModalRef = useRef<boolean>(false);
   const goodMoveStreakRef = useRef<number>(0);
   const lastSeductionPlyRef = useRef<number>(-99);
+  /** Prevents proposing another Undo once a turn was already rewound ("Rewind & Better Line") or hinted */
+  const noUndoOfferGuardRef = useRef<{
+    fen: string;
+    ply: number;
+    suggestedUcis: string[];
+  } | null>(null);
   const calcPreviewActiveRef = useRef<boolean>(false);
   const showSearchTreeRef = useRef<boolean>(true);
   const suppressTreeAndThreeMovesRef = useRef<boolean>(false);
@@ -1019,10 +1040,12 @@ export default function App() {
   voiceStateRef.current = voiceState;
   const clockTimeoutAnnouncedForIdRef = useRef<string | null>(null);
   const announceControlEvent = useCallback((msg: OpponentMessage | null) => {
-    if (!msg || angelVoiceRef.current !== 'on') return;
+    if (!msg || !angelVisibleRef.current) return;
     setOpponentMessage(msg);
-    opponentSpeech.unlock();
-    opponentSpeech.playClip(msg.clipId, 'on', soundEnabledRef.current);
+    if (angelVoiceRef.current === 'on') {
+      opponentSpeech.unlock();
+      opponentSpeech.playClip(msg.clipId, 'on', soundEnabledRef.current);
+    }
   }, []);
   const pendingBotMoveRef = useRef<{
     requestId: number;
@@ -1443,6 +1466,19 @@ export default function App() {
         const over = evaluateLocalGameOver(chess);
         const sharedAudit = !botReport && !over ? quickEvaluateHumanMove(preFen, record.uci, nextFen) : null;
 
+        // Check if this human move is retrying a turn that was just rewound via Undo or guided by a Hint
+        let isPostUndoOrHintTurn = false;
+        let followedRecommendedMove = false;
+        if (gameMode === 'engine' && record.color === humanColorActual) {
+          const guard = noUndoOfferGuardRef.current;
+          if (guard && (guard.fen === preFen || guard.ply === localMoves.length)) {
+            isPostUndoOrHintTurn = true;
+            followedRecommendedMove = guard.suggestedUcis.includes(record.uci);
+          }
+          // Consume guard once the human plays on so subsequent turns later in the match can still coach normally
+          noUndoOfferGuardRef.current = null;
+        }
+
         if (over?.reason === 'checkmate') {
           const mateCp = record.color === 'w' ? 9900 : -9900;
           setMoveEvalMeta((prev) => ({
@@ -1450,13 +1486,14 @@ export default function App() {
             [record.ply]: { ply: record.ply, evalCp: mateCp, quality: 'best', cpLoss: 0 },
           }));
         } else if (sharedAudit) {
+          const effectiveCpLoss = followedRecommendedMove ? 0 : sharedAudit.cpLoss;
           setMoveEvalMeta((prev) => ({
             ...prev,
             [record.ply]: {
               ply: record.ply,
               evalCp: sharedAudit.afterPlayedCp,
-              quality: classifyMoveQuality(sharedAudit.cpLoss),
-              cpLoss: sharedAudit.cpLoss,
+              quality: classifyMoveQuality(effectiveCpLoss),
+              cpLoss: effectiveCpLoss,
             },
           }));
         } else if (botReport?.triedLines && botReport.triedLines.length > 0) {
@@ -1503,8 +1540,9 @@ export default function App() {
           lastBotReportForFenRef.current = { afterFen: nextFen, report: botReport };
         }
 
-        // Chess Angel mathematical commentary & interactive voice guidance
-        if (gameMode === 'engine' && angelVoice === 'on') {
+        // Chess Angel mathematical commentary & obligatory event videos (plays visually even if voice audio is off)
+        let triggeredEventMessage = false;
+        if (gameMode === 'engine' && angelVisibleRef.current) {
           const aiColor: PieceColor = humanColorActual === 'w' ? 'b' : 'w';
           if (record.color === humanColorActual) {
             const audit = sharedAudit;
@@ -1530,11 +1568,16 @@ export default function App() {
               humanEvalAdvantageCp,
               canTriggerSeductionNow: nextMoves.length - lastSeductionPlyRef.current >= 8,
               seductionTriggerMode: ov.seductionTriggerMode,
+              suppressUndoOffer: isPostUndoOrHintTurn,
             });
             if (msg) {
+              triggeredEventMessage = true;
               const prep = prepareHumanCommentaryPlayback(msg.clipId, `msg:${msg.id}`);
+              setPreviewIdleUrl(null);
               setOpponentMessage(msg);
-              opponentSpeech.playClip(msg.clipId, angelVoice, soundEnabled);
+              if (angelVoice === 'on') {
+                opponentSpeech.playClip(msg.clipId, angelVoice, soundEnabled);
+              }
               if (msg.clipId.startsWith('seduction_') && !over && angelVisibleRef.current) {
                 lastSeductionPlyRef.current = nextMoves.length;
                 goodMoveStreakRef.current = 0;
@@ -1558,7 +1601,11 @@ export default function App() {
                 awaitingDistractionModalRef.current = false;
                 const reactionHoldSec = Math.max(
                   soundEnabled ? prep.audioSec : 0,
-                  prep.playToEnd ? prep.videoSec : 0,
+                  prep.playToEnd
+                    ? prep.videoSec
+                    : prep.videoUrl
+                      ? Math.min(prep.videoSec, 5.5)
+                      : 0,
                 );
                 holdBotUntilRef.current =
                   reactionHoldSec > 0
@@ -1571,8 +1618,14 @@ export default function App() {
             } else {
               awaitingDistractionModalRef.current = false;
               holdBotUntilRef.current = 0;
-              // Clear stale non-action prompts when player makes a clean move
-              setOpponentMessage((prev) => (prev?.action ? null : prev));
+              // Clear stale action / rewind / hint prompts when player makes a clean move so the match moves on
+              setOpponentMessage((prev) =>
+                prev?.action ||
+                prev?.tag === 'REWIND & BETTER LINE' ||
+                prev?.tag === 'CHESS ANGEL HINT'
+                  ? null
+                  : prev,
+              );
             }
           } else {
             awaitingDistractionModalRef.current = false;
@@ -1611,11 +1664,15 @@ export default function App() {
                   showSearchTreeRef.current && !suppressTreeAndThreeMovesRef.current,
               });
               if (msg) {
+                triggeredEventMessage = true;
+                setPreviewIdleUrl(null);
                 setOpponentMessage(msg);
                 if (msg.forkArrows && msg.forkArrows.length > 0) {
                   showTemporaryForkArrows(msg.forkArrows);
                 }
-                opponentSpeech.playClip(msg.clipId, angelVoice, soundEnabled);
+                if (angelVoice === 'on') {
+                  opponentSpeech.playClip(msg.clipId, angelVoice, soundEnabled);
+                }
               } else if (forkState.isFork) {
                 // 3rd+ fork in the game: say nothing about forks and clear any stale banner so player plays freely
                 setOpponentMessage(null);
@@ -1627,6 +1684,13 @@ export default function App() {
         } else {
           awaitingDistractionModalRef.current = false;
           holdBotUntilRef.current = 0;
+        }
+
+        // Direct chess-game portrait pulse on quiet moves (no registered event message)
+        // so Chess Angel never falls asleep and rotates idle animations without ever colliding
+        // with a freshly-loaded event video on the same commit!
+        if (!triggeredEventMessage) {
+          emitGamePortraitPulseRef.current('move');
         }
 
         return true;
@@ -1866,14 +1930,14 @@ export default function App() {
       lastMoveAnimHintRef.current = { from, to };
       setSelectedSquare(null);
       setPendingPromotion({ from, to, color });
-      if (angelVoiceRef.current === 'on') {
+      if (angelVisibleRef.current) {
         const askMsg = createAskPromotionMessage(to, color);
         prepareHumanCommentaryPlayback(askMsg.clipId, `msg:${askMsg.id}`);
-        if (angelVisibleRef.current) {
-          setOpponentMessage(askMsg);
+        setOpponentMessage(askMsg);
+        if (angelVoiceRef.current === 'on') {
+          opponentSpeech.unlock();
+          opponentSpeech.playClip(askMsg.clipId, angelVoiceRef.current, soundEnabledRef.current);
         }
-        opponentSpeech.unlock();
-        opponentSpeech.playClip(askMsg.clipId, angelVoiceRef.current, soundEnabledRef.current);
       }
     },
     [],
@@ -1952,15 +2016,14 @@ export default function App() {
     if (
       !opponentMessage ||
       !figures ||
-      figures.length === 0 ||
-      (angelVoice === 'off' && !opponentMessage.isStudioPreview)
+      figures.length === 0
     ) {
       setSpeechHighlightWindowOpen(false);
       return;
     }
     setSpeechHighlightWindowOpen(true);
     const fallbackSec = VOICE_CLIP_DURATION_SEC[opponentMessage.clipId] ?? 4.8;
-    const windowMs = soundEnabled ? 1400 : Math.round(fallbackSec * 1000);
+    const windowMs = soundEnabled && angelVoice === 'on' ? 1400 : Math.round(fallbackSec * 1000);
     const timerId = window.setTimeout(() => {
       setSpeechHighlightWindowOpen(false);
     }, windowMs);
@@ -1993,7 +2056,6 @@ export default function App() {
   const activeSpeechHighlights = useMemo(() => {
     const isPreview = Boolean(opponentMessage?.isStudioPreview);
     if (
-      (angelVoice === 'off' && !isPreview) ||
       ((!isViewingLatest || isReplayMode) && !isPreview) ||
       !opponentMessage?.concernedFigures ||
       opponentMessage.concernedFigures.length === 0
@@ -2183,11 +2245,15 @@ export default function App() {
       puppyIdleAccumMsRef.current = 0;
 
       const launch3DPuppy = () => {
+        const latestSnap = getAngelVideoOverridesSnapshot();
         const portraitEl =
           document.querySelector('[data-angel-portrait-canvas="true"]') ??
           document.querySelector('[data-angel-portrait-modal="true"]');
         const rect = portraitEl ? portraitEl.getBoundingClientRect() : null;
-        sceneRef.current?.triggerWildDogRun(rect, soundEnabledRef.current);
+        sceneRef.current?.triggerWildDogRun(rect, soundEnabledRef.current, {
+          xPx: getAngelDogRunExitXPx(latestSnap),
+          yPx: getAngelDogRunExitYPx(latestSnap),
+        });
       };
 
       if (shouldPlayVideo && dogUrl) {
@@ -2464,7 +2530,7 @@ export default function App() {
             soundEngine.playGameOver();
             if (clockTimeoutAnnouncedForIdRef.current !== currentMatchIdRef.current) {
               clockTimeoutAnnouncedForIdRef.current = currentMatchIdRef.current;
-              if (snap.angelVoice === 'on') {
+              if (snap.angelModalEnabled) {
                 const timeoutMsg = createClockTimeoutMessage(
                   winner,
                   snap.humanColorActual,
@@ -2472,7 +2538,9 @@ export default function App() {
                 );
                 if (timeoutMsg) {
                   setOpponentMessage(timeoutMsg);
-                  opponentSpeech.playClip(timeoutMsg.clipId, 'on', snap.soundEnabled);
+                  if (snap.angelVoice === 'on') {
+                    opponentSpeech.playClip(timeoutMsg.clipId, 'on', snap.soundEnabled);
+                  }
                 }
               }
             }
@@ -2512,7 +2580,6 @@ export default function App() {
         snap.isViewingLatest &&
         !snap.isThinkingAi &&
         !isPausedForShowcaseOrModal &&
-        snap.angelVoice === 'on' &&
         snap.angelModalEnabled &&
         snap.dockCollapsed &&
         !snap.videoStudioOpen &&
@@ -2548,7 +2615,9 @@ export default function App() {
               const hintMsg = composeHesitationCommentary(snap.localFen, snap.analysis);
               if (hintMsg) {
                 setOpponentMessage(hintMsg);
-                opponentSpeech.playClip(hintMsg.clipId, 'on', snap.soundEnabled);
+                if (snap.angelVoice === 'on') {
+                  opponentSpeech.playClip(hintMsg.clipId, 'on', snap.soundEnabled);
+                }
               }
             }
           }
@@ -2723,6 +2792,26 @@ export default function App() {
         }
       } else if (snap.videoStudioOpen || snap.isReplayMode || snap.gameMode === 'tactical') {
         puppyIdleAccumMsRef.current = 0;
+      }
+
+      // 6. Authoritative Chess-Game Portrait Heartbeat (Every 11s while visible & not speaking):
+      //    Sends a direct trigger from the chess game loop so Chess Angel's portrait never falls
+      //    asleep on any OS/device and periodically transitions into another idle animation!
+      if (
+        !isTabHidden &&
+        snap.angelModalEnabled &&
+        snap.angelVisible &&
+        !snap.videoStudioOpen &&
+        !calcPreviewActiveRef.current &&
+        !dogEventActiveRef.current &&
+        voiceStateRef.current !== 'speaking'
+      ) {
+        gamePortraitHeartbeatAccumMsRef.current += dtMs;
+        if (gamePortraitHeartbeatAccumMsRef.current >= 11_000) {
+          emitGamePortraitPulseRef.current('heartbeat');
+        }
+      } else {
+        gamePortraitHeartbeatAccumMsRef.current = 0;
       }
     }, 100);
 
@@ -3134,6 +3223,7 @@ export default function App() {
                 else if (c.inCheck()) soundEngine.playCheck();
                 else if (newest.captured) soundEngine.playCapture();
                 else soundEngine.playMove();
+                emitGamePortraitPulseRef.current('move');
               } else if (room.moves.length < prevRoomMoveCountRef.current) {
                 setViewPly(room.moves.length);
               }
@@ -3144,11 +3234,13 @@ export default function App() {
                 clockTimeoutAnnouncedForIdRef.current = room.id;
                 soundEngine.playGameOver();
                 const roomWinner: PieceColor = room.result.winner === 'b' ? 'b' : 'w';
-                if (angelVoiceRef.current === 'on') {
+                if (angelVisibleRef.current) {
                   const timeoutMsg = createClockTimeoutMessage(roomWinner, undefined, 'multiplayer');
                   if (timeoutMsg) {
                     setOpponentMessage(timeoutMsg);
-                    opponentSpeech.playClip(timeoutMsg.clipId, 'on', soundEnabledRef.current);
+                    if (angelVoiceRef.current === 'on') {
+                      opponentSpeech.playClip(timeoutMsg.clipId, 'on', soundEnabledRef.current);
+                    }
                   }
                 }
               }
@@ -3429,6 +3521,7 @@ export default function App() {
       holdBotUntilRef.current = 0;
       goodMoveStreakRef.current = 0;
       lastSeductionPlyRef.current = -99;
+      noUndoOfferGuardRef.current = null;
       turnStartedAtRef.current = performance.now();
       hesitationStageRef.current = 0;
       if (calcShowingTimerRef.current !== null) {
@@ -3746,11 +3839,13 @@ export default function App() {
       }
 
       opponentSpeech.unlock();
-      const showingMsg = angelVoice !== 'off' ? createCalcShowingMessage(validReport) : null;
+      const showingMsg = angelVisibleRef.current ? createCalcShowingMessage(validReport) : null;
       if (showingMsg) {
         const prep = prepareHumanCommentaryPlayback(showingMsg.clipId, `msg:${showingMsg.id}`);
         setOpponentMessage(showingMsg);
-        opponentSpeech.playClip(showingMsg.clipId, angelVoice, soundEnabled);
+        if (angelVoice === 'on') {
+          opponentSpeech.playClip(showingMsg.clipId, angelVoice, soundEnabled);
+        }
 
         const introSec = Math.max(
           soundEnabled ? prep.audioSec || 4.8 : angelVisibleRef.current ? 1.8 : 0,
@@ -4412,6 +4507,13 @@ export default function App() {
           ? alternatives.filter((a) => a.uci.length >= 4)
           : resolveCandidateMovesForFen(nextFen, null, 2);
 
+      // Guard this rewound turn so Chess Angel never proposes another Undo on it — the match must move on
+      noUndoOfferGuardRef.current = {
+        fen: nextFen,
+        ply: nextMoves.length,
+        suggestedUcis: resolvedAlts.map((a) => a.uci),
+      };
+
       const arrows: SuggestionArrow[] = resolvedAlts.map((a, idx) => ({
         from: a.uci.slice(0, 2),
         to: a.uci.slice(2, 4),
@@ -4493,6 +4595,13 @@ export default function App() {
             kind: 'primary',
           },
         ]);
+        if (!isReplayMode && displayedFen === localFen) {
+          noUndoOfferGuardRef.current = {
+            fen: localFen,
+            ply: localMoves.length,
+            suggestedUcis: [chosenUci],
+          };
+        }
       }
 
       turnStartedAtRef.current = performance.now();
@@ -4509,7 +4618,7 @@ export default function App() {
         opponentSpeech.playClip(shownMsg.clipId, angelVoice, soundEnabled);
       }
     },
-    [displayedFen, analysis, angelVoice, soundEnabled],
+    [displayedFen, analysis, angelVoice, soundEnabled, isReplayMode, localFen, localMoves.length],
   );
 
   const handleLoadSavedGame = useCallback(
@@ -4531,6 +4640,7 @@ export default function App() {
       awaitingDistractionModalRef.current = false;
       preserveMessageOnBotCommitRef.current = false;
       holdBotUntilRef.current = 0;
+      noUndoOfferGuardRef.current = null;
       turnStartedAtRef.current = performance.now();
       hesitationStageRef.current = 0;
       if (calcShowingTimerRef.current !== null) {
@@ -4938,12 +5048,14 @@ export default function App() {
       setTacticalStatus('solving');
       setTacticalFeedback(`Winning move: ${san}`);
 
-      if (angelVoiceRef.current === 'on') {
+      if (angelVisibleRef.current) {
         const hintMsg = createHintShownMessage(san);
         if (hintMsg) {
           setOpponentMessage(hintMsg);
-          opponentSpeech.unlock();
-          opponentSpeech.playClip(hintMsg.clipId, 'on', soundEnabledRef.current);
+          if (angelVoiceRef.current === 'on') {
+            opponentSpeech.unlock();
+            opponentSpeech.playClip(hintMsg.clipId, 'on', soundEnabledRef.current);
+          }
         }
       }
     }
@@ -5214,6 +5326,92 @@ export default function App() {
           alreadySaved={Boolean(currentFingerprint && savedGameFingerprints.has(currentFingerprint))}
         />
       )}
+
+      {/* Very Small Top-Left Quick Audio Toggles: Music Mute & Sound / Angel Voice Off */}
+      <div className="fixed top-1.5 sm:top-2 left-2 z-[34] flex items-center gap-1 pointer-events-none">
+        {(() => {
+          const isMusicActive = musicEnabled && soundEnabled;
+          const isSoundVoiceActive = soundEnabled && angelVoice === 'on';
+          return (
+            <>
+              <button
+                type="button"
+                onClick={handleToggleMusic}
+                aria-pressed={!isMusicActive}
+                aria-label={isMusicActive ? 'Mute background music' : 'Unmute background music'}
+                title={isMusicActive ? 'Mute music' : 'Turn music on'}
+                className={`pointer-events-auto inline-flex items-center gap-1 h-[22px] px-1.5 rounded border text-[9.5px] leading-none font-medium transition-colors cursor-pointer ${
+                  isMusicActive
+                    ? 'bg-black/55 hover:bg-black/80 border-[#d6ae63]/40 text-[#e8cf97]'
+                    : 'bg-black/65 hover:bg-black/85 border-white/15 text-[#7d8799]'
+                }`}
+              >
+                <span className="relative inline-flex items-center justify-center w-3 h-3">
+                  <Music className="w-3 h-3" />
+                  {!isMusicActive && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute inset-x-0 top-1/2 h-[1.5px] -rotate-45 bg-[#f87171] rounded-full"
+                    />
+                  )}
+                </span>
+                <span className="hidden sm:inline">{isMusicActive ? 'Music' : 'Muted'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (isSoundVoiceActive) {
+                    setSoundEnabled(false);
+                    soundEngine.enabled = false;
+                    setAngelVoice('off');
+                    opponentSpeech.stop();
+                    opponentSpeech.setBackgroundMusicEnabled(musicEnabledRef.current, false);
+                    if (awaitingDistractionModalRef.current || holdBotUntilRef.current > 0) {
+                      awaitingDistractionModalRef.current = false;
+                      holdBotUntilRef.current = 0;
+                      setBotHoldEpoch((n) => n + 1);
+                    }
+                  } else {
+                    setSoundEnabled(true);
+                    soundEngine.enabled = true;
+                    setAngelVoice('on');
+                    opponentSpeech.unlock();
+                    if (musicEnabledRef.current) {
+                      opponentSpeech.setBackgroundMusicEnabled(true, true);
+                    }
+                  }
+                }}
+                aria-pressed={!isSoundVoiceActive}
+                aria-label={
+                  isSoundVoiceActive
+                    ? 'Turn sound and Angel voice off'
+                    : 'Turn sound and Angel voice on'
+                }
+                title={
+                  isSoundVoiceActive
+                    ? 'Turn sound & Angel voice off'
+                    : 'Turn sound & Angel voice on'
+                }
+                className={`pointer-events-auto inline-flex items-center gap-1 h-[22px] px-1.5 rounded border text-[9.5px] leading-none font-medium transition-colors cursor-pointer ${
+                  isSoundVoiceActive
+                    ? 'bg-black/55 hover:bg-black/80 border-[#d6ae63]/40 text-[#e8cf97]'
+                    : 'bg-[#211216]/80 hover:bg-[#31181e]/90 border-[#f87171]/40 text-[#fca5a5]'
+                }`}
+              >
+                {isSoundVoiceActive ? (
+                  <Volume2 className="w-3 h-3" />
+                ) : (
+                  <VolumeX className="w-3 h-3 text-[#f87171]" />
+                )}
+                <span className="hidden sm:inline">
+                  {isSoundVoiceActive ? 'Voice' : 'Off'}
+                </span>
+              </button>
+            </>
+          );
+        })()}
+      </div>
 
       {/* Transparent Bottom-Left Full Screen / Reduce Button + Prominent Version Mark */}
       <div
@@ -5532,11 +5730,17 @@ export default function App() {
         calcPreview={calcPreview}
         treeBrowser={treeBrowser}
         idlePreviewNonce={idlePreviewNonce}
+        gamePulseNonce={gamePortraitPulse.nonce}
+        gamePulseKind={gamePortraitPulse.kind}
         forcedIdleUrl={previewIdleUrl}
         forcedIdleCueAtSec={dogRunCueSec}
         onForcedIdleCueReached={handleForcedIdleCueReached}
         onOpeningVideoProgress={(active, currentTime, portraitRect) => {
-          sceneRef.current?.syncOpeningFlowchart(active, currentTime, portraitRect);
+          const snap = getAngelVideoOverridesSnapshot();
+          sceneRef.current?.syncOpeningFlowchart(active, currentTime, portraitRect, {
+            startSec: getOpeningFlowchartStartSec(snap),
+            density: getOpeningFlowchartDensity(snap),
+          });
         }}
         onCalcPureVideoProgress={(active, currentTime, portraitRect) => {
           sceneRef.current?.syncCalcPureTree(active, currentTime, portraitRect);

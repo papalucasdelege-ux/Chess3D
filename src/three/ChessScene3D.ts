@@ -2432,6 +2432,7 @@ export class ChessScene3D {
   public triggerWildDogRun(
     modalRect?: { left: number; top: number; width: number; height: number } | null,
     soundEnabled = true,
+    exitPx?: { xPx?: number; yPx?: number },
   ): void {
     if (this.webglUnavailable || !this.wildDog) return;
     this.stopWildDogRun(true);
@@ -2522,9 +2523,17 @@ export class ChessScene3D {
       const computedScale = (0.338 * portraitH) / pxPerWorldUnit;
       this.wildDogScale = THREE.MathUtils.clamp(computedScale, 0.95, 2.35);
 
-      // Match Chess Angel's lower arm exit height (~48% down portrait) so Udo leaps cleanly right out of her arms
-      const startClientX = modalRect.left + portraitW * 0.22;
-      const startClientY = modalRect.top + portraitH * 0.48;
+      // Exact pixel-calibrated launch point in native 560×752 portrait coordinates
+      const calibratedXPx =
+        typeof exitPx?.xPx === 'number' && Number.isFinite(exitPx.xPx)
+          ? THREE.MathUtils.clamp(exitPx.xPx, -80, 560)
+          : 123;
+      const calibratedYPx =
+        typeof exitPx?.yPx === 'number' && Number.isFinite(exitPx.yPx)
+          ? THREE.MathUtils.clamp(exitPx.yPx, 0, 752)
+          : 361;
+      const startClientX = modalRect.left + portraitW * (calibratedXPx / 560);
+      const startClientY = modalRect.top + portraitH * (calibratedYPx / 752);
       _rayMouse.x = ((startClientX - canvasRect.left) / canvasRect.width) * 2 - 1;
       _rayMouse.y = -((startClientY - canvasRect.top) / canvasRect.height) * 2 + 1;
       _dogRaycaster.setFromCamera(_rayMouse, this.camera);
@@ -2536,8 +2545,8 @@ export class ChessScene3D {
       startWorld = new THREE.Vector3(launchAirPos.x, BOARD_TOP_Y, launchAirPos.z);
       this.wildDogLaunchLiftY = THREE.MathUtils.clamp(
         launchAirPos.y - BOARD_TOP_Y - 0.14,
-        0.55,
-        4.4,
+        0.04,
+        5.5,
       );
     } else {
       this.wildDogScale = 1.62;
@@ -2592,10 +2601,15 @@ export class ChessScene3D {
       this.wildDogScale,
     );
     this.wildDog.root.visible = true;
+    if (!this.wildDogSoundMuted && soundEngine.hasCustomUdoBarkAudio()) {
+      _dogProj.copy(this.wildDog.root.position).project(this.camera);
+      soundEngine.startWildDogBarkLoop(THREE.MathUtils.clamp(_dogProj.x, -0.92, 0.92));
+    }
     this.requestRender();
   }
 
   public stopWildDogRun(restorePieces = true): void {
+    soundEngine.stopWildDogBarkLoop();
     if (restorePieces && this.wildDogTippedPieces.size > 0) {
       for (const tipped of this.wildDogTippedPieces.values()) {
         tipped.group.position.copy(tipped.origPos);
@@ -2718,12 +2732,17 @@ export class ChessScene3D {
       while (deltaYaw < -Math.PI) deltaYaw += Math.PI * 2;
       this.wildDog.root.rotation.y += deltaYaw * Math.min(1, dt * 14);
 
-      // Stereo-panned raspy terrier barks synced to Udo's snapping jaw
+      // Stereo-panned barks synced to Udo's snapping jaw (continuous loop if custom Udo bark audio is uploaded)
       this.wildDogBarkEnv = Math.max(0, this.wildDogBarkEnv - dt * 4.6);
+      const hasCustomBark = soundEngine.hasCustomUdoBarkAudio();
+      if (hasCustomBark && !this.wildDogSoundMuted && u < 0.96) {
+        _dogProj.copy(_dogPos).project(this.camera);
+        soundEngine.updateWildDogBarkLoopPan(THREE.MathUtils.clamp(_dogProj.x, -0.92, 0.92));
+      }
       if (this.wildDogElapsed >= this.wildDogNextBarkAt && u < 0.95) {
         this.wildDogBarkEnv = 1.0;
         this.wildDogNextBarkAt = this.wildDogElapsed + 0.3 + Math.random() * 0.17;
-        if (!this.wildDogSoundMuted) {
+        if (!this.wildDogSoundMuted && !hasCustomBark) {
           _dogProj.copy(_dogPos).project(this.camera);
           const stereoPan = THREE.MathUtils.clamp(_dogProj.x, -0.92, 0.92);
           soundEngine.playWildDogBark(stereoPan, 0.95 + Math.random() * 0.15);
@@ -2806,6 +2825,7 @@ export class ChessScene3D {
       stepTippedPiecesFall(dt);
 
       if (u >= 1) {
+        soundEngine.stopWildDogBarkLoop();
         this.wildDog.root.visible = false;
         this.wildDogPhase = this.wildDogTippedPieces.size > 0 ? 'hold' : 'idle';
         this.wildDogPhaseTimer = 0;
@@ -4730,8 +4750,15 @@ export class ChessScene3D {
     active: boolean,
     currentTimeSec: number,
     portraitRect: DOMRect | null,
+    config?: { startSec?: number; density?: number },
   ): void {
     if (!this.openingFlowchart || this.webglUnavailable || !this.renderer) return;
+    if (config && (config.startSec !== undefined || config.density !== undefined)) {
+      this.openingFlowchart.setConfig(
+        config.startSec ?? 4.65,
+        config.density ?? 1.0,
+      );
+    }
     const canvasRect = this.renderer.domElement.getBoundingClientRect();
     this.openingFlowchart.syncWithOpeningVideo(
       active,

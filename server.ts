@@ -1099,6 +1099,11 @@ async function startServer(): Promise<void> {
     mouseIdleHoldSec?: Record<string, number>;
     dogRunVideo?: string;
     dogRunJumpSec?: number;
+    dogRunExitYPx?: number;
+    dogRunExitXPx?: number;
+    openingFlowchartStartSec?: number;
+    openingFlowchartDensity?: number;
+    angelBgTransparency?: number;
     danceStarsVideo?: string;
     defaultSpeaking?: string;
     groups: Record<string, string>;
@@ -1128,9 +1133,11 @@ async function startServer(): Promise<void> {
     seductionTriggerMode?: 'balanced' | 'frequent' | 'dominant' | 'tactical';
     thankJanAudioUrl?: string;
     thankJanAudioDuration?: number;
+    udoBarkAudioUrl?: string;
     musicTracks?: Array<{ id: string; title: string; url: string }>;
   }
   const seductionAssetMp3Path = path.join(aistudioAssetsDir, 'seduction.mp3');
+  const udoBarkAssetMp3Path = path.join(aistudioAssetsDir, 'udo_bark.mp3');
 
   const formatMusicTrackTitle = (filename: string): string => {
     const lower = filename.toLowerCase();
@@ -1169,6 +1176,7 @@ async function startServer(): Promise<void> {
       'seduction_6.mp3',
       'thank_jan.mp3',
       'angle_45923f8a.mp3',
+      'udo_bark.mp3',
     ]);
     try {
       if (fs.existsSync(aistudioAssetsDir)) {
@@ -1824,7 +1832,12 @@ async function startServer(): Promise<void> {
       idleVariants: {},
       mouseIdleTimeoutSec: 20,
       mouseIdleHoldSec: {},
-      dogRunJumpSec: 4.2,
+      dogRunJumpSec: 6.2,
+      dogRunExitYPx: 361,
+      dogRunExitXPx: 123,
+      openingFlowchartStartSec: 4.65,
+      openingFlowchartDensity: 1.0,
+      angelBgTransparency: 0.3,
       groups: {},
       cases: {},
       escapes: {},
@@ -1908,6 +1921,46 @@ async function startServer(): Promise<void> {
           parsed.dogRunJumpSec <= 30
         ) {
           result.dogRunJumpSec = Math.round(parsed.dogRunJumpSec * 10) / 10;
+        }
+        if (
+          typeof parsed.dogRunExitYPx === 'number' &&
+          Number.isFinite(parsed.dogRunExitYPx) &&
+          parsed.dogRunExitYPx >= 0 &&
+          parsed.dogRunExitYPx <= 752
+        ) {
+          result.dogRunExitYPx = Math.round(parsed.dogRunExitYPx);
+        }
+        if (
+          typeof parsed.dogRunExitXPx === 'number' &&
+          Number.isFinite(parsed.dogRunExitXPx) &&
+          parsed.dogRunExitXPx >= -80 &&
+          parsed.dogRunExitXPx <= 560
+        ) {
+          result.dogRunExitXPx = Math.round(parsed.dogRunExitXPx);
+        }
+        if (
+          typeof parsed.openingFlowchartStartSec === 'number' &&
+          Number.isFinite(parsed.openingFlowchartStartSec) &&
+          parsed.openingFlowchartStartSec >= 0 &&
+          parsed.openingFlowchartStartSec <= 15
+        ) {
+          result.openingFlowchartStartSec = Math.round(parsed.openingFlowchartStartSec * 100) / 100;
+        }
+        if (
+          typeof parsed.openingFlowchartDensity === 'number' &&
+          Number.isFinite(parsed.openingFlowchartDensity) &&
+          parsed.openingFlowchartDensity >= 0.25 &&
+          parsed.openingFlowchartDensity <= 2.5
+        ) {
+          result.openingFlowchartDensity = Math.round(parsed.openingFlowchartDensity * 100) / 100;
+        }
+        if (
+          typeof parsed.angelBgTransparency === 'number' &&
+          Number.isFinite(parsed.angelBgTransparency) &&
+          parsed.angelBgTransparency >= 0 &&
+          parsed.angelBgTransparency <= 1
+        ) {
+          result.angelBgTransparency = Math.round(parsed.angelBgTransparency * 100) / 100;
         }
         if (isSafeLocalMediaUrl(parsed.defaultSpeaking)) {
           result.defaultSpeaking = parsed.defaultSpeaking.split('?')[0];
@@ -2051,6 +2104,9 @@ async function startServer(): Promise<void> {
         if (isSafeLocalMediaUrl(parsed.thankJanAudioUrl)) {
           result.thankJanAudioUrl = parsed.thankJanAudioUrl;
         }
+        if (isSafeLocalMediaUrl(parsed.udoBarkAudioUrl)) {
+          result.udoBarkAudioUrl = parsed.udoBarkAudioUrl.split('?')[0];
+        }
         if (
           typeof parsed.thankJanAudioDuration === 'number' &&
           Number.isFinite(parsed.thankJanAudioDuration) &&
@@ -2156,6 +2212,11 @@ async function startServer(): Promise<void> {
             result.thankJanAudioUrl = result.thankJanAudioUrl.split('?')[0];
           }
         }
+      }
+      if (fs.existsSync(udoBarkAssetMp3Path)) {
+        result.udoBarkAudioUrl = '/assets/aistudio/udo_bark.mp3';
+      } else if (result.udoBarkAudioUrl === '/assets/aistudio/udo_bark.mp3') {
+        delete result.udoBarkAudioUrl;
       }
     } catch {
       // ignore
@@ -2432,7 +2493,23 @@ async function startServer(): Promise<void> {
       mouseIdleHoldSec: data.mouseIdleHoldSec || {},
       dogRunVideo: data.dogRunVideo,
       dogRunJumpSec:
-        typeof data.dogRunJumpSec === 'number' ? data.dogRunJumpSec : 4.2,
+        typeof data.dogRunJumpSec === 'number' ? data.dogRunJumpSec : 6.2,
+      dogRunExitYPx:
+        typeof data.dogRunExitYPx === 'number' ? Math.round(data.dogRunExitYPx) : 361,
+      dogRunExitXPx:
+        typeof data.dogRunExitXPx === 'number' ? Math.round(data.dogRunExitXPx) : 123,
+      openingFlowchartStartSec:
+        typeof data.openingFlowchartStartSec === 'number'
+          ? Math.round(data.openingFlowchartStartSec * 100) / 100
+          : 4.65,
+      openingFlowchartDensity:
+        typeof data.openingFlowchartDensity === 'number'
+          ? Math.round(data.openingFlowchartDensity * 100) / 100
+          : 1.0,
+      angelBgTransparency:
+        typeof data.angelBgTransparency === 'number'
+          ? Math.round(data.angelBgTransparency * 100) / 100
+          : 0.3,
       danceStarsVideo: data.danceStarsVideo,
       defaultSpeaking: data.defaultSpeaking,
       groups: data.groups,
@@ -2462,6 +2539,7 @@ async function startServer(): Promise<void> {
       seductionTriggerMode: data.seductionTriggerMode || 'balanced',
       thankJanAudioUrl: data.thankJanAudioUrl,
       thankJanAudioDuration: data.thankJanAudioDuration,
+      udoBarkAudioUrl: data.udoBarkAudioUrl,
       musicTracks: data.musicTracks || discoverMusicTracks(),
     };
     fs.mkdirSync(aistudioAssetsDir, { recursive: true });
@@ -2486,7 +2564,44 @@ async function startServer(): Promise<void> {
 
   const studioSessions = new Map<string, number>(); // token -> expiresAtMs
   const studioLoginAttempts = new Map<string, number[]>(); // ip -> timestamps
-  let claimedStudioPasswordRecord: { saltHex: string; hashHex: string } | null = null;
+  const STUDIO_AUTH_HASH_FILE = path.resolve(__dirname, '.studio-auth-hash.json');
+
+  const loadPersistedStudioPasswordRecord = (): { saltHex: string; hashHex: string } | null => {
+    if (IS_PROD) return null;
+    try {
+      if (!fs.existsSync(STUDIO_AUTH_HASH_FILE)) return null;
+      const parsed = JSON.parse(fs.readFileSync(STUDIO_AUTH_HASH_FILE, 'utf8')) as {
+        saltHex?: unknown;
+        hashHex?: unknown;
+      };
+      if (
+        typeof parsed.saltHex === 'string' &&
+        /^[0-9a-f]{32}$/i.test(parsed.saltHex) &&
+        typeof parsed.hashHex === 'string' &&
+        /^[0-9a-f]{128}$/i.test(parsed.hashHex)
+      ) {
+        return { saltHex: parsed.saltHex, hashHex: parsed.hashHex };
+      }
+    } catch {
+      // Ignore unreadable/corrupt dev auth hash file
+    }
+    return null;
+  };
+
+  const persistStudioPasswordRecord = (rec: { saltHex: string; hashHex: string }): void => {
+    if (IS_PROD) return;
+    try {
+      fs.writeFileSync(STUDIO_AUTH_HASH_FILE, JSON.stringify(rec, null, 2), {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+    } catch {
+      // Ignore read-only filesystem
+    }
+  };
+
+  let claimedStudioPasswordRecord: { saltHex: string; hashHex: string } | null =
+    loadPersistedStudioPasswordRecord();
 
   const getConfiguredEnvStudioPassword = (): string => {
     const raw = process.env.STUDIO_DEV_PASSWORD;
@@ -2632,11 +2747,12 @@ async function startServer(): Promise<void> {
       return;
     }
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
-    if (password.length < 6 || password.length > 128) {
-      res.status(400).json({ error: 'Developer password must be between 6 and 128 characters.' });
+    if (password.length < 1 || password.length > 128) {
+      res.status(400).json({ error: 'Developer passcode must be between 1 and 128 characters.' });
       return;
     }
     claimedStudioPasswordRecord = hashStudioPassword(password);
+    persistStudioPasswordRecord(claimedStudioPasswordRecord);
     const token = issueStudioSessionToken();
     res.json({ ok: true, token });
   });
@@ -2905,13 +3021,93 @@ async function startServer(): Promise<void> {
 
   app.put('/api/angel-videos/dog-run-jump', express.json(), (req, res) => {
     if (!requireStudioDeveloperAuth(req, res)) return;
-    const raw = Number((req.body || {}).jumpSec);
-    if (!Number.isFinite(raw) || raw < 0 || raw > 30) {
-      res.status(400).json({ error: 'Invalid dog jump-out timing.' });
+    const body = (req.body || {}) as {
+      jumpSec?: unknown;
+      exitYPx?: unknown;
+      exitXPx?: unknown;
+    };
+    const hasJumpSec = body.jumpSec !== undefined;
+    const hasExitY = body.exitYPx !== undefined;
+    const hasExitX = body.exitXPx !== undefined;
+    if (!hasJumpSec && !hasExitY && !hasExitX) {
+      res.status(400).json({ error: 'Missing dog jump-out parameters.' });
+      return;
+    }
+
+    const map = readAngelVideoMap();
+    if (hasJumpSec) {
+      const raw = Number(body.jumpSec);
+      if (!Number.isFinite(raw) || raw < 0 || raw > 30) {
+        res.status(400).json({ error: 'Invalid dog jump-out timing.' });
+        return;
+      }
+      map.dogRunJumpSec = Math.round(raw * 10) / 10;
+    }
+    if (hasExitY) {
+      const rawY = Number(body.exitYPx);
+      if (!Number.isFinite(rawY) || rawY < 0 || rawY > 752) {
+        res.status(400).json({ error: 'Invalid dog jump-out Y pixel (0..752).' });
+        return;
+      }
+      map.dogRunExitYPx = Math.round(rawY);
+    }
+    if (hasExitX) {
+      const rawX = Number(body.exitXPx);
+      if (!Number.isFinite(rawX) || rawX < -80 || rawX > 560) {
+        res.status(400).json({ error: 'Invalid dog jump-out X pixel (-80..560).' });
+        return;
+      }
+      map.dogRunExitXPx = Math.round(rawX);
+    }
+
+    writeAngelVideoMap(map);
+    res.json({ ok: true, map });
+  });
+
+  app.put('/api/angel-videos/opening-flowchart', express.json(), (req, res) => {
+    if (!requireStudioDeveloperAuth(req, res)) return;
+    const body = (req.body || {}) as {
+      startSec?: unknown;
+      density?: unknown;
+    };
+    const hasStartSec = body.startSec !== undefined;
+    const hasDensity = body.density !== undefined;
+    if (!hasStartSec && !hasDensity) {
+      res.status(400).json({ error: 'Missing opening flowchart parameters.' });
+      return;
+    }
+
+    const map = readAngelVideoMap();
+    if (hasStartSec) {
+      const rawStart = Number(body.startSec);
+      if (!Number.isFinite(rawStart) || rawStart < 0 || rawStart > 15) {
+        res.status(400).json({ error: 'Invalid opening flowchart start timer (0..15s).' });
+        return;
+      }
+      map.openingFlowchartStartSec = Math.round(rawStart * 100) / 100;
+    }
+    if (hasDensity) {
+      const rawDensity = Number(body.density);
+      if (!Number.isFinite(rawDensity) || rawDensity < 0.25 || rawDensity > 2.5) {
+        res.status(400).json({ error: 'Invalid opening flowchart density (0.25..2.5).' });
+        return;
+      }
+      map.openingFlowchartDensity = Math.round(rawDensity * 100) / 100;
+    }
+
+    writeAngelVideoMap(map);
+    res.json({ ok: true, map });
+  });
+
+  app.put('/api/angel-videos/bg-transparency', express.json(), (req, res) => {
+    if (!requireStudioDeveloperAuth(req, res)) return;
+    const raw = Number((req.body || {}).transparency);
+    if (!Number.isFinite(raw) || raw < 0 || raw > 1) {
+      res.status(400).json({ error: 'Invalid background transparency strength (0..1).' });
       return;
     }
     const map = readAngelVideoMap();
-    map.dogRunJumpSec = Math.round(raw * 10) / 10;
+    map.angelBgTransparency = Math.round(raw * 100) / 100;
     writeAngelVideoMap(map);
     res.json({ ok: true, map });
   });
@@ -3012,6 +3208,102 @@ async function startServer(): Promise<void> {
       }
     },
   );
+
+  app.post(
+    '/api/angel-videos/udo-bark-audio',
+    express.raw({ type: '*/*', limit: '25mb' }),
+    (req, res) => {
+      if (!requireStudioDeveloperAuth(req, res)) return;
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length < 64) {
+        res.status(400).json({ error: 'Empty or invalid barking audio file.' });
+        return;
+      }
+
+      const tmpAudioIn = path.join(
+        os.tmpdir(),
+        `udo_bark_in_${process.pid}_${Date.now()}.bin`,
+      );
+      const tmpAudioOut = path.join(
+        os.tmpdir(),
+        `udo_bark_out_${process.pid}_${Date.now()}.mp3`,
+      );
+
+      try {
+        fs.mkdirSync(aistudioAssetsDir, { recursive: true });
+        const looksLikeMp3 =
+          (body.length >= 3 && body[0] === 0x49 && body[1] === 0x44 && body[2] === 0x33) ||
+          (body.length >= 2 && body[0] === 0xff && (body[1] & 0xe0) === 0xe0);
+
+        if (looksLikeMp3 && body.length <= 512 * 1024) {
+          // Preserve user-submitted MP3 bytes directly without re-synthesizing
+          fs.writeFileSync(udoBarkAssetMp3Path, body);
+        } else {
+          // Gently convert/reduce size to lightweight mono MP3 while preserving original recording
+          fs.writeFileSync(tmpAudioIn, body);
+          execFileSync(
+            'ffmpeg',
+            [
+              '-y',
+              '-loglevel',
+              'error',
+              '-i',
+              tmpAudioIn,
+              '-vn',
+              '-ac',
+              '1',
+              '-ar',
+              '24000',
+              '-c:a',
+              'libmp3lame',
+              '-b:a',
+              '96k',
+              tmpAudioOut,
+            ],
+            { timeout: 20000 },
+          );
+          fs.copyFileSync(tmpAudioOut, udoBarkAssetMp3Path);
+        }
+
+        const audioUrl = `/assets/aistudio/udo_bark.mp3?v=${Date.now()}`;
+        const map = readAngelVideoMap();
+        map.udoBarkAudioUrl = '/assets/aistudio/udo_bark.mp3';
+        writeAngelVideoMap(map);
+
+        res.json({ ok: true, audioUrl, map });
+      } catch (err) {
+        console.error('Failed to process Udo bark audio upload:', err);
+        res.status(500).json({ error: 'Failed to save Udo barking audio.' });
+      } finally {
+        try {
+          if (fs.existsSync(tmpAudioIn)) fs.unlinkSync(tmpAudioIn);
+        } catch {
+          // ignore
+        }
+        try {
+          if (fs.existsSync(tmpAudioOut)) fs.unlinkSync(tmpAudioOut);
+        } catch {
+          // ignore
+        }
+      }
+    },
+  );
+
+  app.delete('/api/angel-videos/udo-bark-audio', (req, res) => {
+    if (!requireStudioDeveloperAuth(req, res)) return;
+    try {
+      if (fs.existsSync(udoBarkAssetMp3Path)) {
+        fs.unlinkSync(udoBarkAssetMp3Path);
+      }
+      const map = readAngelVideoMap();
+      delete map.udoBarkAudioUrl;
+      writeAngelVideoMap(map);
+      res.json({ ok: true, map });
+    } catch (err) {
+      console.error('Failed to delete Udo bark audio:', err);
+      res.status(500).json({ error: 'Failed to clear Udo barking audio.' });
+    }
+  });
 
   app.put('/api/angel-videos/compression-preset', express.json(), (req, res) => {
     if (!requireStudioDeveloperAuth(req, res)) return;

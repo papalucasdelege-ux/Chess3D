@@ -25,6 +25,7 @@ import {
   ANGEL_DEFAULT_SPEAKING_VIDEO_SRC,
   ANGEL_IDLE_LISTENING_VIDEO_SRC,
   VOICE_CLIP_DURATION_SEC,
+  getAngelBgTransparency,
   getAngelIdleVideoPool,
   isUtterancePlayToEnd,
   isVideoUrlPlayToEnd,
@@ -41,6 +42,7 @@ import {
   type AngelEscapeCueKey,
   type ResolvedActiveEscapeCue,
 } from '../chess/angelPortraitVideos';
+import { BlackBgKeyerGL } from '../utils/blackBgKeyer';
 import { stripAssetQuery, withAssetBuildVersion } from '../chess/assetVersion';
 import {
   computeFallbackUpperRightVoid,
@@ -102,6 +104,8 @@ interface ChessAngelPortraitVideoProps {
   soundEnabled: boolean;
   angelVoice: AngelVoiceMode;
   triggerKey: string;
+  gamePulseNonce?: number;
+  gamePulseKind?: 'move' | 'heartbeat' | 'event';
   portraitWidthClass: string;
   hasCardBelow: boolean;
   powerSaveMode?: boolean;
@@ -171,14 +175,14 @@ const PRE_EOS_STOP_SEC = 0.03;
 const POWER_SAVE_PORTRAIT_INTERVAL_MS = 66; // ~15 FPS compositing cap in Power Save Mode
 
 /** Minimum quiet pause after Chess Angel finishes any game speech before showing an idle video */
-const POST_SPEECH_MIN_IDLE_WAIT_MS = 6_000;
+const POST_SPEECH_MIN_IDLE_WAIT_MS = 4_200;
 
 /** Minimum quiet pause between the end of one idle video and the start of the next idle video */
-const MIN_BETWEEN_IDLE_VIDEOS_MS = 8_500;
+const MIN_BETWEEN_IDLE_VIDEOS_MS = 5_500;
 
-/** Calm stillness window (9s–14s) between idle listening videos */
+/** Calm stillness window (6s–10s) between idle listening videos so Chess Angel never looks asleep */
 function nextCalmIdlePauseMs(): number {
-  return 9_000 + Math.floor(Math.random() * 5_000);
+  return 6_000 + Math.floor(Math.random() * 4_000);
 }
 
 /** C2-continuous quintic smoothstep (zero velocity & acceleration jump at 0 and 1) */
@@ -236,13 +240,20 @@ function createPortraitOffscreenCanvas(): HTMLCanvasElement {
   return off;
 }
 
-/** Deduplicated & throttled non-throwing HTMLVideoElement.play() helper for Android, Windows Chrome, Safari & Firefox */
-const inFlightVideoPlays = new WeakMap<HTMLVideoElement, Promise<void>>();
+/** Deduplicated & resilient non-throwing HTMLVideoElement.play() helper for iOS, Android, Windows, macOS & Linux */
+const inFlightVideoPlays = new WeakMap<
+  HTMLVideoElement,
+  { promise: Promise<void>; startedAtMs: number }
+>();
 const lastVideoPlayAttemptMs = new WeakMap<HTMLVideoElement, number>();
+const gesturePendingVideos = new WeakSet<HTMLVideoElement>();
 function safePlayVideo(video: HTMLVideoElement | null, forceImmediate = false): void {
   if (!video) return;
   silenceVideoElement(video);
-  if (!video.paused) return;
+  if (!video.paused) {
+    gesturePendingVideos.delete(video);
+    return;
+  }
   if (video.error || video.networkState === 3) return;
   if (video.ended) {
     try {
@@ -251,43 +262,52 @@ function safePlayVideo(video: HTMLVideoElement | null, forceImmediate = false): 
       // ignore if seek pending
     }
   }
-  if (inFlightVideoPlays.has(video)) return;
   const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const inFlight = inFlightVideoPlays.get(video);
+  if (inFlight && nowMs - inFlight.startedAtMs < 850 && !forceImmediate) return;
   if (!forceImmediate) {
     const prevAttempt = lastVideoPlayAttemptMs.get(video) || 0;
     // Never spam play() 60x/sec during Android HAVE_METADATA preroll — doing so aborts MediaCodec startup!
-    if (nowMs - prevAttempt < 320) return;
+    if (nowMs - prevAttempt < 260) return;
   }
   lastVideoPlayAttemptMs.set(video, nowMs);
   try {
     const p = video.play();
     if (p && typeof p.then === 'function') {
-      const tracked = p
-        .catch((err: unknown) => {
-          silenceVideoElement(video);
-          const errName =
-            err && typeof err === 'object' && 'name' in err
-              ? String((err as { name?: unknown }).name)
-              : '';
-          // On Windows Chrome & Android Chrome, an overlapping load()/seek can throw AbortError:
-          // schedule one clean retry after 140ms so playback never silently dies.
-          if (errName === 'AbortError') {
-            window.setTimeout(() => {
-              if (video.paused && !video.ended && !video.error && video.networkState !== 3) {
-                safePlayVideo(video, true);
-              }
-            }, 140);
-          }
-        })
-        .finally(() => {
-          if (inFlightVideoPlays.get(video) === tracked) {
-            inFlightVideoPlays.delete(video);
-          }
-        });
-      inFlightVideoPlays.set(video, tracked);
+      const entry = {
+        promise: p
+          .then(() => {
+            gesturePendingVideos.delete(video);
+          })
+          .catch((err: unknown) => {
+            silenceVideoElement(video);
+            const errName =
+              err && typeof err === 'object' && 'name' in err
+                ? String((err as { name?: unknown }).name)
+                : '';
+            if (errName === 'NotAllowedError') {
+              gesturePendingVideos.add(video);
+            } else if (errName === 'AbortError') {
+              window.setTimeout(() => {
+                if (video.paused && !video.ended && !video.error && video.networkState !== 3) {
+                  safePlayVideo(video, true);
+                }
+              }, 110);
+            }
+          })
+          .finally(() => {
+            if (inFlightVideoPlays.get(video) === entry) {
+              inFlightVideoPlays.delete(video);
+            }
+          }),
+        startedAtMs: nowMs,
+      };
+      inFlightVideoPlays.set(video, entry);
+    } else {
+      gesturePendingVideos.delete(video);
     }
   } catch {
-    // Ignore synchronous play() rejections prior to user activation
+    gesturePendingVideos.add(video);
   }
 }
 
@@ -315,6 +335,8 @@ function ChessAngelPortraitVideo({
   soundEnabled,
   angelVoice,
   triggerKey,
+  gamePulseNonce = 0,
+  gamePulseKind = 'heartbeat',
   portraitWidthClass,
   hasCardBelow,
   powerSaveMode = false,
@@ -335,6 +357,8 @@ function ChessAngelPortraitVideo({
   const probeCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const outgoingFallbackCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const masterCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const bgKeyerRef = useRef<BlackBgKeyerGL | null>(null);
+  const bgTransparencyLiveRef = useRef<number>(getAngelBgTransparency());
 
   const activeSlotRef = useRef<0 | 1>(0);
   const outgoingSlotRef = useRef<0 | 1>(1);
@@ -351,11 +375,16 @@ function ChessAngelPortraitVideo({
   const slotLastLumaRef = useRef<[number, number]>([0, 0]);
   const slotSafeEndedRef = useRef<[boolean, boolean]>([false, false]);
   const slotFallbackUsedRef = useRef<[boolean, boolean]>([false, false]);
+  const slotBlobRecoveryTriedRef = useRef<[string, string]>(['', '']);
   const slotRewindingRef = useRef<[boolean, boolean]>([false, false]);
   const slotRewindStartMsRef = useRef<[number, number]>([0, 0]);
   const slotLastTimeRef = useRef<[number, number]>([-1, -1]);
   const slotLastProgressMsRef = useRef<[number, number]>([0, 0]);
+  const slotLoadStartedAtMsRef = useRef<[number, number]>([0, 0]);
+  const escapeLoadStartedAtMsRef = useRef<number>(0);
   const lastRenderFrameAtMsRef = useRef<number>(0);
+  const tryResumeActiveVideosRef = useRef<() => void>(() => {});
+  const lastHandledGamePulseNonceRef = useRef<number>(gamePulseNonce);
 
   // Dedicated 3rd-layer Special Escape Overlay ("you" finger-point & "push a button" below)
   const escapeUrlRef = useRef<string>('');
@@ -454,8 +483,35 @@ function ChessAngelPortraitVideo({
   onForcedIdleCueReachedLiveRef.current = onForcedIdleCueReached;
 
   const [overrideTick, setOverrideTick] = useState(0);
+  const [bgTransparency, setBgTransparency] = useState<number>(() => getAngelBgTransparency());
+  bgTransparencyLiveRef.current = bgTransparency;
+
+  const blitMasterToVisible = () => {
+    const visibleCanvas = canvasRef.current;
+    const masterCanvas = masterCanvasRef.current;
+    if (!visibleCanvas || !masterCanvas || !hasMasterFrameRef.current) return;
+    if (!bgKeyerRef.current) {
+      bgKeyerRef.current = new BlackBgKeyerGL(visibleCanvas);
+    }
+    bgKeyerRef.current.render(masterCanvas, bgTransparencyLiveRef.current);
+  };
+
+  useEffect(() => {
+    return () => {
+      bgKeyerRef.current?.dispose();
+      bgKeyerRef.current = null;
+    };
+  }, []);
+
   useEffect(() => {
     return subscribeAngelVideoOverrides(() => {
+      const nextTransparency = getAngelBgTransparency();
+      const transparencyChanged = nextTransparency !== bgTransparencyLiveRef.current;
+      bgTransparencyLiveRef.current = nextTransparency;
+      setBgTransparency(nextTransparency);
+      if (transparencyChanged) {
+        blitMasterToVisible();
+      }
       setOverrideTick((n) => n + 1);
     });
   }, []);
@@ -817,6 +873,7 @@ function ChessAngelPortraitVideo({
     revokeObjectUrlSafely(escapeBlobUrlRef.current);
     escapeBlobUrlRef.current = null;
     video.preload = autoPlay || !IS_MOBILE_DEVICE ? 'auto' : 'metadata';
+    escapeLoadStartedAtMsRef.current = performance.now();
     video.src = url;
     video.load();
     if (autoPlay) {
@@ -993,19 +1050,66 @@ function ChessAngelPortraitVideo({
 
     slotHasFrameRef.current[slot] = false;
     slotUrlRef.current[slot] = url;
+    slotBlobRecoveryTriedRef.current[slot] = '';
     revokeObjectUrlSafely(slotBlobUrlRef.current[slot]);
     slotBlobUrlRef.current[slot] = null;
-    // CRITICAL FOR ANDROID CHROME / WEBVIEW:
+    // CRITICAL FOR ANDROID CHROME / WEBVIEW / iOS SAFARI:
     // Active slots MUST use `preload="auto"` AND invoke `safePlayVideo` synchronously after `load()`
     // when `autoPlay` is true; otherwise Android stops buffering at `HAVE_METADATA` (`readyState === 1`)
     // and never fires `loadeddata` or `canplay`.
     video.preload = needsImmediateDecode || !IS_MOBILE_DEVICE ? 'auto' : 'none';
+    slotLoadStartedAtMsRef.current[slot] = performance.now();
     video.src = url;
     video.load();
     if (autoPlay) {
       safePlayVideo(video, true);
       armVideoFramePump(video);
     }
+  };
+
+  /**
+   * Full-download Blob-URL recovery: when a device stalls on HTTP 206 Range streaming or Service Worker
+   * buffering, fetches the EXACT associated .mp4 bytes into a local Blob URL so the obliged event video
+   * plays reliably on iOS Safari, Android Chrome, Windows, macOS & Firefox without falling back prematurely.
+   */
+  const recoverSlotViaBlobFetch = (slot: 0 | 1, url: string) => {
+    if (!url || slot !== activeSlotRef.current || slotUrlRef.current[slot] !== url) return;
+    if (slotBlobRecoveryTriedRef.current[slot] === url) return;
+    slotBlobRecoveryTriedRef.current[slot] = url;
+
+    const cleanRetryUrl = `${url}${url.includes('?') ? '&' : '?'}retry=1`;
+    void fetch(cleanRetryUrl, { credentials: 'same-origin' })
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (ct.includes('text/html')) return null;
+        const buf = await res.arrayBuffer();
+        if (buf.byteLength < 4096) return null;
+        return URL.createObjectURL(new Blob([buf], { type: 'video/mp4' }));
+      })
+      .catch(() => null)
+      .then((blobUrl) => {
+        if (slot !== activeSlotRef.current || slotUrlRef.current[slot] !== url) {
+          revokeObjectUrlSafely(blobUrl);
+          return;
+        }
+        const currentVid = getVideoBySlot(slot);
+        if (!currentVid) {
+          revokeObjectUrlSafely(blobUrl);
+          return;
+        }
+        revokeObjectUrlSafely(slotBlobUrlRef.current[slot]);
+        slotBlobUrlRef.current[slot] = blobUrl;
+        slotLastProgressMsRef.current[slot] = performance.now();
+        currentVid.preload = 'auto';
+        currentVid.src = blobUrl || cleanRetryUrl;
+        currentVid.load();
+        if (slotAutoPlayRef.current[slot]) {
+          safePlayVideo(currentVid, true);
+          armVideoFramePump(currentVid);
+        }
+        ensureRenderLoop();
+      });
   };
 
   const preloadStandbySlotUrl = (standbyUrl: string) => {
@@ -1297,11 +1401,11 @@ function ChessAngelPortraitVideo({
     const outVideo = getVideoBySlot(outSlot);
 
     if (activeVideo) {
-      // Recover if a browser stalled an async rewind seek back to t=0
+      // Recover fast if a browser stalled an async rewind seek back to t=0
       if (
         slotRewindingRef.current[activeSlot] &&
         slotRewindStartMsRef.current[activeSlot] > 0 &&
-        now - slotRewindStartMsRef.current[activeSlot] > 1800 &&
+        now - slotRewindStartMsRef.current[activeSlot] > 650 &&
         slotUrlRef.current[activeSlot]
       ) {
         const urlToReload = slotUrlRef.current[activeSlot];
@@ -1437,15 +1541,39 @@ function ChessAngelPortraitVideo({
       onCalcPureVideoProgressLiveRef.current?.(false, 0, null);
     }
 
-    // 1a. Incoming Frame Watchdog: give Blob/network retry a fair window on media errors,
-    //     and NEVER overwrite a forced special-event video (e.g. fluffy puppy / dance with stars)
-    //     with the static idle portrait while its Blob-URL recovery is loading!
+    // 1a. Unified Incoming Frame Watchdog (3-stage recovery across all OSes/devices):
+    //     Stage 1 (1.6s): nudge play() + rVFC pump in case initial play() fired before metadata.
+    //     Stage 2 (3.0s): Blob-URL full download so the EXACT associated event video still plays
+    //                     even if HTTP 206 Range streaming stalled on mobile/Safari/Windows.
+    //     Stage 3 (9.5s / 11.5s): fallback only if Blob recovery also failed so state never deadlocks.
     if (waitingForIncomingFrameRef.current && !activeReady && incomingWaitStartMsRef.current > 0) {
       const waitedMs = now - incomingWaitStartMsRef.current;
       const hasMediaError = Boolean(activeVideo?.error);
       const isForcedEventVideo = Boolean(forcedIdleUrlLiveRef.current);
-      const fallbackThresholdMs = isForcedEventVideo ? 9_500 : hasMediaError ? 1800 : 7500;
-      const hardUnlockThresholdMs = isForcedEventVideo ? 11_000 : hasMediaError ? 3200 : 9500;
+      const activeUrl = slotUrlRef.current[activeSlot];
+
+      if (
+        waitedMs > 1_600 &&
+        waitedMs < 2_900 &&
+        activeVideo &&
+        slotAutoPlayRef.current[activeSlot] &&
+        activeVideo.paused &&
+        !activeVideo.error
+      ) {
+        safePlayVideo(activeVideo, true);
+        armVideoFramePump(activeVideo);
+      }
+
+      if (
+        (waitedMs > 3_000 || hasMediaError) &&
+        activeUrl &&
+        slotBlobRecoveryTriedRef.current[activeSlot] !== activeUrl
+      ) {
+        recoverSlotViaBlobFetch(activeSlot, activeUrl);
+      }
+
+      const fallbackThresholdMs = isForcedEventVideo ? 10_000 : hasMediaError ? 3_800 : 8_800;
+      const hardUnlockThresholdMs = isForcedEventVideo ? 11_500 : hasMediaError ? 5_200 : 10_200;
       if (!isForcedEventVideo && waitedMs > fallbackThresholdMs && !slotFallbackUsedRef.current[activeSlot]) {
         slotFallbackUsedRef.current[activeSlot] = true;
         const fallbackUrl = withAssetBuildVersion(
@@ -1461,6 +1589,11 @@ function ChessAngelPortraitVideo({
         waitingForIncomingFrameRef.current = false;
         isBlendingRef.current = false;
         slotSafeEndedRef.current[activeSlot] = true;
+        if (activeRoleRef.current === 'idle' && idleClipCurrentlyPlayingRef.current) {
+          idleClipCurrentlyPlayingRef.current = false;
+          slotAutoPlayRef.current[activeSlot] = false;
+          lastIdleEndedAtMsRef.current = now;
+        }
       }
     }
 
@@ -1716,23 +1849,10 @@ function ChessAngelPortraitVideo({
     }
 
     // 3. Start the blend clock on the exact frame the incoming slot produces its first bright portrait frame
+    //    (Watchdog stall recovery & Blob-URL fallback are handled cleanly above in Stage 1a!)
     if (waitingForIncomingFrameRef.current && activeReady) {
       waitingForIncomingFrameRef.current = false;
       blendStartAtRef.current = now;
-    } else if (
-      waitingForIncomingFrameRef.current &&
-      !activeReady &&
-      incomingWaitStartMsRef.current > 0 &&
-      now - incomingWaitStartMsRef.current > 4500
-    ) {
-      // Safety release if incoming frame decode stalls so the idle/speaking state machine never deadlocks
-      waitingForIncomingFrameRef.current = false;
-      isBlendingRef.current = false;
-      if (activeRoleRef.current === 'idle' && idleClipCurrentlyPlayingRef.current) {
-        idleClipCurrentlyPlayingRef.current = false;
-        slotAutoPlayRef.current[activeSlot] = false;
-        lastIdleEndedAtMsRef.current = now;
-      }
     }
 
     // 4. Composite base slots onto `masterCanvas`, then layer Special Escape Overlay on top if active!
@@ -2054,15 +2174,12 @@ function ChessAngelPortraitVideo({
       }
     }
 
-    // 5. Blit verified `masterCanvas` onto visible screen `<canvas>` backed by pure #000000 game black
+    // 5. Blit verified `masterCanvas` onto visible screen `<canvas>` via GPU black-background keyer
     if (hasMasterFrameRef.current) {
-      const vctx = visibleCanvas.getContext('2d');
-      if (vctx) {
-        vctx.globalAlpha = 1;
-        vctx.fillStyle = '#000000';
-        vctx.fillRect(0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
-        vctx.drawImage(masterCanvas, 0, 0, PORTRAIT_CANVAS_W, PORTRAIT_CANVAS_H);
+      if (!bgKeyerRef.current) {
+        bgKeyerRef.current = new BlackBgKeyerGL(visibleCanvas);
       }
+      bgKeyerRef.current.render(masterCanvas, bgTransparencyLiveRef.current);
     }
 
     const activeStillMoving =
@@ -2311,11 +2428,12 @@ function ChessAngelPortraitVideo({
     forcedIdleObservedNearStartRef.current = false;
     speechObservedForTriggerRef.current = false;
     speakingFinishedForTriggerRef.current = false;
-    const isExplicitStudioTest = triggerKey.startsWith('preview:') || Boolean(forcedIdleUrl);
-    const isExplicitStudioIdleTest = Boolean(forcedIdleUrl);
+    const isExplicitStudioTest =
+      triggerKey.startsWith('preview:') || (isIdleTrigger && Boolean(forcedIdleUrl));
+    const isExplicitStudioIdleTest = isIdleTrigger && Boolean(forcedIdleUrl);
     const isExplicitBranchSilentPlay = triggerKey.startsWith('idle:calc:');
     const nextUrl =
-      targetRole === 'idle' && !forcedIdleUrl
+      targetRole === 'idle' && !isExplicitStudioIdleTest
         ? resolveAngelIdleVideo()
         : desiredSrc;
     const nextIsExtendedLip = targetRole === 'speaking' && isDefaultSpeakingUrl(nextUrl);
@@ -2338,32 +2456,49 @@ function ChessAngelPortraitVideo({
       deferredTransitionRef.current = null;
     }
 
-    if (!isExplicitStudioTest && !isExplicitBranchSilentPlay && isActiveBaseProtectedFromCut()) {
-      // Only suppress a duplicate No-Cut playback if the exact same non-default movie just started (< 1.2s);
-      // otherwise queue the new utterance so secondary messages NEVER lose their movie or lip movements!
+    // OBLIGE EVENT VIDEO PLAYBACK ON ALL DEVICES:
+    // Whenever a new chess game event (speaking/case video) or forced special event triggers,
+    // NEVER defer or block it behind a previous video — play the event's associated video immediately!
+    // Only preserve `isActiveBaseProtectedFromCut()` when settling passively back to idle rest.
+    const isObligedEventTrigger =
+      isExplicitStudioTest ||
+      (!isIdleTrigger && targetRole === 'speaking') ||
+      isExplicitStudioIdleTest;
+
+    if (isObligedEventTrigger) {
+      // Only skip if the exact same non-default movie literally just started (< 0.7s ago)
       const activeBaseUrl = slotUrlRef.current[activeSlotRef.current].split('?')[0];
       const nextBaseUrl = nextUrl.split('?')[0];
       const activeVid = getVideoBySlot(activeSlotRef.current);
       const activeCurSec = activeVid ? activeVid.currentTime : 0;
       if (
+        !isExplicitStudioTest &&
         targetRole === 'speaking' &&
         activeRoleRef.current === 'speaking' &&
         !nextIsExtendedLip &&
         Boolean(activeBaseUrl) &&
         activeBaseUrl === nextBaseUrl &&
-        activeCurSec < 1.2
+        activeVid &&
+        !activeVid.paused &&
+        !activeVid.ended &&
+        !slotSafeEndedRef.current[activeSlotRef.current] &&
+        activeCurSec > 0.02 &&
+        activeCurSec < 0.7
       ) {
         activeSlotClipIdRef.current = clipId;
         ensureRenderLoop();
         return;
       }
+      deferredTransitionRef.current = null;
+      resetEscapeOverlayState(false, true);
+    } else if (!isExplicitBranchSilentPlay && isActiveBaseProtectedFromCut()) {
       deferredTransitionRef.current = {
         url: nextUrl,
         role: targetRole,
         isExtendedLip: nextIsExtendedLip,
         clipId,
         speechText,
-        rearmEscapeCues: true,
+        rearmEscapeCues: false,
       };
       ensureRenderLoop();
       return;
@@ -2443,7 +2578,7 @@ function ChessAngelPortraitVideo({
       soundEnabled &&
       angelVoice !== 'off' &&
       !isSilentCalcBranch &&
-      !forcedIdleUrlLiveRef.current &&
+      (!isIdleTrigger || !forcedIdleUrlLiveRef.current) &&
       !isSeductionClip
     ) {
       const isInitialSpeechArrival = !speechObservedForTriggerRef.current;
@@ -2451,11 +2586,30 @@ function ChessAngelPortraitVideo({
       const elapsedSinceStart = performance.now() - lastSpeakingStartMsRef.current;
 
       // If this is the initial audio start for the current triggerKey AND Chess Angel is ALREADY
-      // actively playing her speaking movie, do NOT restart it from frame 0!
-      // However, if she already settled to `idle` (e.g. short clip finished early or secondary message
-      // audio arrived after decode), ALWAYS start lip movements immediately!
+      // actively playing the matching speaking movie, keep it running cleanly (never restart from 0);
+      // if the slot URL mismatched or the video element got paused/blocked, oblige it to play NOW!
       if (isInitialSpeechArrival && activeRoleRef.current === 'speaking') {
+        const activeSlot = activeSlotRef.current;
+        const activeVid = getVideoBySlot(activeSlot);
+        const activeBase = stripAssetQuery(slotUrlRef.current[activeSlot]);
+        const desiredBase = stripAssetQuery(desiredSrc);
+        if (!isIdleTrigger && !useIdleForUtterance && desiredBase && activeBase !== desiredBase) {
+          speakingFinishedForTriggerRef.current = false;
+          isInExtendedLipSyncRef.current = isDefaultSpeakingUrl(desiredSrc);
+          startTransitionTo(desiredSrc, 'speaking', true, true);
+          return;
+        }
         if (
+          activeVid &&
+          activeVid.paused &&
+          !activeVid.ended &&
+          !slotSafeEndedRef.current[activeSlot] &&
+          !pausedBaseForEscapeRef.current
+        ) {
+          safePlayVideo(activeVid, true);
+          armVideoFramePump(activeVid);
+          ensureRenderLoop();
+        } else if (
           pendingEscapeCuesRef.current.length > 0 ||
           deferredPostVideoCuesRef.current.length > 0
         ) {
@@ -2586,14 +2740,19 @@ function ChessAngelPortraitVideo({
         !escapeSafeEndedRef.current
       ) {
         const escVid = escapeVideoRef.current;
-        if ((escVid.error || escVid.readyState === 0) && escapeUrlRef.current) {
+        const escFreshlyLoading =
+          !escVid.error &&
+          (escVid.networkState === HTMLMediaElement.NETWORK_LOADING ||
+            performance.now() - escapeLoadStartedAtMsRef.current < 2800);
+        if ((escVid.error || (escVid.readyState === 0 && !escFreshlyLoading)) && escapeUrlRef.current) {
           escVid.preload = 'auto';
+          escapeLoadStartedAtMsRef.current = performance.now();
           escVid.src = escapeUrlRef.current;
           escVid.load();
           safePlayVideo(escVid, true);
           armVideoFramePump(escVid);
           resumedAny = true;
-        } else if (escVid.paused && !escVid.ended) {
+        } else if (escVid.paused && !escVid.ended && !escVid.error) {
           safePlayVideo(escVid, true);
           armVideoFramePump(escVid);
           resumedAny = true;
@@ -2604,10 +2763,22 @@ function ChessAngelPortraitVideo({
         !slotSafeEndedRef.current[slot]
       ) {
         const activeUrl = slotUrlRef.current[slot];
-        if ((activeVid.error || activeVid.readyState === 0) && activeUrl) {
+        const slotFreshlyLoading =
+          !activeVid.error &&
+          (activeVid.networkState === HTMLMediaElement.NETWORK_LOADING ||
+            performance.now() - slotLoadStartedAtMsRef.current[slot] < 2800);
+        if (
+          (activeVid.error || (activeVid.readyState === 0 && !slotFreshlyLoading)) &&
+          activeUrl
+        ) {
           loadVideoIntoSlot(slot, activeUrl, slotAutoPlayRef.current[slot]);
           resumedAny = true;
-        } else if (slotAutoPlayRef.current[slot] && activeVid.paused && !activeVid.ended) {
+        } else if (
+          slotAutoPlayRef.current[slot] &&
+          activeVid.paused &&
+          !activeVid.ended &&
+          !activeVid.error
+        ) {
           safePlayVideo(activeVid, true);
           armVideoFramePump(activeVid);
           resumedAny = true;
@@ -2627,8 +2798,29 @@ function ChessAngelPortraitVideo({
 
       if (resumedAny) {
         ensureRenderLoop();
+      } else if (
+        activeRoleRef.current === 'idle' &&
+        !powerSaveModeLiveRef.current &&
+        !isSpeakingLiveRef.current &&
+        !idleClipCurrentlyPlayingRef.current &&
+        !forcedIdleUrlLiveRef.current &&
+        !triggerKeyLiveRef.current.startsWith('idle:calc:') &&
+        !isUserInactiveForSleep()
+      ) {
+        const now = performance.now();
+        const sinceSpeech = hasDeliveredSpeechRef.current
+          ? now - lastSpeechEndedAtMsRef.current
+          : 999_999;
+        const sinceIdle = lastIdleEndedAtMsRef.current > 0 ? now - lastIdleEndedAtMsRef.current : 999_999;
+        if (sinceSpeech >= 7_500 && sinceIdle >= 7_500) {
+          clearIdleCycleTimer();
+          const chosenIdle = pickNextAngelIdleVideo(lastPlayedIdleUrlRef.current, true);
+          plannedIdleUrlRef.current = '';
+          startTransitionTo(chosenIdle, 'idle', false, true);
+        }
       }
     };
+    tryResumeActiveVideosRef.current = tryResumeActiveVideos;
 
     const gestureEvents = ['pointerdown', 'touchstart', 'click', 'keydown'] as const;
     for (const evt of gestureEvents) {
@@ -2679,26 +2871,39 @@ function ChessAngelPortraitVideo({
         !pausedBaseForEscapeRef.current &&
         activeVid
       ) {
+        const slotFreshlyLoading =
+          !activeVid.error &&
+          (activeVid.networkState === HTMLMediaElement.NETWORK_LOADING ||
+            now - slotLoadStartedAtMsRef.current[slot] < 2800);
         if (activeVid.ended && !slotRewindingRef.current[slot]) {
           slotAutoPlayRef.current[slot] = false;
           slotSafeEndedRef.current[slot] = true;
           ensureRenderLoop();
-        } else if ((activeVid.error || activeVid.readyState === 0) && slotUrlRef.current[slot]) {
+        } else if (
+          (activeVid.error || (activeVid.readyState === 0 && !slotFreshlyLoading)) &&
+          slotUrlRef.current[slot]
+        ) {
           loadVideoIntoSlot(slot, slotUrlRef.current[slot], true);
           ensureRenderLoop();
         } else if (
           !slotSafeEndedRef.current[slot] &&
-          now - slotLastProgressMsRef.current[slot] > 5500 &&
+          now - slotLastProgressMsRef.current[slot] > 4200 &&
           slotUrlRef.current[slot]
         ) {
-          // Hardware decoder wedged after OS sleep/GPU reset: cleanly reload slot and resume
+          // Hardware decoder or Range stream wedged: try Blob-URL full download first, then clean reload
           const urlToReload = slotUrlRef.current[slot];
-          slotUrlRef.current[slot] = '';
-          loadVideoIntoSlot(slot, urlToReload, true);
+          if (slotBlobRecoveryTriedRef.current[slot] !== urlToReload) {
+            recoverSlotViaBlobFetch(slot, urlToReload);
+          } else {
+            slotUrlRef.current[slot] = '';
+            loadVideoIntoSlot(slot, urlToReload, true);
+          }
           ensureRenderLoop();
         } else if (
           !slotSafeEndedRef.current[slot] &&
-          (activeVid.paused || now - slotLastProgressMsRef.current[slot] > 2800)
+          (activeVid.paused ||
+            gesturePendingVideos.has(activeVid) ||
+            now - slotLastProgressMsRef.current[slot] > 2200)
         ) {
           safePlayVideo(activeVid, true);
           armVideoFramePump(activeVid);
@@ -2713,7 +2918,7 @@ function ChessAngelPortraitVideo({
         waitingForIncomingFrameRef.current ||
         Boolean(deferredTransitionRef.current) ||
         escapePhaseRef.current !== 'inactive';
-      if (shouldBeCompositing && now - lastRenderFrameAtMsRef.current > 2200) {
+      if (shouldBeCompositing && now - lastRenderFrameAtMsRef.current > 2000) {
         if (rafIdRef.current !== null) {
           window.cancelAnimationFrame(rafIdRef.current);
           rafIdRef.current = null;
@@ -2725,7 +2930,7 @@ function ChessAngelPortraitVideo({
       if (
         isSpeakingLiveRef.current &&
         angelVoiceLiveRef.current !== 'off' &&
-        !forcedIdleUrlLiveRef.current &&
+        (!triggerKeyLiveRef.current.startsWith('idle') || !forcedIdleUrlLiveRef.current) &&
         !isSilentCalcBranch &&
         !isSeductionClip &&
         activeRoleRef.current === 'idle' &&
@@ -2733,8 +2938,13 @@ function ChessAngelPortraitVideo({
         !isBlendingRef.current
       ) {
         speakingFinishedForTriggerRef.current = false;
-        isInExtendedLipSyncRef.current = true;
-        startTransitionTo(resolveDefaultSpeakingLipVideo(), 'speaking', false, true);
+        const recoveryTarget =
+          !triggerKeyLiveRef.current.startsWith('idle') && clipIdLiveRef.current
+            ? resolveAngelSpeakingVideo(clipIdLiveRef.current, triggerKeyLiveRef.current) ||
+              resolveDefaultSpeakingLipVideo()
+            : resolveDefaultSpeakingLipVideo();
+        isInExtendedLipSyncRef.current = isDefaultSpeakingUrl(recoveryTarget);
+        startTransitionTo(recoveryTarget, 'speaking', false, true);
         return;
       }
 
@@ -2767,19 +2977,19 @@ function ChessAngelPortraitVideo({
       ) {
         if (inactiveForSleep) {
           clearIdleCycleTimer();
-        } else if (idleCycleTimerRef.current === null) {
-          scheduleNextIdlePlayback(true);
         } else {
-          // If an OS clamped/dropped `setTimeout` for > 22s during an active match, fire idle now!
+          // If an OS clamped/dropped `setTimeout` for > 12s during an active match, fire another idle animation now!
           const sinceSpeech = hasDeliveredSpeechRef.current
             ? now - lastSpeechEndedAtMsRef.current
             : 999_999;
           const sinceIdle = lastIdleEndedAtMsRef.current > 0 ? now - lastIdleEndedAtMsRef.current : 999_999;
-          if (sinceSpeech > 22_000 && sinceIdle > 22_000) {
+          if (sinceSpeech > 12_000 && sinceIdle > 12_000) {
             clearIdleCycleTimer();
             const chosenIdle = pickNextAngelIdleVideo(lastPlayedIdleUrlRef.current, true);
             plannedIdleUrlRef.current = '';
             startTransitionTo(chosenIdle, 'idle', false, true);
+          } else if (idleCycleTimerRef.current === null) {
+            scheduleNextIdlePlayback(true);
           }
         }
       }
@@ -2816,6 +3026,49 @@ function ChessAngelPortraitVideo({
       escapeBlobUrlRef.current = null;
     };
   }, []);
+
+  // Direct Chess-Game Trigger Pulse:
+  // Every move, game interaction, or periodic match heartbeat from the chess game explicitly wakes
+  // any paused/throttled portrait decoder AND triggers another idle animation from time to time so
+  // Chess Angel never falls asleep on any OS or mobile browser!
+  useEffect(() => {
+    if (gamePulseNonce === lastHandledGamePulseNonceRef.current) return;
+    lastHandledGamePulseNonceRef.current = gamePulseNonce;
+
+    if (gamePulseKind === 'move' || gamePulseKind === 'event') {
+      markUserActivity(false);
+    }
+
+    tryResumeActiveVideosRef.current();
+
+    if (
+      powerSaveModeLiveRef.current ||
+      isUserInactiveForSleep() ||
+      forcedIdleUrlLiveRef.current ||
+      isSpeakingLiveRef.current ||
+      triggerKeyLiveRef.current.startsWith('idle:calc:')
+    ) {
+      return;
+    }
+
+    if (activeRoleRef.current === 'idle' && !idleClipCurrentlyPlayingRef.current) {
+      const now = performance.now();
+      const sinceSpeech = hasDeliveredSpeechRef.current
+        ? now - lastSpeechEndedAtMsRef.current
+        : 999_999;
+      const sinceIdle =
+        lastIdleEndedAtMsRef.current > 0 ? now - lastIdleEndedAtMsRef.current : 999_999;
+      const minGapMs = gamePulseKind === 'move' ? 3_200 : 6_200;
+      if (sinceSpeech >= minGapMs && sinceIdle >= minGapMs) {
+        clearIdleCycleTimer();
+        const chosenIdle = pickNextAngelIdleVideo(lastPlayedIdleUrlRef.current, true);
+        plannedIdleUrlRef.current = '';
+        startTransitionTo(chosenIdle, 'idle', false, true);
+      } else if (idleCycleTimerRef.current === null) {
+        scheduleNextIdlePlayback(true);
+      }
+    }
+  }, [gamePulseNonce, gamePulseKind]);
 
   // Immediately stop/resume non-essential idle & escape animations when Power Save Mode toggles
   useEffect(() => {
@@ -2907,10 +3160,17 @@ function ChessAngelPortraitVideo({
 
   const makeSlotTimeUpdateHandler = (slot: 0 | 1) => (e: SyntheticEvent<HTMLVideoElement>) => {
     const el = e.currentTarget;
+    if (slot === activeSlotRef.current) {
+      slotLastTimeRef.current[slot] = el.currentTime;
+      slotLastProgressMsRef.current[slot] = performance.now();
+    }
     if (slotPrimingStillRef.current[slot] && !slotAutoPlayRef.current[slot]) {
       slotPrimingStillRef.current[slot] = false;
       el.pause();
       sampleSlotVideoFrame(slot);
+      ensureRenderLoop();
+    } else if (slot === activeSlotRef.current && !el.paused && !el.ended) {
+      // Native media clock re-awakens the canvas compositor if rAF was throttled by the OS
       ensureRenderLoop();
     }
   };
@@ -3122,13 +3382,22 @@ function ChessAngelPortraitVideo({
     silenceVideoElement(el);
   };
 
+  const isTransparentBg = bgTransparency > 0.001;
+  // Keep hidden <video> decoders at >= 0.01 (3/255 alpha > 0) so Blink/WebKit/Android never
+  // cull or throttle frame decode as occluded; mix-blend-screen makes pure black #000000 100% invisible.
+  const hiddenVideoOpacityClass = isTransparentBg
+    ? 'opacity-[0.01] mix-blend-screen'
+    : 'opacity-[0.02]';
+
   return (
     <div
       onClick={onClick}
       onContextMenu={(e) => e.preventDefault()}
       onDragStart={(e) => e.preventDefault()}
       title={title}
-      className={`relative pointer-events-auto select-none bg-black border-0 ring-0 outline-none shadow-none overflow-hidden shrink-0 ${portraitWidthClass} aspect-[560/752] ${onClick ? 'cursor-pointer' : ''} ${
+      className={`relative pointer-events-auto select-none ${
+        isTransparentBg ? 'bg-transparent' : 'bg-black'
+      } border-0 ring-0 outline-none shadow-none overflow-hidden shrink-0 ${portraitWidthClass} aspect-[560/752] ${onClick ? 'cursor-pointer' : ''} ${
         hasCardBelow ? '' : '[mask-image:linear-gradient(to_bottom,black_82%,transparent_100%)]'
       }`}
     >
@@ -3168,7 +3437,7 @@ function ChessAngelPortraitVideo({
         onVolumeChange={handleForceSilence}
         onEnded={makeSlotEndedHandler(0)}
         onError={makeSlotErrorHandler(0)}
-        className="absolute inset-0 z-0 w-full h-full opacity-[0.02] pointer-events-none"
+        className={`absolute inset-0 z-0 w-full h-full ${hiddenVideoOpacityClass} pointer-events-none`}
       />
       <video
         ref={(node) => {
@@ -3204,7 +3473,7 @@ function ChessAngelPortraitVideo({
         onVolumeChange={handleForceSilence}
         onEnded={makeSlotEndedHandler(1)}
         onError={makeSlotErrorHandler(1)}
-        className="absolute inset-0 z-0 w-full h-full opacity-[0.02] pointer-events-none"
+        className={`absolute inset-0 z-0 w-full h-full ${hiddenVideoOpacityClass} pointer-events-none`}
       />
 
       {/* 3rd silent decoder for Special Word-Triggered Escape Overlays ("you" & "push a button") */}
@@ -3290,16 +3559,16 @@ function ChessAngelPortraitVideo({
           ensureRenderLoop();
         }}
         onError={handleEscapeVideoError}
-        className="absolute inset-0 z-0 w-full h-full opacity-[0.02] pointer-events-none"
+        className={`absolute inset-0 z-0 w-full h-full ${hiddenVideoOpacityClass} pointer-events-none`}
       />
 
-      {/* Visible frameless 3:4 portrait canvas — opacity 0.999 defeats Blink/WebKit occluded-video throttling while staying visually solid over bg-black */}
+      {/* Visible frameless 3:4 portrait canvas — GPU-keyed transparent black background, opacity 0.999 defeats occluded-video throttling */}
       <canvas
         ref={canvasRef}
         data-angel-portrait-canvas="true"
         width={PORTRAIT_CANVAS_W}
         height={PORTRAIT_CANVAS_H}
-        className="relative z-10 block w-full h-full object-cover opacity-[0.999] border-0 ring-0 outline-none shadow-none pointer-events-none [filter:contrast(1.032)_brightness(0.986)]"
+        className="relative z-10 block w-full h-full object-cover opacity-[0.999] border-0 ring-0 outline-none shadow-none pointer-events-none"
       />
     </div>
   );
@@ -3315,6 +3584,8 @@ interface OpponentSpeechBannerProps {
   calcPreview: CalcPreviewProgress | null;
   treeBrowser: TreeBrowserState | null;
   idlePreviewNonce?: number;
+  gamePulseNonce?: number;
+  gamePulseKind?: 'move' | 'heartbeat' | 'event';
   forcedIdleUrl?: string | null;
   forcedIdleCueAtSec?: number | null;
   onForcedIdleCueReached?: () => void;
@@ -3381,6 +3652,8 @@ export function OpponentSpeechBanner({
   calcPreview,
   treeBrowser,
   idlePreviewNonce = 0,
+  gamePulseNonce = 0,
+  gamePulseKind = 'heartbeat',
   forcedIdleUrl = null,
   forcedIdleCueAtSec = null,
   onForcedIdleCueReached,
@@ -3442,7 +3715,7 @@ export function OpponentSpeechBanner({
   const activeBannerMessage = isSilentBranchPlaying ? null : message;
   const action = activeBannerMessage?.action;
   const isUndoProposed = Boolean(
-    activeBannerMessage && angelVoice !== 'off' && action?.kind === 'undo-offer',
+    activeBannerMessage && action?.kind === 'undo-offer',
   );
   const isCompactPortrait = Boolean(calcPreview || treeBrowser);
   const isElevatedZ = Boolean(treeBrowser || isUndoProposed || pendingPromotion);
@@ -3528,18 +3801,16 @@ export function OpponentSpeechBanner({
 
   const triggerKey = activeBannerMessage?.isStudioPreview
     ? `preview:${activeBannerMessage.id}`
-    : forcedIdleUrl
-      ? `idle:forced:${idlePreviewNonce}:${stripAssetQuery(forcedIdleUrl)}`
-      : calcPreview
-        ? calcPreview.waitingForConfirm && activeBannerMessage && angelVoice !== 'off'
-          ? `msg:${activeBannerMessage.id}`
-          : `idle:calc:${calcPreview.branchIndex}`
-        : treeBrowser
-          ? activeBannerMessage && angelVoice !== 'off'
-            ? `msg:${activeBannerMessage.id}`
-            : `idle:tree:${idlePreviewNonce}`
-          : activeBannerMessage && angelVoice !== 'off'
-            ? `msg:${activeBannerMessage.id}`
+    : calcPreview
+      ? calcPreview.waitingForConfirm && activeBannerMessage
+        ? `msg:${activeBannerMessage.id}`
+        : `idle:calc:${calcPreview.branchIndex}`
+      : activeBannerMessage
+        ? `msg:${activeBannerMessage.id}`
+        : forcedIdleUrl
+          ? `idle:forced:${idlePreviewNonce}:${stripAssetQuery(forcedIdleUrl)}`
+          : treeBrowser
+            ? `idle:tree:${idlePreviewNonce}`
             : `idle:${idlePreviewNonce}`;
 
   const activeColumnWidthPx = isCompactPortrait
@@ -4092,7 +4363,7 @@ export function OpponentSpeechBanner({
         </div>
       </div>
     );
-  } else if (!message || angelVoice === 'off') {
+  } else if (!message) {
     // 3. Permanent Calm Listening Card (always matching portrait video width and showing full content)
     modalCardContent = (
       <div className={`w-full bg-black border border-[#d6ae63]/65 shadow-2xl pointer-events-auto ${cardShellClass}`}>
@@ -4348,6 +4619,8 @@ export function OpponentSpeechBanner({
           soundEnabled={soundEnabled}
           angelVoice={angelVoice}
           triggerKey={triggerKey}
+          gamePulseNonce={gamePulseNonce}
+          gamePulseKind={gamePulseKind}
           portraitWidthClass="w-full"
           hasCardBelow={showModalBelow}
           powerSaveMode={powerSaveMode}

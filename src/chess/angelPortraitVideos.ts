@@ -13,6 +13,7 @@ import {
 } from './opponentVoice';
 import bundledAngelVideoMapJson from '../../public/assets/aistudio/angel_video_map.json';
 import { stripAssetQuery, withAssetBuildVersion } from './assetVersion';
+import { soundEngine } from '../three/sound';
 
 /**
  * True ONLY inside the AI Studio / local Vite development environment (`import.meta.env.DEV`)
@@ -45,6 +46,13 @@ export const ANGEL_DEFAULT_SPEAKING_VIDEO_SRC =
  * run underneath into her modal before it leaps out onto the 3D chessboard.
  */
 export const ANGEL_DOG_RUN_VIDEO_SRC = '/assets/aistudio/builtin_dog_run.mp4';
+export const ANGEL_VIDEO_NATIVE_W = 560;
+export const ANGEL_VIDEO_NATIVE_H = 752;
+export const DEFAULT_DOG_RUN_EXIT_Y_PX = 361; // 48% of 752px portrait height
+export const DEFAULT_DOG_RUN_EXIT_X_PX = 123; // 22% of 560px portrait width
+export const DEFAULT_OPENING_FLOWCHART_START_SEC = 4.65;
+export const DEFAULT_OPENING_FLOWCHART_DENSITY = 1.0;
+export const DEFAULT_ANGEL_BG_TRANSPARENCY = 0.3;
 
 /**
  * Built-in locked Special Event video where Chess Angel dances amid sparkling golden star dust.
@@ -216,8 +224,14 @@ export interface AngelVideoMapPayload {
   seductionTriggerMode?: SeductionTriggerMode;
   thankJanAudioUrl?: string;
   thankJanAudioDuration?: number;
+  udoBarkAudioUrl?: string;
   dogRunVideo?: string;
   dogRunJumpSec?: number;
+  dogRunExitYPx?: number;
+  dogRunExitXPx?: number;
+  openingFlowchartStartSec?: number;
+  openingFlowchartDensity?: number;
+  angelBgTransparency?: number;
   danceStarsVideo?: string;
   musicTracks?: MusicTrack[];
 }
@@ -836,6 +850,7 @@ const CASE_CUE_STORAGE_KEY = 'chess_angel_case_cues_v1';
 const VIDEO_MAX_PLAYS_STORAGE_KEY = 'chess_angel_video_max_plays_v2';
 const VIDEO_PLAY_TO_END_STORAGE_KEY = 'chess_angel_video_play_to_end_v2';
 const DOG_RUN_JUMP_SEC_STORAGE_KEY = 'chess_angel_dog_run_jump_sec_v3';
+const DOG_RUN_EXIT_PX_STORAGE_KEY = 'chess_angel_dog_run_exit_px_v1';
 
 // In-memory Video Studio unlock flag (unlocked by 5-click gesture on game title — hidden from regular players)
 let studioSessionUnlocked = false;
@@ -1147,6 +1162,11 @@ let runtimeOverrides: AngelVideoMapPayload = {
   },
   dogRunVideo: ANGEL_DOG_RUN_VIDEO_SRC,
   dogRunJumpSec: 6.2,
+  dogRunExitYPx: DEFAULT_DOG_RUN_EXIT_Y_PX,
+  dogRunExitXPx: DEFAULT_DOG_RUN_EXIT_X_PX,
+  openingFlowchartStartSec: DEFAULT_OPENING_FLOWCHART_START_SEC,
+  openingFlowchartDensity: DEFAULT_OPENING_FLOWCHART_DENSITY,
+  angelBgTransparency: DEFAULT_ANGEL_BG_TRANSPARENCY,
   danceStarsVideo: ANGEL_DANCE_STARS_VIDEO_SRC,
   lipSync: {
     defaultEnabled: true,
@@ -1288,8 +1308,8 @@ const lastGroupTriggerKey: Partial<Record<AngelExpressionGroup, string>> = {};
 // Per-game play counters for non-case video slots (secondary idles, escape slots, #1/#2 fork sub-slots)
 const gameSlotPlayCounts = new Map<string, number>();
 
-const SECONDARY_IDLE_GLOBAL_COOLDOWN_MS = 8_000;
-const SECONDARY_IDLE_PER_CLIP_COOLDOWN_MS = 28_000;
+const SECONDARY_IDLE_GLOBAL_COOLDOWN_MS = 4_000;
+const SECONDARY_IDLE_PER_CLIP_COOLDOWN_MS = 15_000;
 
 function notifyListeners(): void {
   for (const fn of listeners) {
@@ -1301,6 +1321,17 @@ const sessionReplacedSlots = new Set<string>();
 let dogRunJumpMutationSeq = 0;
 let dogRunJumpDebounceTimer: number | null = null;
 let pendingDogRunJumpSec: number | null = null;
+let dogRunExitPxMutationSeq = 0;
+let dogRunExitPxDebounceTimer: number | null = null;
+let pendingDogRunExitYPx: number | null = null;
+let pendingDogRunExitXPx: number | null = null;
+let openingFlowchartMutationSeq = 0;
+let openingFlowchartDebounceTimer: number | null = null;
+let pendingOpeningFlowchartStartSec: number | null = null;
+let pendingOpeningFlowchartDensity: number | null = null;
+let angelBgTransparencyMutationSeq = 0;
+let angelBgTransparencyDebounceTimer: number | null = null;
+let pendingAngelBgTransparency: number | null = null;
 
 function stampMediaRecord<T extends Record<string, string | undefined>>(
   record?: T,
@@ -1472,6 +1503,14 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
   VOICE_CLIP_DURATION_SEC.thank_jan_v3 = thankJanAudioDuration;
   setThankJanAudioUrlOverride(thankJanAudioUrl);
 
+  const udoBarkAudioUrl =
+    typeof data?.udoBarkAudioUrl === 'string' && data.udoBarkAudioUrl.length > 0
+      ? withAssetBuildVersion(data.udoBarkAudioUrl)
+      : data && 'udoBarkAudioUrl' in data && !data.udoBarkAudioUrl
+        ? undefined
+        : runtimeOverrides.udoBarkAudioUrl;
+  soundEngine.setUdoBarkAudioUrl(udoBarkAudioUrl || null);
+
   const rawMusicTracks: MusicTrack[] = Array.isArray(data?.musicTracks)
     ? data.musicTracks
         .filter(
@@ -1560,6 +1599,7 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
     seductionTriggerMode,
     thankJanAudioUrl,
     thankJanAudioDuration,
+    udoBarkAudioUrl,
     dogRunVideo: withAssetBuildVersion(
       typeof data?.dogRunVideo === 'string' && data.dogRunVideo.length > 0
         ? data.dogRunVideo
@@ -1574,6 +1614,51 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
             data.dogRunJumpSec <= 30
           ? Math.round(data.dogRunJumpSec * 10) / 10
           : runtimeOverrides.dogRunJumpSec ?? 6.2,
+    dogRunExitYPx:
+      pendingDogRunExitYPx !== null
+        ? pendingDogRunExitYPx
+        : typeof data?.dogRunExitYPx === 'number' &&
+            Number.isFinite(data.dogRunExitYPx) &&
+            data.dogRunExitYPx >= 0 &&
+            data.dogRunExitYPx <= ANGEL_VIDEO_NATIVE_H
+          ? Math.round(data.dogRunExitYPx)
+          : runtimeOverrides.dogRunExitYPx ?? DEFAULT_DOG_RUN_EXIT_Y_PX,
+    dogRunExitXPx:
+      pendingDogRunExitXPx !== null
+        ? pendingDogRunExitXPx
+        : typeof data?.dogRunExitXPx === 'number' &&
+            Number.isFinite(data.dogRunExitXPx) &&
+            data.dogRunExitXPx >= -80 &&
+            data.dogRunExitXPx <= ANGEL_VIDEO_NATIVE_W
+          ? Math.round(data.dogRunExitXPx)
+          : runtimeOverrides.dogRunExitXPx ?? DEFAULT_DOG_RUN_EXIT_X_PX,
+    openingFlowchartStartSec:
+      pendingOpeningFlowchartStartSec !== null
+        ? pendingOpeningFlowchartStartSec
+        : typeof data?.openingFlowchartStartSec === 'number' &&
+            Number.isFinite(data.openingFlowchartStartSec) &&
+            data.openingFlowchartStartSec >= 0 &&
+            data.openingFlowchartStartSec <= 15
+          ? Math.round(data.openingFlowchartStartSec * 100) / 100
+          : runtimeOverrides.openingFlowchartStartSec ?? DEFAULT_OPENING_FLOWCHART_START_SEC,
+    openingFlowchartDensity:
+      pendingOpeningFlowchartDensity !== null
+        ? pendingOpeningFlowchartDensity
+        : typeof data?.openingFlowchartDensity === 'number' &&
+            Number.isFinite(data.openingFlowchartDensity) &&
+            data.openingFlowchartDensity >= 0.25 &&
+            data.openingFlowchartDensity <= 2.5
+          ? Math.round(data.openingFlowchartDensity * 100) / 100
+          : runtimeOverrides.openingFlowchartDensity ?? DEFAULT_OPENING_FLOWCHART_DENSITY,
+    angelBgTransparency:
+      pendingAngelBgTransparency !== null
+        ? pendingAngelBgTransparency
+        : typeof data?.angelBgTransparency === 'number' &&
+            Number.isFinite(data.angelBgTransparency) &&
+            data.angelBgTransparency >= 0 &&
+            data.angelBgTransparency <= 1
+          ? Math.round(data.angelBgTransparency * 100) / 100
+          : runtimeOverrides.angelBgTransparency ?? DEFAULT_ANGEL_BG_TRANSPARENCY,
     danceStarsVideo: withAssetBuildVersion(
       typeof data?.danceStarsVideo === 'string' && data.danceStarsVideo.length > 0
         ? data.danceStarsVideo
@@ -2203,6 +2288,48 @@ export async function uploadAngelSeductionAudio(
   return { audioUrl: payload.audioUrl, audioDuration: payload.audioDuration };
 }
 
+export async function uploadUdoBarkAudio(file: File): Promise<{ audioUrl: string }> {
+  const res = await fetch('/api/angel-videos/udo-bark-audio', {
+    method: 'POST',
+    headers: buildStudioAuthHeaders({
+      'Content-Type': file.type || 'audio/mpeg',
+    }),
+    body: file,
+  });
+  handleUnauthorizedStudioResponse(res);
+  if (!res.ok) {
+    throw new Error('Failed to upload Udo barking audio');
+  }
+  const payload = (await res.json()) as {
+    ok: boolean;
+    audioUrl: string;
+    map: Partial<AngelVideoMapPayload>;
+  };
+  runtimeOverrides = normalizeMapPayload({
+    ...payload.map,
+    udoBarkAudioUrl: payload.audioUrl,
+  });
+  notifyListeners();
+  return { audioUrl: payload.audioUrl };
+}
+
+export async function resetUdoBarkAudio(): Promise<void> {
+  const res = await fetch('/api/angel-videos/udo-bark-audio', {
+    method: 'DELETE',
+    headers: buildStudioAuthHeaders(),
+  });
+  handleUnauthorizedStudioResponse(res);
+  if (!res.ok) {
+    throw new Error('Failed to clear Udo barking audio');
+  }
+  const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
+  runtimeOverrides = normalizeMapPayload({
+    ...payload.map,
+    udoBarkAudioUrl: undefined,
+  });
+  notifyListeners();
+}
+
 export async function resetAngelPortraitVideo(
   kind: 'idle' | 'special' | 'default' | 'group' | 'case' | 'escape',
   key: string,
@@ -2300,10 +2427,285 @@ export function getAngelDogRunJumpSec(
   return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 && raw <= 30 ? raw : 6.2;
 }
 
+function saveStoredDogRunExitPxFallback(xPx: number, yPx: number): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(DOG_RUN_EXIT_PX_STORAGE_KEY, JSON.stringify({ xPx, yPx }));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function getAngelDogRunExitYPx(
+  map: AngelVideoMapPayload = runtimeOverrides,
+): number {
+  if (pendingDogRunExitYPx !== null) return pendingDogRunExitYPx;
+  const raw = map.dogRunExitYPx;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 && raw <= ANGEL_VIDEO_NATIVE_H
+    ? Math.round(raw)
+    : DEFAULT_DOG_RUN_EXIT_Y_PX;
+}
+
+export function getAngelDogRunExitXPx(
+  map: AngelVideoMapPayload = runtimeOverrides,
+): number {
+  if (pendingDogRunExitXPx !== null) return pendingDogRunExitXPx;
+  const raw = map.dogRunExitXPx;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= -80 && raw <= ANGEL_VIDEO_NATIVE_W
+    ? Math.round(raw)
+    : DEFAULT_DOG_RUN_EXIT_X_PX;
+}
+
+export async function updateAngelDogRunExitPx(
+  coords: { xPx?: number; yPx?: number },
+  options?: { immediate?: boolean },
+): Promise<void> {
+  const nextY =
+    coords.yPx !== undefined && Number.isFinite(coords.yPx)
+      ? Math.max(0, Math.min(ANGEL_VIDEO_NATIVE_H, Math.round(coords.yPx)))
+      : getAngelDogRunExitYPx();
+  const nextX =
+    coords.xPx !== undefined && Number.isFinite(coords.xPx)
+      ? Math.max(-80, Math.min(ANGEL_VIDEO_NATIVE_W, Math.round(coords.xPx)))
+      : getAngelDogRunExitXPx();
+
+  const seq = ++dogRunExitPxMutationSeq;
+  pendingDogRunExitYPx = nextY;
+  pendingDogRunExitXPx = nextX;
+  saveStoredDogRunExitPxFallback(nextX, nextY);
+  runtimeOverrides = { ...runtimeOverrides, dogRunExitYPx: nextY, dogRunExitXPx: nextX };
+  notifyListeners();
+
+  const sendSave = async () => {
+    try {
+      const res = await fetch('/api/angel-videos/dog-run-jump', {
+        method: 'PUT',
+        headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ exitYPx: nextY, exitXPx: nextX }),
+      });
+      handleUnauthorizedStudioResponse(res);
+      if (seq !== dogRunExitPxMutationSeq) return;
+      if (res.ok) {
+        const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
+        pendingDogRunExitYPx = null;
+        pendingDogRunExitXPx = null;
+        runtimeOverrides = normalizeMapPayload(payload.map);
+        runtimeOverrides = { ...runtimeOverrides, dogRunExitYPx: nextY, dogRunExitXPx: nextX };
+        notifyListeners();
+      } else {
+        pendingDogRunExitYPx = null;
+        pendingDogRunExitXPx = null;
+      }
+    } catch {
+      if (seq === dogRunExitPxMutationSeq) {
+        pendingDogRunExitYPx = null;
+        pendingDogRunExitXPx = null;
+      }
+    }
+  };
+
+  if (typeof window !== 'undefined' && dogRunExitPxDebounceTimer !== null) {
+    window.clearTimeout(dogRunExitPxDebounceTimer);
+    dogRunExitPxDebounceTimer = null;
+  }
+
+  if (options?.immediate || typeof window === 'undefined') {
+    await sendSave();
+    return;
+  }
+
+  dogRunExitPxDebounceTimer = window.setTimeout(() => {
+    dogRunExitPxDebounceTimer = null;
+    if (seq === dogRunExitPxMutationSeq) {
+      void sendSave();
+    }
+  }, 120);
+}
+
 export function getAngelDanceStarsVideoUrl(
   map: AngelVideoMapPayload = runtimeOverrides,
 ): string | undefined {
   return withAssetBuildVersion(map.danceStarsVideo || ANGEL_DANCE_STARS_VIDEO_SRC);
+}
+
+const OPENING_FLOWCHART_CONFIG_STORAGE_KEY = 'chessangel_opening_flowchart_cfg_v1';
+
+function saveStoredOpeningFlowchartFallback(startSec: number, density: number): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      OPENING_FLOWCHART_CONFIG_STORAGE_KEY,
+      JSON.stringify({ startSec, density }),
+    );
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function getOpeningFlowchartStartSec(
+  map: AngelVideoMapPayload = runtimeOverrides,
+): number {
+  if (pendingOpeningFlowchartStartSec !== null) return pendingOpeningFlowchartStartSec;
+  const raw = map.openingFlowchartStartSec;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 && raw <= 15
+    ? Math.round(raw * 100) / 100
+    : DEFAULT_OPENING_FLOWCHART_START_SEC;
+}
+
+export function getOpeningFlowchartDensity(
+  map: AngelVideoMapPayload = runtimeOverrides,
+): number {
+  if (pendingOpeningFlowchartDensity !== null) return pendingOpeningFlowchartDensity;
+  const raw = map.openingFlowchartDensity;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0.25 && raw <= 2.5
+    ? Math.round(raw * 100) / 100
+    : DEFAULT_OPENING_FLOWCHART_DENSITY;
+}
+
+export async function updateOpeningFlowchartConfig(
+  cfg: { startSec?: number; density?: number },
+  options?: { immediate?: boolean },
+): Promise<void> {
+  const nextStart =
+    cfg.startSec !== undefined && Number.isFinite(cfg.startSec)
+      ? Math.max(0, Math.min(15, Math.round(cfg.startSec * 100) / 100))
+      : getOpeningFlowchartStartSec();
+  const nextDensity =
+    cfg.density !== undefined && Number.isFinite(cfg.density)
+      ? Math.max(0.25, Math.min(2.5, Math.round(cfg.density * 100) / 100))
+      : getOpeningFlowchartDensity();
+
+  const seq = ++openingFlowchartMutationSeq;
+  pendingOpeningFlowchartStartSec = nextStart;
+  pendingOpeningFlowchartDensity = nextDensity;
+  saveStoredOpeningFlowchartFallback(nextStart, nextDensity);
+  runtimeOverrides = {
+    ...runtimeOverrides,
+    openingFlowchartStartSec: nextStart,
+    openingFlowchartDensity: nextDensity,
+  };
+  notifyListeners();
+
+  const sendSave = async () => {
+    try {
+      const res = await fetch('/api/angel-videos/opening-flowchart', {
+        method: 'PUT',
+        headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ startSec: nextStart, density: nextDensity }),
+      });
+      handleUnauthorizedStudioResponse(res);
+      if (seq !== openingFlowchartMutationSeq) return;
+      if (res.ok) {
+        const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
+        pendingOpeningFlowchartStartSec = null;
+        pendingOpeningFlowchartDensity = null;
+        runtimeOverrides = normalizeMapPayload(payload.map);
+        runtimeOverrides = {
+          ...runtimeOverrides,
+          openingFlowchartStartSec: nextStart,
+          openingFlowchartDensity: nextDensity,
+        };
+        notifyListeners();
+      } else {
+        pendingOpeningFlowchartStartSec = null;
+        pendingOpeningFlowchartDensity = null;
+      }
+    } catch {
+      if (seq === openingFlowchartMutationSeq) {
+        pendingOpeningFlowchartStartSec = null;
+        pendingOpeningFlowchartDensity = null;
+      }
+    }
+  };
+
+  if (typeof window !== 'undefined' && openingFlowchartDebounceTimer !== null) {
+    window.clearTimeout(openingFlowchartDebounceTimer);
+    openingFlowchartDebounceTimer = null;
+  }
+
+  if (options?.immediate || typeof window === 'undefined') {
+    await sendSave();
+    return;
+  }
+
+  openingFlowchartDebounceTimer = window.setTimeout(() => {
+    openingFlowchartDebounceTimer = null;
+    if (seq === openingFlowchartMutationSeq) {
+      void sendSave();
+    }
+  }, 140);
+}
+
+export function getAngelBgTransparency(
+  map: AngelVideoMapPayload = runtimeOverrides,
+): number {
+  if (pendingAngelBgTransparency !== null) return pendingAngelBgTransparency;
+  const raw = map.angelBgTransparency;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 && raw <= 1
+    ? Math.round(raw * 100) / 100
+    : DEFAULT_ANGEL_BG_TRANSPARENCY;
+}
+
+export async function updateAngelBgTransparency(
+  transparency: number,
+  options?: { immediate?: boolean },
+): Promise<void> {
+  const clamped = Number.isFinite(transparency)
+    ? Math.max(0, Math.min(1, Math.round(transparency * 100) / 100))
+    : DEFAULT_ANGEL_BG_TRANSPARENCY;
+
+  const seq = ++angelBgTransparencyMutationSeq;
+  pendingAngelBgTransparency = clamped;
+  runtimeOverrides = {
+    ...runtimeOverrides,
+    angelBgTransparency: clamped,
+  };
+  notifyListeners();
+
+  const sendSave = async () => {
+    try {
+      const res = await fetch('/api/angel-videos/bg-transparency', {
+        method: 'PUT',
+        headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ transparency: clamped }),
+      });
+      handleUnauthorizedStudioResponse(res);
+      if (seq !== angelBgTransparencyMutationSeq) return;
+      if (res.ok) {
+        const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
+        pendingAngelBgTransparency = null;
+        runtimeOverrides = normalizeMapPayload(payload.map);
+        runtimeOverrides = {
+          ...runtimeOverrides,
+          angelBgTransparency: clamped,
+        };
+        notifyListeners();
+      } else {
+        pendingAngelBgTransparency = null;
+      }
+    } catch {
+      if (seq === angelBgTransparencyMutationSeq) {
+        pendingAngelBgTransparency = null;
+      }
+    }
+  };
+
+  if (typeof window !== 'undefined' && angelBgTransparencyDebounceTimer !== null) {
+    window.clearTimeout(angelBgTransparencyDebounceTimer);
+    angelBgTransparencyDebounceTimer = null;
+  }
+
+  if (options?.immediate || typeof window === 'undefined') {
+    await sendSave();
+    return;
+  }
+
+  angelBgTransparencyDebounceTimer = window.setTimeout(() => {
+    angelBgTransparencyDebounceTimer = null;
+    if (seq === angelBgTransparencyMutationSeq) {
+      void sendSave();
+    }
+  }, 120);
 }
 
 export async function updateAngelEscapeEnabled(
