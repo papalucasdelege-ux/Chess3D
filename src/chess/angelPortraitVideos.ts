@@ -52,6 +52,9 @@ export const DEFAULT_DOG_RUN_EXIT_Y_PX = 361; // 48% of 752px portrait height
 export const DEFAULT_DOG_RUN_EXIT_X_PX = 123; // 22% of 560px portrait width
 export const DEFAULT_OPENING_FLOWCHART_START_SEC = 4.65;
 export const DEFAULT_OPENING_FLOWCHART_DENSITY = 1.0;
+export const DEFAULT_CALC_PURE_TREE_OFFSET_X = 0;
+export const DEFAULT_CALC_PURE_TREE_OFFSET_Y = 0;
+export const DEFAULT_CALC_PURE_TREE_DENSITY = 1.0;
 export const DEFAULT_ANGEL_BG_TRANSPARENCY = 0.3;
 
 /**
@@ -146,6 +149,7 @@ export const MULTI_SLOT_CASE_IDS: ReadonlySet<CommentaryCaseId> = new Set<Commen
   'warn_double',
   'undo_done',
   'ask_promotion',
+  'capture_minor',
 ]);
 
 export const DEFAULT_VIDEO_MAX_PLAYS: Readonly<Record<string, number>> = {
@@ -231,6 +235,9 @@ export interface AngelVideoMapPayload {
   dogRunExitXPx?: number;
   openingFlowchartStartSec?: number;
   openingFlowchartDensity?: number;
+  calcPureTreeOffsetX?: number;
+  calcPureTreeOffsetY?: number;
+  calcPureTreeDensity?: number;
   angelBgTransparency?: number;
   danceStarsVideo?: string;
   musicTracks?: MusicTrack[];
@@ -253,7 +260,7 @@ export const VOICE_CLIP_DURATION_SEC: Record<VoiceClipId, number> = {
   calc_showing_v2: 4.7,
   calc_showing_v3: 4.7,
   capture_minor_v1: 3.0,
-  capture_minor_v2: 3.3,
+  capture_minor_v2: 3.9,
   capture_minor_v3: 1.9,
   capture_queen_v1: 4.3,
   capture_queen_v2: 3.7,
@@ -489,7 +496,7 @@ export const ACOUSTIC_CLIP_CUE_WORDS: Partial<
   watch_knight_v3: { point_me: 0.32 },
   capture_queen_v2: { point_me: 0.56 },
   capture_rook_v1: { point_me: 0.16 },
-  capture_minor_v2: { point_you: 2.72 },
+  capture_minor_v2: { point_you: 3.36 },
   lost_queen_v1: { point_you: 0.44 },
   lost_queen_v2: { point_me: 2.65 },
   lost_queen_v3: { point_you: 0.22 },
@@ -607,13 +614,11 @@ export const ANGEL_LOCKED_IDLE_VARIANTS: Readonly<Record<string, string>> = {
 
 export const ANGEL_LOCKED_CASES: Readonly<Partial<Record<AnyCaseSlotKey, string>>> = {
   ...ANGEL_CASE_VIDEO_MAP,
-  ask_promotion_2: '/assets/aistudio/angel_case_ask_promotion_2.mp4',
   seduction_2: '/assets/aistudio/angel_case_seduction_2.mp4',
   seduction_3: '/assets/aistudio/angel_case_seduction_3.mp4',
   seduction_4: '/assets/aistudio/builtin_seduction_4.mp4',
   seduction_5: '/assets/aistudio/builtin_seduction_5.mp4',
   seduction_6: '/assets/aistudio/builtin_seduction_6.mp4',
-  undo_done_2: '/assets/aistudio/angel_case_undo_done_2.mp4',
   warn_fork_2step_2: '/assets/aistudio/angel_case_warn_fork_2step_2.mp4',
 };
 
@@ -1166,6 +1171,9 @@ let runtimeOverrides: AngelVideoMapPayload = {
   dogRunExitXPx: DEFAULT_DOG_RUN_EXIT_X_PX,
   openingFlowchartStartSec: DEFAULT_OPENING_FLOWCHART_START_SEC,
   openingFlowchartDensity: DEFAULT_OPENING_FLOWCHART_DENSITY,
+  calcPureTreeOffsetX: DEFAULT_CALC_PURE_TREE_OFFSET_X,
+  calcPureTreeOffsetY: DEFAULT_CALC_PURE_TREE_OFFSET_Y,
+  calcPureTreeDensity: DEFAULT_CALC_PURE_TREE_DENSITY,
   angelBgTransparency: DEFAULT_ANGEL_BG_TRANSPARENCY,
   danceStarsVideo: ANGEL_DANCE_STARS_VIDEO_SRC,
   lipSync: {
@@ -1176,33 +1184,23 @@ let runtimeOverrides: AngelVideoMapPayload = {
   videoDurations: {
     '/assets/aistudio/angel_case_angel_modal_off.mp4': 12.1,
     '/assets/aistudio/angel_case_angel_modal_on.mp4': 9.1,
-    '/assets/aistudio/angel_case_ask_promotion_2.mp4': 11.1,
     '/assets/aistudio/angel_case_calc_offer.mp4': 9.1,
     '/assets/aistudio/angel_case_calc_pure.mp4': 8.1,
     '/assets/aistudio/angel_case_calc_showing.mp4': 5.1,
     '/assets/aistudio/angel_case_castled.mp4': 5.1,
     '/assets/aistudio/angel_case_checkmate_win.mp4': 7.1,
-    '/assets/aistudio/angel_case_clock_timeout.mp4': 6.1,
     '/assets/aistudio/angel_case_draw.mp4': 7.1,
-    '/assets/aistudio/angel_case_hesitate_hint.mp4': 9.1,
     '/assets/aistudio/angel_case_intro.mp4': 5.1,
     '/assets/aistudio/angel_case_lost_queen.mp4': 8.1,
     '/assets/aistudio/angel_case_new_match.mp4': 10.1,
-    '/assets/aistudio/angel_case_opening.mp4': 10.1,
-    '/assets/aistudio/angel_case_promotion.mp4': 6.1,
-    '/assets/aistudio/angel_case_resign.mp4': 8.1,
     '/assets/aistudio/angel_case_seduction.mp4': 5.1,
     '/assets/aistudio/angel_case_seduction_2.mp4': 20.1,
     '/assets/aistudio/angel_case_seduction_3.mp4': 15.1,
-    '/assets/aistudio/angel_case_seduction_4.mp4': 8.1,
-    '/assets/aistudio/angel_case_seduction_5.mp4': 12.1,
-    '/assets/aistudio/angel_case_seduction_6.mp4': 10.1,
     '/assets/aistudio/angel_case_stalemate.mp4': 5.1,
     '/assets/aistudio/angel_case_tree_browse.mp4': 5.2,
     '/assets/aistudio/angel_case_trial_confirm_1.mp4': 5.1,
     '/assets/aistudio/angel_case_trial_confirm_2.mp4': 5.1,
     '/assets/aistudio/angel_case_undo_done.mp4': 5.1,
-    '/assets/aistudio/angel_case_undo_done_2.mp4': 7.1,
     '/assets/aistudio/angel_case_warn_double.mp4': 5.1,
     '/assets/aistudio/angel_case_warn_fork_2step.mp4': 5.1,
     '/assets/aistudio/angel_case_warn_fork_2step_2.mp4': 5.1,
@@ -1228,7 +1226,6 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/angel_idle_idle_5.mp4': 5.1,
     '/assets/aistudio/angel_idle_idle_6.mp4': 5.1,
     '/assets/aistudio/angel_idle_idle_7.mp4': 5.1,
-    '/assets/aistudio/angel_idle_idle_8.mp4': 8.1,
     '/assets/aistudio/just_lip_movements_e2adb314.mp4': 5.1,
     '/assets/aistudio/just_shaking_head_no_words_591ed115.mp4': 5.1,
     '/assets/aistudio/waving_hello_abc4f35b.mp4': 5.1,
@@ -1259,9 +1256,8 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/builtin_mouse_idle_sleep.mp4': 8.7,
     '/assets/aistudio/builtin_mouse_wake_up.mp4': 6.6,
     '/assets/aistudio/builtin_dance_stars.mp4': 10.1,
-    '/assets/aistudio/builtin_undo_done_2.mp4': 5.1,
-    '/assets/aistudio/builtin_alt_shown.mp4': 5.1,
   },
+  compressionPreset: 'lossless_21',
   escapeApexes: {
     '/assets/aistudio/angel_escape_point_you.mp4': 2.4,
     '/assets/aistudio/angel_escape_point_you_2.mp4': 1.55,
@@ -1280,8 +1276,10 @@ let runtimeOverrides: AngelVideoMapPayload = {
   seductionAudioDuration: 217.6,
   seductionAudioVariants: {},
   seductionAudioDurations: {},
+  seductionTriggerMode: 'balanced',
   thankJanAudioUrl: '/voices/female/thank_jan.mp3',
   thankJanAudioDuration: 8.9,
+  musicTracks: DEFAULT_MUSIC_TRACKS.map((t) => ({ ...t })),
 };
 
 const listeners = new Set<() => void>();
@@ -1329,6 +1327,11 @@ let openingFlowchartMutationSeq = 0;
 let openingFlowchartDebounceTimer: number | null = null;
 let pendingOpeningFlowchartStartSec: number | null = null;
 let pendingOpeningFlowchartDensity: number | null = null;
+let calcPureTreeMutationSeq = 0;
+let calcPureTreeDebounceTimer: number | null = null;
+let pendingCalcPureTreeOffsetX: number | null = null;
+let pendingCalcPureTreeOffsetY: number | null = null;
+let pendingCalcPureTreeDensity: number | null = null;
 let angelBgTransparencyMutationSeq = 0;
 let angelBgTransparencyDebounceTimer: number | null = null;
 let pendingAngelBgTransparency: number | null = null;
@@ -1650,6 +1653,33 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
             data.openingFlowchartDensity <= 2.5
           ? Math.round(data.openingFlowchartDensity * 100) / 100
           : runtimeOverrides.openingFlowchartDensity ?? DEFAULT_OPENING_FLOWCHART_DENSITY,
+    calcPureTreeOffsetX:
+      pendingCalcPureTreeOffsetX !== null
+        ? pendingCalcPureTreeOffsetX
+        : typeof data?.calcPureTreeOffsetX === 'number' &&
+            Number.isFinite(data.calcPureTreeOffsetX) &&
+            data.calcPureTreeOffsetX >= -240 &&
+            data.calcPureTreeOffsetX <= 240
+          ? Math.round(data.calcPureTreeOffsetX)
+          : runtimeOverrides.calcPureTreeOffsetX ?? DEFAULT_CALC_PURE_TREE_OFFSET_X,
+    calcPureTreeOffsetY:
+      pendingCalcPureTreeOffsetY !== null
+        ? pendingCalcPureTreeOffsetY
+        : typeof data?.calcPureTreeOffsetY === 'number' &&
+            Number.isFinite(data.calcPureTreeOffsetY) &&
+            data.calcPureTreeOffsetY >= -240 &&
+            data.calcPureTreeOffsetY <= 240
+          ? Math.round(data.calcPureTreeOffsetY)
+          : runtimeOverrides.calcPureTreeOffsetY ?? DEFAULT_CALC_PURE_TREE_OFFSET_Y,
+    calcPureTreeDensity:
+      pendingCalcPureTreeDensity !== null
+        ? pendingCalcPureTreeDensity
+        : typeof data?.calcPureTreeDensity === 'number' &&
+            Number.isFinite(data.calcPureTreeDensity) &&
+            data.calcPureTreeDensity >= 0.25 &&
+            data.calcPureTreeDensity <= 2.5
+          ? Math.round(data.calcPureTreeDensity * 100) / 100
+          : runtimeOverrides.calcPureTreeDensity ?? DEFAULT_CALC_PURE_TREE_DENSITY,
     angelBgTransparency:
       pendingAngelBgTransparency !== null
         ? pendingAngelBgTransparency
@@ -1710,6 +1740,7 @@ export function resetGameVideoPlayCounts(): void {
   lastCaseTriggerKey.warn_double = undefined;
   lastCaseTriggerKey.undo_done = undefined;
   lastCaseTriggerKey.ask_promotion = undefined;
+  lastCaseTriggerKey.capture_minor = undefined;
   for (const g of Object.keys(lastGroupTriggerKey) as AngelExpressionGroup[]) {
     delete lastGroupTriggerKey[g];
   }
@@ -2631,6 +2662,138 @@ export async function updateOpeningFlowchartConfig(
   openingFlowchartDebounceTimer = window.setTimeout(() => {
     openingFlowchartDebounceTimer = null;
     if (seq === openingFlowchartMutationSeq) {
+      void sendSave();
+    }
+  }, 140);
+}
+
+const CALC_PURE_TREE_CONFIG_STORAGE_KEY = 'chessangel_calc_pure_tree_cfg_v1';
+
+function saveStoredCalcPureTreeFallback(
+  offsetX: number,
+  offsetY: number,
+  density: number,
+): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      CALC_PURE_TREE_CONFIG_STORAGE_KEY,
+      JSON.stringify({ offsetX, offsetY, density }),
+    );
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function getCalcPureTreeOffsetX(
+  map: AngelVideoMapPayload = runtimeOverrides,
+): number {
+  if (pendingCalcPureTreeOffsetX !== null) return pendingCalcPureTreeOffsetX;
+  const raw = map.calcPureTreeOffsetX;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= -240 && raw <= 240
+    ? Math.round(raw)
+    : DEFAULT_CALC_PURE_TREE_OFFSET_X;
+}
+
+export function getCalcPureTreeOffsetY(
+  map: AngelVideoMapPayload = runtimeOverrides,
+): number {
+  if (pendingCalcPureTreeOffsetY !== null) return pendingCalcPureTreeOffsetY;
+  const raw = map.calcPureTreeOffsetY;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= -240 && raw <= 240
+    ? Math.round(raw)
+    : DEFAULT_CALC_PURE_TREE_OFFSET_Y;
+}
+
+export function getCalcPureTreeDensity(
+  map: AngelVideoMapPayload = runtimeOverrides,
+): number {
+  if (pendingCalcPureTreeDensity !== null) return pendingCalcPureTreeDensity;
+  const raw = map.calcPureTreeDensity;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0.25 && raw <= 2.5
+    ? Math.round(raw * 100) / 100
+    : DEFAULT_CALC_PURE_TREE_DENSITY;
+}
+
+export async function updateCalcPureTreeConfig(
+  cfg: { offsetX?: number; offsetY?: number; density?: number },
+  options?: { immediate?: boolean },
+): Promise<void> {
+  const nextX =
+    cfg.offsetX !== undefined && Number.isFinite(cfg.offsetX)
+      ? Math.max(-240, Math.min(240, Math.round(cfg.offsetX)))
+      : getCalcPureTreeOffsetX();
+  const nextY =
+    cfg.offsetY !== undefined && Number.isFinite(cfg.offsetY)
+      ? Math.max(-240, Math.min(240, Math.round(cfg.offsetY)))
+      : getCalcPureTreeOffsetY();
+  const nextDensity =
+    cfg.density !== undefined && Number.isFinite(cfg.density)
+      ? Math.max(0.25, Math.min(2.5, Math.round(cfg.density * 100) / 100))
+      : getCalcPureTreeDensity();
+
+  const seq = ++calcPureTreeMutationSeq;
+  pendingCalcPureTreeOffsetX = nextX;
+  pendingCalcPureTreeOffsetY = nextY;
+  pendingCalcPureTreeDensity = nextDensity;
+  saveStoredCalcPureTreeFallback(nextX, nextY, nextDensity);
+  runtimeOverrides = {
+    ...runtimeOverrides,
+    calcPureTreeOffsetX: nextX,
+    calcPureTreeOffsetY: nextY,
+    calcPureTreeDensity: nextDensity,
+  };
+  notifyListeners();
+
+  const sendSave = async () => {
+    try {
+      const res = await fetch('/api/angel-videos/calc-pure-tree', {
+        method: 'PUT',
+        headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ offsetX: nextX, offsetY: nextY, density: nextDensity }),
+      });
+      handleUnauthorizedStudioResponse(res);
+      if (seq !== calcPureTreeMutationSeq) return;
+      if (res.ok) {
+        const payload = (await res.json()) as { ok: boolean; map: Partial<AngelVideoMapPayload> };
+        pendingCalcPureTreeOffsetX = null;
+        pendingCalcPureTreeOffsetY = null;
+        pendingCalcPureTreeDensity = null;
+        runtimeOverrides = normalizeMapPayload(payload.map);
+        runtimeOverrides = {
+          ...runtimeOverrides,
+          calcPureTreeOffsetX: nextX,
+          calcPureTreeOffsetY: nextY,
+          calcPureTreeDensity: nextDensity,
+        };
+        notifyListeners();
+      } else {
+        pendingCalcPureTreeOffsetX = null;
+        pendingCalcPureTreeOffsetY = null;
+        pendingCalcPureTreeDensity = null;
+      }
+    } catch {
+      if (seq === calcPureTreeMutationSeq) {
+        pendingCalcPureTreeOffsetX = null;
+        pendingCalcPureTreeOffsetY = null;
+        pendingCalcPureTreeDensity = null;
+      }
+    }
+  };
+
+  if (typeof window !== 'undefined' && calcPureTreeDebounceTimer !== null) {
+    window.clearTimeout(calcPureTreeDebounceTimer);
+    calcPureTreeDebounceTimer = null;
+  }
+
+  if (options?.immediate || typeof window === 'undefined') {
+    await sendSave();
+    return;
+  }
+
+  calcPureTreeDebounceTimer = window.setTimeout(() => {
+    calcPureTreeDebounceTimer = null;
+    if (seq === calcPureTreeMutationSeq) {
       void sendSave();
     }
   }, 140);

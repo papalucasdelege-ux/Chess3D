@@ -6,8 +6,8 @@ import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
-  const appVersion = '4.6';
-  const appBuildId = `4.6.0-${Date.now().toString(36)}`;
+  const appVersion = '4.7';
+  const appBuildId = `4.7.0-${Date.now().toString(36)}`;
 
   return {
     define: {
@@ -62,7 +62,7 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
-          cacheId: 'chessangel-v4-6',
+          cacheId: 'chessangel-v4-7',
           // Precache app shell, 3D chess engine, and UI bundle (icons included via includeAssets above)
           globPatterns: ['**/*.{js,css,html,ico,woff,woff2}'],
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
@@ -92,7 +92,7 @@ export default defineConfig(() => {
               urlPattern: ({ url }) => url.pathname.startsWith('/voices/'),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-voices-v4-6',
+                cacheName: 'chessangel-voices-v4-7',
                 expiration: {
                   maxEntries: 260,
                   maxAgeSeconds: 60 * 60 * 24 * 30,
@@ -108,7 +108,7 @@ export default defineConfig(() => {
               urlPattern: ({ url }) => url.pathname === '/assets/aistudio/angel_video_map.json',
               handler: 'NetworkFirst',
               options: {
-                cacheName: 'chessangel-registry-v4-6',
+                cacheName: 'chessangel-registry-v4-7',
                 networkTimeoutSeconds: 3,
                 cacheableResponse: {
                   statuses: [200],
@@ -122,7 +122,7 @@ export default defineConfig(() => {
                 /\.(png|jpg|jpeg|webp|svg)$/i.test(url.pathname),
               handler: 'CacheFirst',
               options: {
-                cacheName: 'chessangel-images-v4-6',
+                cacheName: 'chessangel-images-v4-7',
                 expiration: {
                   maxEntries: 40,
                   maxAgeSeconds: 60 * 60 * 24 * 30,
@@ -349,6 +349,19 @@ export default defineConfig(() => {
               const l = n.toLowerCase();
               return l === 'meditational.mp3' || l.startsWith('meditational_');
             };
+            const isDarkAngelTrack = (n: string) => {
+              const l = n.toLowerCase();
+              return l === 'dark_angel.mp3' || l.startsWith('dark_angel_') || l.includes('dark_angel');
+            };
+            const isAngelsAlgorythmTrack = (n: string) => {
+              const l = n.toLowerCase();
+              return (
+                l === 'angels_algorythm.mp3' ||
+                l.startsWith('angels_algorythm_') ||
+                l.includes('angels_algorythm') ||
+                l.includes('angels_algorithm')
+              );
+            };
             const isLegacyAngleFile = (n: string) => {
               const l = n.toLowerCase();
               return l === 'angle_45923f8a.mp3' || /^angle_[0-9a-f]{8}\.mp3$/.test(l);
@@ -359,6 +372,8 @@ export default defineConfig(() => {
                   !isQueenTrack(e.name) &&
                   !isRapTrack(e.name) &&
                   !isMeditationalTrack(e.name) &&
+                  !isDarkAngelTrack(e.name) &&
+                  !isAngelsAlgorythmTrack(e.name) &&
                   !isLegacyAngleFile(e.name),
               )
               .sort((a, b) => {
@@ -385,7 +400,9 @@ export default defineConfig(() => {
                   if (dedicatedAngelTrack && name === dedicatedAngelTrack.name) return 2;
                   if (isLegacyAngleFile(name)) return 2;
                   if (isMeditationalTrack(name)) return 3;
-                  return 4;
+                  if (isDarkAngelTrack(name)) return 4;
+                  if (isAngelsAlgorythmTrack(name)) return 5;
+                  return 6;
                 };
                 return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
               });
@@ -406,14 +423,18 @@ export default defineConfig(() => {
                     ? 'Chess Angel'
                     : isMeditationalTrack(mp3.name)
                       ? 'Meditational'
-                      : mp3.name
-                          .replace(/\.mp3$/i, '')
-                          .replace(/_[0-9a-f]{8}$/i, '')
-                          .replace(/[_-]+/g, ' ')
-                          .replace(/\s+/g, ' ')
-                          .trim()
-                          .replace(/\b\w/g, (c) => c.toUpperCase())
-                          .slice(0, 48) || 'Chess Angel Track';
+                      : isDarkAngelTrack(mp3.name)
+                        ? 'Dark Angel'
+                        : isAngelsAlgorythmTrack(mp3.name)
+                          ? 'Angels Algorythm'
+                          : mp3.name
+                              .replace(/\.mp3$/i, '')
+                              .replace(/_[0-9a-f]{8}$/i, '')
+                              .replace(/[_-]+/g, ' ')
+                              .replace(/\s+/g, ' ')
+                              .trim()
+                              .replace(/\b\w/g, (c) => c.toUpperCase())
+                              .slice(0, 48) || 'Chess Angel Track';
               const id = isQueenTrack(mp3.name)
                 ? 'queen_infinite_reign'
                 : isRapTrack(mp3.name)
@@ -422,11 +443,15 @@ export default defineConfig(() => {
                     ? 'chess_angel_theme'
                     : isMeditationalTrack(mp3.name)
                       ? 'meditational'
-                      : mp3.name
-                          .replace(/\.mp3$/i, '')
-                          .toLowerCase()
-                          .replace(/[^a-z0-9]+/g, '_')
-                          .replace(/^_+|_+$/g, '') || 'chess_angel_track';
+                      : isDarkAngelTrack(mp3.name)
+                        ? 'dark_angel'
+                        : isAngelsAlgorythmTrack(mp3.name)
+                          ? 'angels_algorythm'
+                          : mp3.name
+                              .replace(/\.mp3$/i, '')
+                              .toLowerCase()
+                              .replace(/[^a-z0-9]+/g, '_')
+                              .replace(/^_+|_+$/g, '') || 'chess_angel_track';
               if (seenMusicIds.has(id)) continue;
               seenMusicIds.add(id);
               discoveredMusicTracks.push({
@@ -443,11 +468,22 @@ export default defineConfig(() => {
               changed = true;
             }
 
+            // Prune any stale videoDurations entries whose .mp4 is no longer on disk
+            const videoDurations = (rawMap.videoDurations as Record<string, number>) || {};
+            for (const k of Object.keys(videoDurations)) {
+              const fname = path.basename(k.split('?')[0]);
+              if (!fs.existsSync(path.join(aistudioDir, fname))) {
+                delete videoDurations[k];
+                changed = true;
+              }
+            }
+
             if (changed) {
               rawMap.idleVariants = idleVariants;
               rawMap.groups = groups;
               rawMap.cases = cases;
               rawMap.escapes = escapes;
+              rawMap.videoDurations = videoDurations;
               rawMap.videoSizes = videoSizes;
               fs.writeFileSync(mapPath, JSON.stringify(rawMap, null, 2), 'utf8');
             }

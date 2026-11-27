@@ -3608,7 +3608,9 @@ interface OpponentSpeechBannerProps {
   onExportTreeJpg: () => void;
   frontalTreeViewOpen?: boolean;
   thinkingLinesProjected?: boolean;
+  linesEnabled?: boolean;
   onSwitchOffThinkingLines?: () => void;
+  onSwitchOnThinkingLines?: () => void;
   proposeThreeMoves?: boolean;
   onPlayThreeMoves?: () => void;
   onAnimateTopThreeFromTree?: () => void;
@@ -3668,7 +3670,9 @@ export function OpponentSpeechBanner({
   onExportTreeJpg,
   frontalTreeViewOpen = false,
   thinkingLinesProjected = false,
+  linesEnabled = true,
   onSwitchOffThinkingLines,
+  onSwitchOnThinkingLines,
   proposeThreeMoves = true,
   onPlayThreeMoves,
   onAnimateTopThreeFromTree,
@@ -3886,16 +3890,30 @@ export function OpponentSpeechBanner({
           </button>
         )}
 
-        {thinkingLinesProjected && onSwitchOffThinkingLines && (
-          <button
-            type="button"
-            onClick={onSwitchOffThinkingLines}
-            title="Switch off all thinking lines and arrows projected onto the board"
-            className={`inline-flex items-center ${padClass} bg-[#241016] hover:bg-[#341620] border border-[#fb7185]/75 font-semibold text-[#fecdd3] transition-colors cursor-pointer text-left leading-tight`}
-          >
-            <EyeOff className={`${footerBtnIconClass} text-[#fda4af] shrink-0`} />
-            <span>Lines Off</span>
-          </button>
+        {linesEnabled || thinkingLinesProjected ? (
+          onSwitchOffThinkingLines && (
+            <button
+              type="button"
+              onClick={onSwitchOffThinkingLines}
+              title="Switch off all thinking lines and arrows projected onto the board"
+              className={`inline-flex items-center ${padClass} bg-[#241016] hover:bg-[#341620] border border-[#fb7185]/75 font-semibold text-[#fecdd3] transition-colors cursor-pointer text-left leading-tight`}
+            >
+              <EyeOff className={`${footerBtnIconClass} text-[#fda4af] shrink-0`} />
+              <span>Lines Off</span>
+            </button>
+          )
+        ) : (
+          onSwitchOnThinkingLines && (
+            <button
+              type="button"
+              onClick={onSwitchOnThinkingLines}
+              title="Switch on thinking lines projected onto the 3D board"
+              className={`inline-flex items-center ${padClass} bg-[#0d2218] hover:bg-[#133123] border border-[#34d399]/75 font-semibold text-[#a7f3d0] transition-colors cursor-pointer text-left leading-tight`}
+            >
+              <Eye className={`${footerBtnIconClass} text-[#6ee7b7] shrink-0`} />
+              <span>Line On</span>
+            </button>
+          )
         )}
 
         {inTacticalTraining && onExitTacticalTraining && (
@@ -4087,7 +4105,7 @@ export function OpponentSpeechBanner({
                 </span>
               </button>
               <span className={`${tagTextClass} text-[#9aa3b2] break-words whitespace-normal`}>
-                or click on the board
+                or move your piece anytime
               </span>
             </div>
           </div>
@@ -4308,9 +4326,8 @@ export function OpponentSpeechBanner({
               </div>
             ) : (
               <div className={`${isRoomy ? 'mt-2 px-2 py-1.5' : 'mt-1 px-1.5 py-1'} rounded bg-black border border-white/12 ${tagTextClass} text-[#aeb7c6] break-words whitespace-normal leading-snug`}>
-                Use <span className="text-[#f3f1ec] font-medium">Prev / Next</span>, click any
-                colored evaluation below, or click a square on the 3D board to inspect each
-                simulation calmly.
+                Use <span className="text-[#f3f1ec] font-medium">Prev / Next</span> or click any
+                colored evaluation below to inspect a branch — or move your piece anytime to play on.
               </div>
             )}
 
@@ -4347,18 +4364,7 @@ export function OpponentSpeechBanner({
           </div>
         )}
 
-        <div className={`${sectionDividerClass} flex flex-col ${isRoomy ? 'gap-2' : 'gap-1.5'}`}>
-          <button
-            type="button"
-            onClick={onContinueFromTree}
-            className={`${primaryActionBtnClass} w-full justify-center`}
-          >
-            <Play className={iconSmClass} />
-            <span>
-              {treeBrowser.hasPendingBotMove ? 'Continue · Play Move' : 'Done · Close Tree'}
-            </span>
-          </button>
-
+        <div className={sectionDividerClass}>
           {renderThinkingAndThreeMoves(true, true)}
         </div>
       </div>

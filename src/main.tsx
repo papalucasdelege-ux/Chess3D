@@ -52,10 +52,10 @@ if (typeof window !== 'undefined') {
 
   if ('caches' in window) {
     const activeRuntimeCaches = new Set([
-      'chessangel-voices-v4-6',
-      'chessangel-videos-v4-6',
-      'chessangel-registry-v4-6',
-      'chessangel-images-v4-6',
+      'chessangel-voices-v4-7',
+      'chessangel-videos-v4-7',
+      'chessangel-registry-v4-7',
+      'chessangel-images-v4-7',
     ]);
     void window.caches
       .keys()
@@ -64,7 +64,7 @@ if (typeof window !== 'undefined') {
           keys
             .filter((k) => {
               // Purge outdated Workbox precache buckets from prior versions
-              if (k.includes('precache') && !k.includes('chessangel-v4-6')) return true;
+              if (k.includes('precache') && !k.includes('chessangel-v4-7')) return true;
               // On every newly published build, wipe runtime media caches so updated MP4s/MP3s renew 100%
               if (k.startsWith('chessangel-')) {
                 return isNewPublishedBuild || !activeRuntimeCaches.has(k);

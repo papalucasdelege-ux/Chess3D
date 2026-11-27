@@ -1,7 +1,7 @@
 import { RotateCcw, Save, Play, FastForward } from 'lucide-react';
 import type { PieceColor, RoomResult } from '../shared/types';
 
-export type DockTab = 'play' | 'training' | 'analysis' | 'replay';
+export type DockTab = 'play' | 'compose' | 'training' | 'analysis' | 'replay';
 
 interface TopBarProps {
   whiteName: string;

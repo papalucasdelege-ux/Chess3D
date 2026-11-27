@@ -425,7 +425,7 @@ export const CLIP_TEXT: Record<VoiceClipId, string> = {
   capture_minor_v1:
     'Cleanly captured... your turn to move.',
   capture_minor_v2:
-    'Again, a clean capture... over to you.',
+    'Keep a close eye on your remaining defenses... over to you.',
   capture_minor_v3:
     'Piece taken... your move.',
 
@@ -713,6 +713,11 @@ function resolveClipIdForOccurrence(caseId: CommentaryCaseId, occurrenceCount: n
   if (caseId === 'hesitate_hint' || caseId === 'tree_browse') {
     const seqStage = Math.min(6, Math.max(1, occurrenceCount)) as 1 | 2 | 3 | 4 | 5 | 6;
     return `${caseId}_v${seqStage}` as VoiceClipId;
+  }
+
+  if (caseId === 'capture_minor') {
+    const idx = ((Math.max(1, occurrenceCount) - 1) % 3) + 1;
+    return `capture_minor_v${idx}` as VoiceClipId;
   }
 
   const variant: 'v1' | 'v2' | 'v3' =
@@ -1593,6 +1598,7 @@ function detectTwoStepThreats(
 
   const chess = new Chess(fen);
   const board = chess.board();
+  let humanKingRow = -1;
   let humanKingFile = -1;
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
@@ -1600,6 +1606,7 @@ function detectTwoStepThreats(
       if (!cell) continue;
       const sq = `${FILES[c]}${8 - r}` as Square;
       if (cell.type === 'k' && cell.color === humanColor) {
+        humanKingRow = r;
         humanKingFile = c;
       }
       if (cell.type === 'p' && cell.color === aiColor) {
@@ -1612,18 +1619,65 @@ function detectTwoStepThreats(
     }
   }
 
-  if (humanKingFile >= 0) {
-    for (let r = 0; r < 8; r++) {
-      for (let c = 0; c < 8; c++) {
+  if (humanKingFile >= 0 && humanKingRow >= 0) {
+    for (let c = Math.max(0, humanKingFile - 1); c <= Math.min(7, humanKingFile + 1); c++) {
+      const aiHeavyRows: number[] = [];
+      for (let r = 0; r < 8; r++) {
         const cell = board[r][c];
-        if (
-          cell &&
-          cell.color === aiColor &&
-          (cell.type === 'r' || cell.type === 'q') &&
-          Math.abs(c - humanKingFile) <= 1
+        if (cell && cell.color === aiColor && (cell.type === 'r' || cell.type === 'q')) {
+          aiHeavyRows.push(r);
+        }
+      }
+      if (aiHeavyRows.length === 0) continue;
+
+      const isExactKingFile = c === humanKingFile;
+      const fileAttackers: Square[] = [];
+
+      for (const heavyRow of aiHeavyRows) {
+        if (heavyRow === humanKingRow) continue;
+        const step = humanKingRow > heavyRow ? 1 : -1;
+        let aiPawnsBetween = 0;
+        let humanPawnsBetween = 0;
+        let nonBatteryBlockers = 0;
+
+        for (
+          let r = heavyRow + step;
+          isExactKingFile ? r !== humanKingRow : r !== humanKingRow + step;
+          r += step
         ) {
-          openFileKingPressure = true;
-          kingFileAttackerSqs.push(`${FILES[c]}${8 - r}` as Square);
+          const mid = board[r]?.[c];
+          if (!mid) continue;
+          if (mid.color === aiColor && (mid.type === 'r' || mid.type === 'q')) {
+            // Friendly Rook/Queen stacked on the same file forms a battery rather than a blocker
+            continue;
+          }
+          nonBatteryBlockers += 1;
+          if (mid.type === 'p') {
+            if (mid.color === aiColor) aiPawnsBetween += 1;
+            else humanPawnsBetween += 1;
+          }
+        }
+
+        // Never count a file blocked by Chess Angel's own pawn
+        if (aiPawnsBetween > 0) continue;
+
+        const isImminentLine = isExactKingFile
+          ? nonBatteryBlockers <= 1 ||
+            (aiHeavyRows.length >= 2 && nonBatteryBlockers <= 2 && humanPawnsBetween <= 1)
+          : humanPawnsBetween === 0 &&
+            (nonBatteryBlockers === 0 || (aiHeavyRows.length >= 2 && nonBatteryBlockers <= 1));
+
+        if (isImminentLine) {
+          fileAttackers.push(`${FILES[c]}${8 - heavyRow}` as Square);
+        }
+      }
+
+      if (fileAttackers.length > 0) {
+        openFileKingPressure = true;
+        for (const sq of fileAttackers) {
+          if (!kingFileAttackerSqs.includes(sq)) {
+            kingFileAttackerSqs.push(sq);
+          }
         }
       }
     }
@@ -2322,16 +2376,22 @@ export function composeBotMoveCommentary(ctx: BotCommentaryContext): OpponentMes
     return make('capture_minor', 'CAPTURE', 'capture');
   }
 
-  if (twoStep.openFileKingPressure && canPlayCaseInGame('warn_king_file') && Math.random() < 0.45) {
+  if (
+    plyCount >= 16 &&
+    twoStep.openFileKingPressure &&
+    twoStep.kingFileAttackerSqs.some(
+      (sq) =>
+        sq[0] === lastMove.to[0] ||
+        (sq[0] === lastMove.from[0] && lastMove.from[0] !== lastMove.to[0]),
+    ) &&
+    canPlayCaseInGame('warn_king_file')
+  ) {
     return make(
       'warn_king_file',
       'FILE PRESSURE',
       'warning',
       false,
-      buildConcernedFigures(
-        [humanKingSq],
-        twoStep.kingFileAttackerSqs.length > 0 ? twoStep.kingFileAttackerSqs : [lastMove.to],
-      ),
+      buildConcernedFigures([humanKingSq], twoStep.kingFileAttackerSqs),
     );
   }
 
@@ -2434,6 +2494,16 @@ export const MEDITATIONAL_MUSIC_URL = withAssetBuildVersion(
   '/assets/aistudio/meditational.mp3',
 );
 
+export const DARK_ANGEL_MUSIC_URL = withAssetBuildVersion(
+  '/assets/aistudio/dark_angel_2e69e349.mp3',
+);
+
+export const ANGELS_ALGORYTHM_MUSIC_URL = withAssetBuildVersion(
+  '/assets/aistudio/angels_algorythm_db8e65b5.mp3',
+);
+
+const SAVED_MUSIC_TRACK_ID_KEY = 'chess_angel_music_track_id_v1';
+
 export const DEFAULT_MUSIC_TRACKS: readonly MusicTrack[] = [
   {
     id: 'queen_infinite_reign',
@@ -2455,6 +2525,16 @@ export const DEFAULT_MUSIC_TRACKS: readonly MusicTrack[] = [
     title: 'Meditational',
     url: MEDITATIONAL_MUSIC_URL,
   },
+  {
+    id: 'dark_angel',
+    title: 'Dark Angel',
+    url: DARK_ANGEL_MUSIC_URL,
+  },
+  {
+    id: 'angels_algorythm',
+    title: 'Angels Algorythm',
+    url: ANGELS_ALGORYTHM_MUSIC_URL,
+  },
 ];
 
 function buildVoiceUrl(clipId: VoiceClipId): string {
@@ -2467,6 +2547,9 @@ function buildVoiceUrl(clipId: VoiceClipId): string {
   }
   if (clipId.startsWith('thank_jan_')) {
     return thankJanCustomAudioUrl || `/voices/female/thank_jan.mp3?v=${VOICE_ASSET_VERSION}`;
+  }
+  if (clipId === 'capture_minor_v2') {
+    return `/voices/female/${clipId}.mp3?v=${VOICE_ASSET_VERSION}_r2`;
   }
   return `/voices/female/${clipId}.mp3?v=${VOICE_ASSET_VERSION}`;
 }
@@ -2524,6 +2607,15 @@ class OpponentSpeechController {
 
   constructor() {
     if (typeof window !== 'undefined') {
+      try {
+        const savedId = window.localStorage.getItem(SAVED_MUSIC_TRACK_ID_KEY);
+        if (savedId) {
+          const idx = this.musicTracks.findIndex((t) => t.id === savedId);
+          if (idx >= 0) this.musicTrackIndex = idx;
+        }
+      } catch {
+        // ignore storage errors
+      }
       this.attachGlobalGestureUnlock();
       window.setTimeout(() => {
         this.preloadCoreClips();
@@ -2742,8 +2834,21 @@ class OpponentSpeechController {
       : this.bgMusicUrl
         ? stripAssetQuery(this.bgMusicUrl)
         : null;
+    let savedTrackId: string | null = null;
+    if (typeof window !== 'undefined') {
+      try {
+        savedTrackId = window.localStorage.getItem(SAVED_MUSIC_TRACK_ID_KEY);
+      } catch {
+        // ignore storage errors
+      }
+    }
     this.musicTracks = nextTracks;
-    if (currentClean) {
+    if (savedTrackId && !this.bgMusicUrl) {
+      const savedIdx = nextTracks.findIndex((t) => t.id === savedTrackId);
+      if (savedIdx >= 0) {
+        this.musicTrackIndex = savedIdx;
+      }
+    } else if (currentClean) {
       const matchedIdx = nextTracks.findIndex((t) => stripAssetQuery(t.url) === currentClean);
       if (matchedIdx >= 0) {
         this.musicTrackIndex = matchedIdx;
@@ -2829,6 +2934,13 @@ class OpponentSpeechController {
       return;
     }
     const track = this.musicTracks[safeIdx];
+    if (track && typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(SAVED_MUSIC_TRACK_ID_KEY, track.id);
+      } catch {
+        // ignore storage errors
+      }
+    }
     if (track) {
       const sameTrackPlaying = Boolean(
         this.bgMusicAudio &&

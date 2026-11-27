@@ -138,7 +138,9 @@ const PIECE_TIP_DIMENSIONS: Record<
 };
 
 interface SceneCallbacks {
-  onSquareClick: (square: string) => void;
+  onSquareClick: (square: string) => boolean | void;
+  canDragPieceAtSquare?: (square: string) => boolean;
+  onDragMove?: (from: string, to: string) => boolean;
   onTreeSquareClick?: (square: string) => void;
   onUpperRightVoidChange?: (spec: UpperRightVoidSpec) => void;
   onContextLost?: () => void;
@@ -405,6 +407,8 @@ export class ChessScene3D {
   private raycaster = new THREE.Raycaster();
   private coordRaycaster = new THREE.Raycaster();
   private pointerDownPos = { x: 0, y: 0 };
+  private dragOriginSquare: string | null = null;
+  private boundWindowPointerUp?: () => void;
   private lastCoord8TapMs = 0;
   private hoveredSquare: string | null = null;
   private lastHoverRaycastTime = 0;
@@ -627,6 +631,15 @@ export class ChessScene3D {
     }
     dom.addEventListener('webglcontextlost', this.boundContextLost);
     dom.addEventListener('webglcontextrestored', this.boundContextRestored);
+
+    this.boundWindowPointerUp = () => {
+      this.dragOriginSquare = null;
+      if (this.controls && !this.controls.enabled) {
+        this.controls.enabled = true;
+      }
+    };
+    window.addEventListener('pointerup', this.boundWindowPointerUp);
+    window.addEventListener('pointercancel', this.boundWindowPointerUp);
 
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(container);
@@ -2373,6 +2386,28 @@ export class ChessScene3D {
   }
 
   /**
+   * Projects or updates continuous thin thinking lines on the 3D board without
+   * clearing or overwriting active coach/fork/best-move arrows in `arrowGroup`.
+   */
+  public setContinuousThinkingLines(edges: SearchTreeEdge[], treeOpacity = 0.9): void {
+    if (this.webglUnavailable || this.disposed) return;
+    if (this.treeHoldTimer) {
+      window.clearTimeout(this.treeHoldTimer);
+      this.treeHoldTimer = 0;
+    }
+    const count = this.populateSearchTreeMesh(edges);
+    if (count > 0 && this.treeSweepMesh) {
+      this.treeVisibleEdgesFloat = count;
+      this.treeFinalized = true;
+      this.treeSweepPhase = 'holding';
+      this.treeSweepMesh.geometry.setDrawRange(0, count * 6);
+      const mat = this.treeSweepMesh.material as THREE.LineBasicMaterial;
+      mat.opacity = treeOpacity;
+      this.requestRender();
+    }
+  }
+
+  /**
    * Dismisses the displayed full search tree when the player chooses to continue.
    */
   public confirmSearchTreeContinue(): boolean {
@@ -3208,9 +3243,7 @@ export class ChessScene3D {
       this.stopHamsterChase();
     }
     this.finalizeCaptureSweeps();
-    const chess = new Chess(fen);
-    const board = chess.board();
-
+    const placement = (fen.split(' ')[0] || '8/8/8/8/8/8/8/8').split('/');
     const desired = new Map<string, { type: PieceType; color: PieceColor }>();
     const counts: Record<PieceColor, Record<PieceType, number>> = {
       w: { p: 0, n: 0, b: 0, r: 0, q: 0, k: 0 },
@@ -3218,14 +3251,30 @@ export class ChessScene3D {
     };
 
     for (let r = 0; r < 8; r++) {
-      for (let c = 0; c < 8; c++) {
-        const cell = board[r][c];
-        if (!cell) continue;
-        const sq = `${FILES[c]}${8 - r}`;
-        const t = cell.type as PieceType;
-        const col = cell.color as PieceColor;
-        desired.set(sq, { type: t, color: col });
-        counts[col][t]++;
+      const rankStr = placement[r] || '';
+      let c = 0;
+      for (let i = 0; i < rankStr.length && c < 8; i++) {
+        const ch = rankStr[i];
+        if (ch >= '1' && ch <= '8') {
+          c += Number(ch);
+        } else {
+          const lower = ch.toLowerCase();
+          if (
+            lower === 'p' ||
+            lower === 'n' ||
+            lower === 'b' ||
+            lower === 'r' ||
+            lower === 'q' ||
+            lower === 'k'
+          ) {
+            const sq = `${FILES[c]}${8 - r}`;
+            const t = lower as PieceType;
+            const col: PieceColor = ch === lower ? 'b' : 'w';
+            desired.set(sq, { type: t, color: col });
+            counts[col][t]++;
+          }
+          c += 1;
+        }
       }
     }
 
@@ -3857,17 +3906,93 @@ export class ChessScene3D {
     });
   }
 
-  private pickSquare(clientX: number, clientY: number): string | null {
+  private pickSquare(clientX: number, clientY: number, preferPiece = false): string | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
     _rayMouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
     _rayMouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(_rayMouse, this.camera);
+
     const hits = this.raycaster.intersectObjects(this.hitboxes, false);
-    if (hits.length > 0) {
-      return (hits[0].object.userData.square as string) || null;
+    const floorSq = hits.length > 0 ? ((hits[0].object.userData.square as string) || null) : null;
+    const floorDist = hits.length > 0 ? hits[0].distance : Infinity;
+
+    const selSq = !preferPiece ? (this.latestSyncedState?.selectedSquare ?? null) : null;
+    const legalTargets = !preferPiece ? this.latestSyncedState?.legalTargets : undefined;
+    let floorIsEmptyLegalTarget = false;
+    if (selSq && floorSq && legalTargets) {
+      for (let i = 0; i < legalTargets.length; i++) {
+        if (legalTargets[i].square === floorSq && !legalTargets[i].isCapture) {
+          floorIsEmptyLegalTarget = true;
+          break;
+        }
+      }
     }
-    return null;
+
+    // Analytic zero-GC 3D piece-cylinder intersection so clicking any part of a 3D chess figure
+    // (crown, knight head, torso, or base) selects/drags/captures that figure on the 1st try
+    // instead of shooting through the figure onto the tile behind it.
+    if (!floorIsEmptyLegalTarget && this.pieceMap.size > 0) {
+      const ro = this.raycaster.ray.origin;
+      const rd = this.raycaster.ray.direction;
+      const a = rd.x * rd.x + rd.z * rd.z;
+      let bestPieceSq: string | null = null;
+      let bestPieceT = floorDist + 0.35;
+
+      for (const [sq, entry] of this.pieceMap.entries()) {
+        // Never let an already-selected piece's crown block clicking a different square behind it
+        if (selSq && sq === selSq && floorSq && floorSq !== selSq) continue;
+
+        const dims = PIECE_TIP_DIMENSIONS[entry.type];
+        const radius = dims.baseRadius * 1.04;
+        const topY = BOARD_TOP_Y + dims.headHeight + 0.08;
+        const cx = entry.group.position.x;
+        const cz = entry.group.position.z;
+
+        let tMinY = -Infinity;
+        let tMaxY = Infinity;
+        if (Math.abs(rd.y) > 1e-6) {
+          const ty0 = (BOARD_TOP_Y - ro.y) / rd.y;
+          const ty1 = (topY - ro.y) / rd.y;
+          tMinY = Math.min(ty0, ty1);
+          tMaxY = Math.max(ty0, ty1);
+        } else if (ro.y < BOARD_TOP_Y || ro.y > topY) {
+          continue;
+        }
+
+        let tEnter = tMinY;
+        let tExit = tMaxY;
+        if (a > 1e-6) {
+          const dx = ro.x - cx;
+          const dz = ro.z - cz;
+          const b = 2 * (dx * rd.x + dz * rd.z);
+          const c = dx * dx + dz * dz - radius * radius;
+          const disc = b * b - 4 * a * c;
+          if (disc < 0) continue;
+          const sqrtDisc = Math.sqrt(disc);
+          const t0 = (-b - sqrtDisc) / (2 * a);
+          const t1 = (-b + sqrtDisc) / (2 * a);
+          tEnter = Math.max(tEnter, t0);
+          tExit = Math.min(tExit, t1);
+        } else {
+          const dx = ro.x - cx;
+          const dz = ro.z - cz;
+          if (dx * dx + dz * dz > radius * radius) continue;
+        }
+
+        const tHit = Math.max(0.05, tEnter);
+        if (tHit <= tExit && tHit < bestPieceT) {
+          bestPieceT = tHit;
+          bestPieceSq = sq;
+        }
+      }
+
+      if (bestPieceSq) {
+        return bestPieceSq;
+      }
+    }
+
+    return floorSq;
   }
 
   private isPointerOnCoord8(clientX: number, clientY: number): boolean {
@@ -3906,15 +4031,54 @@ export class ChessScene3D {
     if (e.button !== 0) return;
     this.pointerDownPos.x = e.clientX;
     this.pointerDownPos.y = e.clientY;
+    const downSq = this.pickSquare(e.clientX, e.clientY, true);
+    if (downSq && this.callbacks.canDragPieceAtSquare?.(downSq)) {
+      this.dragOriginSquare = downSq;
+      if (this.controls) {
+        this.controls.enabled = false;
+      }
+      this.renderer.domElement.style.cursor = 'grabbing';
+    } else {
+      this.dragOriginSquare = null;
+    }
   }
 
   private handlePointerUp(e: PointerEvent): void {
     if (e.button !== 0) return;
+    const dragFrom = this.dragOriginSquare;
+    this.dragOriginSquare = null;
+    if (this.controls && !this.controls.enabled) {
+      this.controls.enabled = true;
+    }
+
     const travel = Math.hypot(
       e.clientX - this.pointerDownPos.x,
       e.clientY - this.pointerDownPos.y,
     );
-    if (travel > 6) return;
+
+    if (dragFrom) {
+      const dropSq = this.pickSquare(e.clientX, e.clientY, false);
+      if (dropSq && dropSq !== dragFrom) {
+        const moved = this.callbacks.onDragMove?.(dragFrom, dropSq);
+        if (moved) {
+          this.renderer.domElement.style.cursor = 'pointer';
+          return;
+        }
+        if (travel <= 16) {
+          const handled = this.callbacks.onSquareClick(dropSq);
+          if (handled) return;
+        }
+        // Drag ended on an illegal square: select the dragged piece so its legal destinations light up
+        this.callbacks.onSquareClick(dragFrom);
+        return;
+      }
+      if (dropSq === dragFrom || travel <= 22) {
+        this.callbacks.onSquareClick(dragFrom);
+        return;
+      }
+    }
+
+    if (travel > 14) return;
 
     // Touch/pen double-tap fallback for the developer-only "8" coordinate secret trigger
     if (this.callbacks.onSecretCoord8DoubleClick && e.pointerType !== 'mouse') {
@@ -3929,6 +4093,14 @@ export class ChessScene3D {
       }
     }
 
+    const sq = this.pickSquare(e.clientX, e.clientY, false);
+    if (sq) {
+      const handledByMove = this.callbacks.onSquareClick(sq);
+      if (handledByMove) {
+        return;
+      }
+    }
+
     if (this.calcPreviewActive) {
       if (this.calcWaitingForClick) {
         this.confirmNextCalculationBranch();
@@ -3937,36 +4109,30 @@ export class ChessScene3D {
     }
 
     if (this.treeSweepPhase !== 'idle' && this.treeFinalized) {
-      const sq = this.pickSquare(e.clientX, e.clientY);
       if (sq && this.callbacks.onTreeSquareClick) {
         this.callbacks.onTreeSquareClick(sq);
       }
-      return;
-    }
-
-    const sq = this.pickSquare(e.clientX, e.clientY);
-    if (sq) {
-      this.callbacks.onSquareClick(sq);
     }
   }
 
   private handlePointerMove(e: PointerEvent): void {
+    const isDraggingPiece = Boolean(this.dragOriginSquare);
     const now = performance.now();
-    const minIntervalMs = this.powerSaveMode ? 120 : 40;
+    const minIntervalMs = isDraggingPiece ? 16 : this.powerSaveMode ? 120 : 40;
     if (now - this.lastHoverRaycastTime < minIntervalMs) return;
     this.lastHoverRaycastTime = now;
 
-    const sq = this.pickSquare(e.clientX, e.clientY);
+    const sq = this.pickSquare(e.clientX, e.clientY, false);
     if (sq !== this.hoveredSquare) {
       this.hoveredSquare = sq;
       if (sq) {
         squareToWorld(sq, _tmpVec);
         this.hoverRing.position.set(_tmpVec.x, BOARD_TOP_Y + 0.021, _tmpVec.z);
         this.hoverRing.visible = true;
-        this.renderer.domElement.style.cursor = 'pointer';
+        this.renderer.domElement.style.cursor = isDraggingPiece ? 'grabbing' : 'pointer';
       } else {
         this.hoverRing.visible = false;
-        this.renderer.domElement.style.cursor = 'grab';
+        this.renderer.domElement.style.cursor = isDraggingPiece ? 'grabbing' : 'grab';
       }
       this.requestRender();
     }
@@ -4783,8 +4949,19 @@ export class ChessScene3D {
     active: boolean,
     currentTimeSec: number,
     portraitRect: DOMRect | null,
+    config?: { offsetX?: number; offsetY?: number; density?: number },
   ): void {
     if (!this.calcPureTree || this.webglUnavailable || !this.renderer) return;
+    if (
+      config &&
+      (config.offsetX !== undefined || config.offsetY !== undefined || config.density !== undefined)
+    ) {
+      this.calcPureTree.setConfig(
+        config.offsetX ?? 0,
+        config.offsetY ?? 0,
+        config.density ?? 1.0,
+      );
+    }
     const wasRunning = this.calcPureTree.isRunning();
     const canvasRect = this.renderer.domElement.getBoundingClientRect();
     this.calcPureTree.syncWithCalcPureVideo(
@@ -4842,6 +5019,10 @@ export class ChessScene3D {
     dom.removeEventListener('dblclick', this.boundDblClick);
     dom.removeEventListener('webglcontextlost', this.boundContextLost);
     dom.removeEventListener('webglcontextrestored', this.boundContextRestored);
+    if (this.boundWindowPointerUp) {
+      window.removeEventListener('pointerup', this.boundWindowPointerUp);
+      window.removeEventListener('pointercancel', this.boundWindowPointerUp);
+    }
 
     this.controls.dispose();
     disposePieceGeometryCache(this.pieceGeoCache);

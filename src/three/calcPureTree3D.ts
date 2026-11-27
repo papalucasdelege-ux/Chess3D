@@ -379,6 +379,9 @@ export class CalcPureTree3D {
   private currentOpacity = 0;
   private clockSec = 0;
   private builtRectKey = '';
+  private offsetXPx = 0;
+  private offsetYPx = 0;
+  private density = 1.0;
 
   // Exact frame-audited timing constants for `angel_case_calc_pure.mp4` (8.08s)
   private readonly GROW_START_SEC = 1.82;
@@ -390,6 +393,27 @@ export class CalcPureTree3D {
   constructor() {
     this.root.name = 'CalcPureTree3D';
     this.root.visible = false;
+  }
+
+  public setConfig(offsetXPx: number, offsetYPx: number, density: number): void {
+    const clampedX = THREE.MathUtils.clamp(
+      Number.isFinite(offsetXPx) ? Math.round(offsetXPx) : 0,
+      -240,
+      240,
+    );
+    const clampedY = THREE.MathUtils.clamp(
+      Number.isFinite(offsetYPx) ? Math.round(offsetYPx) : 0,
+      -240,
+      240,
+    );
+    const clampedDensity = THREE.MathUtils.clamp(
+      Number.isFinite(density) ? Math.round(density * 100) / 100 : 1.0,
+      0.25,
+      2.5,
+    );
+    this.offsetXPx = clampedX;
+    this.offsetYPx = clampedY;
+    this.density = clampedDensity;
   }
 
   public syncWithCalcPureVideo(
@@ -430,6 +454,9 @@ export class CalcPureTree3D {
       Math.round(camera.position.x * 10),
       Math.round(camera.position.y * 10),
       Math.round(camera.position.z * 10),
+      Math.round(this.offsetXPx),
+      Math.round(this.offsetYPx),
+      Math.round(this.density * 100),
     ].join('|');
 
     if (rectKey !== this.builtRectKey || !this.branchMesh) {
@@ -517,12 +544,14 @@ export class CalcPureTree3D {
 
     const insetX = Math.min(6, portraitRect.width * 0.02);
     const insetY = Math.min(6, portraitRect.height * 0.02);
+    const shiftX = this.offsetXPx;
+    const shiftY = this.offsetYPx;
 
     const ok =
-      projectClientToPlane(portraitRect.left + insetX, portraitRect.top + insetY, canvasRect, camera, _projPlane, pTL) &&
-      projectClientToPlane(portraitRect.right - insetX, portraitRect.top + insetY, canvasRect, camera, _projPlane, pTR) &&
-      projectClientToPlane(portraitRect.left + insetX, portraitRect.bottom - insetY, canvasRect, camera, _projPlane, pBL) &&
-      projectClientToPlane(portraitRect.right - insetX, portraitRect.bottom - insetY, canvasRect, camera, _projPlane, pBR);
+      projectClientToPlane(portraitRect.left + insetX + shiftX, portraitRect.top + insetY + shiftY, canvasRect, camera, _projPlane, pTL) &&
+      projectClientToPlane(portraitRect.right - insetX + shiftX, portraitRect.top + insetY + shiftY, canvasRect, camera, _projPlane, pTR) &&
+      projectClientToPlane(portraitRect.left + insetX + shiftX, portraitRect.bottom - insetY + shiftY, canvasRect, camera, _projPlane, pBL) &&
+      projectClientToPlane(portraitRect.right - insetX + shiftX, portraitRect.bottom - insetY + shiftY, canvasRect, camera, _projPlane, pBR);
 
     if (!ok) return;
 
@@ -649,19 +678,26 @@ export class CalcPureTree3D {
         });
 
         // Sprout lush alternating pairs of emerald leaves along canopy twigs & undergrowth root saplings
-        const leafDensity = isRoot ? (generation >= 1 ? 0.68 : 0.24) : generation === 0 ? 0.55 : 0.95;
+        const densityScale = this.density;
+        const baseLeafDensity = isRoot ? (generation >= 1 ? 0.68 : 0.24) : generation === 0 ? 0.55 : 0.95;
+        const leafDensity = Math.min(1, baseLeafDensity * THREE.MathUtils.clamp(densityScale, 0.3, 1.65));
         if (rand() < leafDensity) {
           const midPos = curPos.clone().lerp(nextPos, 0.45 + rand() * 0.35);
           const leafScale = isRoot ? 0.78 + rand() * 0.25 : 0.85 + rand() * 0.35 - generation * 0.08;
           addLeaf(midPos, curDir, 1, segT1, leafScale, false);
-          if (rand() < (isRoot ? 0.55 : 0.86)) {
+          if (rand() < Math.min(0.98, (isRoot ? 0.55 : 0.86) * THREE.MathUtils.clamp(densityScale, 0.4, 1.45))) {
             addLeaf(midPos, curDir, -1, segT1 + 0.01, leafScale * 0.94, false);
           }
         }
 
-        // Mid-branch organic offshoot fork!
-        if (depthRemaining > 0 && (s === 2 || s === 4)) {
-          const forkSide = (s === 2 ? 1 : -1) * (rand() > 0.3 ? 1 : -1);
+        // Mid-branch organic offshoot fork (scales deep sub-branching across every limb with Studio density!)
+        const allowExtraTertiaryFork = densityScale >= 1.4 && s === 3 && depthRemaining >= 2;
+        const forkProb = THREE.MathUtils.clamp(Math.pow(densityScale, 0.72), 0.28, 1.0);
+        if (
+          depthRemaining > 0 &&
+          ((s === 2 || s === 4) && rand() <= forkProb || allowExtraTertiaryFork && rand() <= (densityScale - 1.15) * 0.75)
+        ) {
+          const forkSide = (s % 2 === 0 ? 1 : -1) * (rand() > 0.3 ? 1 : -1);
           const forkAngle = (0.34 + rand() * 0.32) * forkSide;
           const forkDir = curDir
             .clone()
@@ -690,8 +726,17 @@ export class CalcPureTree3D {
 
       // Terminal twin fork or lush 3-leaf botanical crown spray at the end of every branch
       if (depthRemaining > 0) {
-        for (const side of [-1, 1]) {
-          const splitAngle = side * (0.26 + rand() * 0.28);
+        const terminalSides: readonly number[] =
+          this.density < 0.55 && generation >= 2
+            ? [rand() < 0.5 ? -1 : 1]
+            : this.density >= 1.85 && generation === 1
+              ? [-1, 0, 1]
+              : [-1, 1];
+        for (const side of terminalSides) {
+          const splitAngle =
+            side === 0
+              ? (rand() - 0.5) * 0.16
+              : side * (0.26 + rand() * 0.28);
           const childDir = curDir
             .clone()
             .multiplyScalar(Math.cos(splitAngle))
@@ -706,7 +751,7 @@ export class CalcPureTree3D {
             baseWidth * 0.54,
             tStart + tSpan,
             Math.max(0.08, tSpan * 0.65),
-            side * (0.18 + rand() * 0.16),
+            (side === 0 ? (rand() < 0.5 ? -0.5 : 0.5) : side) * (0.18 + rand() * 0.16),
             depthRemaining - 1,
             false,
             isRoot,
@@ -717,10 +762,14 @@ export class CalcPureTree3D {
         // Lush terminal 3-leaf spray & floating spore glow
         const tipScale = isRoot ? 0.8 : 0.94;
         addLeaf(curPos, curDir, 0, tStart + tSpan, tipScale, true);
-        addLeaf(curPos, curDir, 1, tStart + tSpan + 0.01, tipScale * 0.86, false);
-        addLeaf(curPos, curDir, -1, tStart + tSpan + 0.01, tipScale * 0.86, false);
+        if (this.density >= 0.45 || rand() < this.density * 1.8) {
+          addLeaf(curPos, curDir, 1, tStart + tSpan + 0.01, tipScale * 0.86, false);
+          addLeaf(curPos, curDir, -1, tStart + tSpan + 0.01, tipScale * 0.86, false);
+        }
 
-        if (this.spores.length < 96 && rand() > 0.58) {
+        const maxSpores = Math.max(16, Math.round(96 * this.density));
+        const sporeThreshold = THREE.MathUtils.clamp(0.58 / Math.max(0.45, this.density), 0.22, 0.88);
+        if (this.spores.length < maxSpores && rand() > sporeThreshold) {
           this.spores.push({
             basePos: curPos.clone(),
             driftDir: curDir
@@ -739,9 +788,52 @@ export class CalcPureTree3D {
       }
     };
 
-    // Build all 35 border-anchored primary limbs across TOP, LEFT, RIGHT, and BOTTOM borders
-    for (let li = 0; li < TREE_BORDER_LIMBS.length; li++) {
-      const spec = TREE_BORDER_LIMBS[li];
+    // Scale primary border limbs across all 4 borders evenly according to Studio density (0.25x .. 2.50x)
+    const activeLimbs: TreeBorderLimbSpec[] = [];
+    const edges: ReadonlyArray<TreeBorderLimbSpec['edge']> = ['top', 'left', 'right', 'bottom'];
+    for (const edge of edges) {
+      const group = TREE_BORDER_LIMBS.filter((l) => l.edge === edge);
+      if (group.length === 0) continue;
+      if (Math.abs(this.density - 1.0) <= 0.03) {
+        activeLimbs.push(...group);
+      } else if (this.density < 1.0) {
+        const keepCount = Math.max(1, Math.round(group.length * this.density));
+        for (let k = 0; k < keepCount; k++) {
+          const idx = keepCount === 1
+            ? Math.floor(group.length / 2)
+            : Math.min(group.length - 1, Math.round((k * (group.length - 1)) / (keepCount - 1)));
+          activeLimbs.push(group[idx]);
+        }
+      } else {
+        activeLimbs.push(...group);
+        const extraCount = Math.round(group.length * (this.density - 1.0));
+        for (let k = 0; k < extraCount; k++) {
+          const pairPos = ((k + 0.5) / Math.max(1, extraCount)) * Math.max(1, group.length - 1);
+          const i0 = Math.min(group.length - 1, Math.floor(pairPos));
+          const i1 = Math.min(group.length - 1, i0 + 1);
+          const frac = i0 === i1 ? 0.5 : pairPos - i0;
+          const a = group[i0];
+          const b = group[i1];
+          activeLimbs.push({
+            edge,
+            tEdge: THREE.MathUtils.clamp(THREE.MathUtils.lerp(a.tEdge, b.tEdge, frac) + (k % 2 === 0 ? 0.018 : -0.018), 0.04, 0.96),
+            fanBias: THREE.MathUtils.lerp(a.fanBias, b.fanBias, frac) + (k % 2 === 0 ? 0.05 : -0.05),
+            curveBend: THREE.MathUtils.lerp(a.curveBend, b.curveBend, frac) * (k % 2 === 0 ? 1.08 : -0.92),
+            reachFactor: THREE.MathUtils.lerp(a.reachFactor, b.reachFactor, frac) * 0.96,
+            thickness: THREE.MathUtils.lerp(a.thickness, b.thickness, frac) * 0.88,
+            depthLayer: (k % 2 === 0 ? 1 : -1) * (0.14 + (k % 3) * 0.08),
+            startOffset: THREE.MathUtils.lerp(a.startOffset, b.startOffset, frac) + 0.015,
+            depth: Math.max(a.depth, b.depth),
+            hasCrimsonVein: k % 2 === 0 && (a.hasCrimsonVein || b.hasCrimsonVein),
+            isRoot: a.isRoot || b.isRoot,
+          });
+        }
+      }
+    }
+
+    // Build all border-anchored primary & deep limbs across TOP, LEFT, RIGHT, and BOTTOM borders
+    for (let li = 0; li < activeLimbs.length; li++) {
+      const spec = activeLimbs[li];
       const anchor = new THREE.Vector3();
       const outDir = new THREE.Vector3();
 

@@ -1103,6 +1103,9 @@ async function startServer(): Promise<void> {
     dogRunExitXPx?: number;
     openingFlowchartStartSec?: number;
     openingFlowchartDensity?: number;
+    calcPureTreeOffsetX?: number;
+    calcPureTreeOffsetY?: number;
+    calcPureTreeDensity?: number;
     angelBgTransparency?: number;
     danceStarsVideo?: string;
     defaultSpeaking?: string;
@@ -1147,6 +1150,17 @@ async function startServer(): Promise<void> {
     if (lower.includes('chess_angle_rap') || lower.includes('chess_angel_rap')) {
       return 'Chess Angel Rap';
     }
+    if (lower === 'dark_angel.mp3' || lower.startsWith('dark_angel_')) {
+      return 'Dark Angel';
+    }
+    if (
+      lower === 'angels_algorythm.mp3' ||
+      lower.startsWith('angels_algorythm_') ||
+      lower === 'angels_algorithm.mp3' ||
+      lower.startsWith('angels_algorithm_')
+    ) {
+      return 'Angels Algorythm';
+    }
     if (lower.includes('angle_45923f8a') || /^angle_[0-9a-f]{8}\.mp3$/.test(lower)) {
       return 'Chess Angel';
     }
@@ -1165,7 +1179,16 @@ async function startServer(): Promise<void> {
     if (lower.includes('a_beautiful_queen')) return 0;
     if (lower.includes('chess_angle_rap') || lower.includes('chess_angel_rap')) return 1;
     if (lower.includes('angle_45923f8a') || /^angle_[0-9a-f]{8}\.mp3$/.test(lower)) return 2;
-    return 3;
+    if (lower === 'meditational.mp3' || lower.startsWith('meditational_')) return 3;
+    if (lower === 'dark_angel.mp3' || lower.startsWith('dark_angel_')) return 4;
+    if (
+      lower === 'angels_algorythm.mp3' ||
+      lower.startsWith('angels_algorythm_') ||
+      lower.startsWith('angels_algorithm')
+    ) {
+      return 5;
+    }
+    return 6;
   };
 
   const discoverMusicTracks = (): Array<{ id: string; title: string; url: string }> => {
@@ -1201,6 +1224,19 @@ async function startServer(): Promise<void> {
           const l = n.toLowerCase();
           return l === 'meditational.mp3' || l.startsWith('meditational_');
         };
+        const isDarkAngel = (n: string) => {
+          const l = n.toLowerCase();
+          return l === 'dark_angel.mp3' || l.startsWith('dark_angel_');
+        };
+        const isAngelsAlgorythm = (n: string) => {
+          const l = n.toLowerCase();
+          return (
+            l === 'angels_algorythm.mp3' ||
+            l.startsWith('angels_algorythm_') ||
+            l === 'angels_algorithm.mp3' ||
+            l.startsWith('angels_algorithm_')
+          );
+        };
         const isLegacyAngle = (n: string) => {
           const l = n.toLowerCase();
           return l === 'angle_45923f8a.mp3' || /^angle_[0-9a-f]{8}\.mp3$/.test(l);
@@ -1211,6 +1247,8 @@ async function startServer(): Promise<void> {
               !isQueen(e.name) &&
               !isRap(e.name) &&
               !isMeditational(e.name) &&
+              !isDarkAngel(e.name) &&
+              !isAngelsAlgorythm(e.name) &&
               !isLegacyAngle(e.name),
           )
           .sort((a, b) => {
@@ -1234,7 +1272,9 @@ async function startServer(): Promise<void> {
               if (dedicatedAngel && name === dedicatedAngel.name) return 2;
               if (isLegacyAngle(name)) return 2;
               if (isMeditational(name)) return 3;
-              return 4;
+              if (isDarkAngel(name)) return 4;
+              if (isAngelsAlgorythm(name)) return 5;
+              return 6;
             };
             const rankDiff = rank(a.name) - rank(b.name);
             return rankDiff !== 0 ? rankDiff : a.name.localeCompare(b.name);
@@ -1257,11 +1297,15 @@ async function startServer(): Promise<void> {
                 ? 'chess_angel_theme'
                 : isMeditational(entry.name)
                   ? 'meditational'
-                  : entry.name
-                      .replace(/\.mp3$/i, '')
-                      .toLowerCase()
-                      .replace(/[^a-z0-9]+/g, '_')
-                      .replace(/^_+|_+$/g, '') || 'chess_angel_track';
+                  : isDarkAngel(entry.name)
+                    ? 'dark_angel'
+                    : isAngelsAlgorythm(entry.name)
+                      ? 'angels_algorythm'
+                      : entry.name
+                          .replace(/\.mp3$/i, '')
+                          .toLowerCase()
+                          .replace(/[^a-z0-9]+/g, '_')
+                          .replace(/^_+|_+$/g, '') || 'chess_angel_track';
           if (seenIds.has(id)) continue;
           seenUrls.add(url);
           seenIds.add(id);
@@ -1273,7 +1317,11 @@ async function startServer(): Promise<void> {
                 ? 'Chess Angel'
                 : isMeditational(entry.name)
                   ? 'Meditational'
-                  : formatMusicTrackTitle(entry.name);
+                  : isDarkAngel(entry.name)
+                    ? 'Dark Angel'
+                    : isAngelsAlgorythm(entry.name)
+                      ? 'Angels Algorythm'
+                      : formatMusicTrackTitle(entry.name);
           tracks.push({ id, title, url });
         }
       }
@@ -1837,6 +1885,9 @@ async function startServer(): Promise<void> {
       dogRunExitXPx: 123,
       openingFlowchartStartSec: 4.65,
       openingFlowchartDensity: 1.0,
+      calcPureTreeOffsetX: 0,
+      calcPureTreeOffsetY: 0,
+      calcPureTreeDensity: 1.0,
       angelBgTransparency: 0.3,
       groups: {},
       cases: {},
@@ -1846,11 +1897,25 @@ async function startServer(): Promise<void> {
         point_me: true,
         push_button: true,
       },
-      caseEscapeCues: {},
+      caseEscapeCues: {
+        lost_queen: { point_you: 'off', point_me: 'off' },
+        trial_confirm_1: { point_you: 'off', point_me: 'off' },
+        trial_confirm_2: { point_you: 'off', point_me: 'off' },
+        tree_browse: { point_you: 'off', point_me: 'off' },
+        calc_offer: { point_you: 'off', point_me: 'off' },
+        calc_showing: { point_me: 'off' },
+        warn_mate: { point_me: 'off' },
+        checkmate_lose: { point_you: 'off', point_me: 'off' },
+        seduction: { point_you: 'off', point_me: 'off', push_button: 'off' },
+        thank_jan: { point_you: 'off', point_me: 'off', push_button: 'off' },
+      },
       lipSync: {
         defaultEnabled: true,
         groups: {},
-        cases: {},
+        cases: {
+          seduction: 'off',
+          thank_jan: 'off',
+        },
       },
       videoDurations: {},
       videoSizes: {},
@@ -1860,9 +1925,34 @@ async function startServer(): Promise<void> {
       videoMaxPlays: {
         'case:tree_browse': 6,
         'case:hesitate_hint': 6,
+        'case:warn_double': 2,
+        'case:warn_fork_2step': 2,
       },
       videoPlayToEnd: {
         'case:seduction': true,
+        'case:checkmate_lose': true,
+        'case:lost_queen': true,
+        'case:trial_confirm_1': true,
+        'case:trial_confirm_2': true,
+        'case:calc_pure': true,
+        'case:intro': true,
+        'case:opening': true,
+        'case:castled': true,
+        'case:calc_offer': true,
+        'case:new_match': true,
+        'case:tree_browse': false,
+        'case:calc_showing': true,
+        'case:warn_mate': true,
+        'case:angel_modal_on': true,
+        'case:angel_modal_off': true,
+        'case:wrong_distracted': true,
+        'case:wrong_missed_tactic': true,
+        'case:hesitate_hint': true,
+        'case:resign': true,
+        'case:thank_jan': true,
+        'case:ask_promotion': true,
+        'special:dog_run': true,
+        'special:dance_stars': true,
       },
     };
 
@@ -1953,6 +2043,30 @@ async function startServer(): Promise<void> {
           parsed.openingFlowchartDensity <= 2.5
         ) {
           result.openingFlowchartDensity = Math.round(parsed.openingFlowchartDensity * 100) / 100;
+        }
+        if (
+          typeof parsed.calcPureTreeOffsetX === 'number' &&
+          Number.isFinite(parsed.calcPureTreeOffsetX) &&
+          parsed.calcPureTreeOffsetX >= -240 &&
+          parsed.calcPureTreeOffsetX <= 240
+        ) {
+          result.calcPureTreeOffsetX = Math.round(parsed.calcPureTreeOffsetX);
+        }
+        if (
+          typeof parsed.calcPureTreeOffsetY === 'number' &&
+          Number.isFinite(parsed.calcPureTreeOffsetY) &&
+          parsed.calcPureTreeOffsetY >= -240 &&
+          parsed.calcPureTreeOffsetY <= 240
+        ) {
+          result.calcPureTreeOffsetY = Math.round(parsed.calcPureTreeOffsetY);
+        }
+        if (
+          typeof parsed.calcPureTreeDensity === 'number' &&
+          Number.isFinite(parsed.calcPureTreeDensity) &&
+          parsed.calcPureTreeDensity >= 0.25 &&
+          parsed.calcPureTreeDensity <= 2.5
+        ) {
+          result.calcPureTreeDensity = Math.round(parsed.calcPureTreeDensity * 100) / 100;
         }
         if (
           typeof parsed.angelBgTransparency === 'number' &&
@@ -2505,6 +2619,18 @@ async function startServer(): Promise<void> {
       openingFlowchartDensity:
         typeof data.openingFlowchartDensity === 'number'
           ? Math.round(data.openingFlowchartDensity * 100) / 100
+          : 1.0,
+      calcPureTreeOffsetX:
+        typeof data.calcPureTreeOffsetX === 'number'
+          ? Math.round(data.calcPureTreeOffsetX)
+          : 0,
+      calcPureTreeOffsetY:
+        typeof data.calcPureTreeOffsetY === 'number'
+          ? Math.round(data.calcPureTreeOffsetY)
+          : 0,
+      calcPureTreeDensity:
+        typeof data.calcPureTreeDensity === 'number'
+          ? Math.round(data.calcPureTreeDensity * 100) / 100
           : 1.0,
       angelBgTransparency:
         typeof data.angelBgTransparency === 'number'
@@ -3093,6 +3219,51 @@ async function startServer(): Promise<void> {
         return;
       }
       map.openingFlowchartDensity = Math.round(rawDensity * 100) / 100;
+    }
+
+    writeAngelVideoMap(map);
+    res.json({ ok: true, map });
+  });
+
+  app.put('/api/angel-videos/calc-pure-tree', express.json(), (req, res) => {
+    if (!requireStudioDeveloperAuth(req, res)) return;
+    const body = (req.body || {}) as {
+      offsetX?: unknown;
+      offsetY?: unknown;
+      density?: unknown;
+    };
+    const hasOffsetX = body.offsetX !== undefined;
+    const hasOffsetY = body.offsetY !== undefined;
+    const hasDensity = body.density !== undefined;
+    if (!hasOffsetX && !hasOffsetY && !hasDensity) {
+      res.status(400).json({ error: 'Missing calculation 3D tree parameters.' });
+      return;
+    }
+
+    const map = readAngelVideoMap();
+    if (hasOffsetX) {
+      const rawX = Number(body.offsetX);
+      if (!Number.isFinite(rawX) || rawX < -240 || rawX > 240) {
+        res.status(400).json({ error: 'Invalid calculation 3D tree X offset (-240..240px).' });
+        return;
+      }
+      map.calcPureTreeOffsetX = Math.round(rawX);
+    }
+    if (hasOffsetY) {
+      const rawY = Number(body.offsetY);
+      if (!Number.isFinite(rawY) || rawY < -240 || rawY > 240) {
+        res.status(400).json({ error: 'Invalid calculation 3D tree Y offset (-240..240px).' });
+        return;
+      }
+      map.calcPureTreeOffsetY = Math.round(rawY);
+    }
+    if (hasDensity) {
+      const rawDensity = Number(body.density);
+      if (!Number.isFinite(rawDensity) || rawDensity < 0.25 || rawDensity > 2.5) {
+        res.status(400).json({ error: 'Invalid calculation 3D tree density (0.25..2.5).' });
+        return;
+      }
+      map.calcPureTreeDensity = Math.round(rawDensity * 100) / 100;
     }
 
     writeAngelVideoMap(map);
@@ -4186,7 +4357,9 @@ async function startServer(): Promise<void> {
         trackKey !== 'chess_angel_theme' &&
         trackKey !== 'chess_angel_rap' &&
         trackKey !== 'queen_infinite_reign' &&
-        trackKey !== 'meditational'
+        trackKey !== 'meditational' &&
+        trackKey !== 'dark_angel' &&
+        trackKey !== 'angels_algorythm'
       ) {
         res.status(400).json({ error: 'Invalid music track slot.' });
         return;
@@ -4204,7 +4377,11 @@ async function startServer(): Promise<void> {
             ? 'Chess_Angel_Rap_d8f30f60.mp3'
             : trackKey === 'meditational'
               ? 'meditational.mp3'
-              : 'Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3';
+              : trackKey === 'dark_angel'
+                ? 'dark_angel_2e69e349.mp3'
+                : trackKey === 'angels_algorythm'
+                  ? 'angels_algorythm_db8e65b5.mp3'
+                  : 'Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3';
 
       const tmpIn = path.join(os.tmpdir(), `music_in_${process.pid}_${Date.now()}.bin`);
       const tmpOut = path.join(os.tmpdir(), `music_out_${process.pid}_${Date.now()}.mp3`);

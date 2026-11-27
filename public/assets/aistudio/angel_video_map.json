@@ -14,6 +14,14 @@
   "mouseIdleHoldSec": {},
   "dogRunVideo": "/assets/aistudio/builtin_dog_run.mp4",
   "dogRunJumpSec": 6.2,
+  "dogRunExitYPx": 361,
+  "dogRunExitXPx": 123,
+  "openingFlowchartStartSec": 4.65,
+  "openingFlowchartDensity": 1,
+  "calcPureTreeOffsetX": 0,
+  "calcPureTreeOffsetY": 0,
+  "calcPureTreeDensity": 1,
+  "angelBgTransparency": 0.3,
   "danceStarsVideo": "/assets/aistudio/builtin_dance_stars.mp4",
   "defaultSpeaking": "/assets/aistudio/angel_default_speaking_default.mp4",
   "groups": {},
@@ -60,8 +68,7 @@
     "level_master": "/assets/aistudio/builtin_level_master.mp4",
     "level_grandmaster": "/assets/aistudio/builtin_level_grandmaster.mp4",
     "seduction_6": "/assets/aistudio/builtin_seduction_6.mp4",
-    "ask_promotion_2": "/assets/aistudio/angel_case_ask_promotion_2.mp4",
-    "warn_mate": "/assets/aistudio/angel_case_warn_mate.mp4?v=1795710051566"
+    "warn_mate": "/assets/aistudio/angel_case_warn_mate.mp4"
   },
   "escapes": {
     "point_you": "/assets/aistudio/angel_escape_point_you.mp4",
@@ -210,7 +217,6 @@
   "videoSizes": {
     "/assets/aistudio/angel_case_angel_modal_off.mp4": 2625151,
     "/assets/aistudio/angel_case_angel_modal_on.mp4": 2523863,
-    "/assets/aistudio/angel_case_ask_promotion_2.mp4": 1814617,
     "/assets/aistudio/angel_case_calc_offer.mp4": 1359442,
     "/assets/aistudio/angel_case_calc_pure.mp4": 3000486,
     "/assets/aistudio/angel_case_calc_showing.mp4": 703202,
@@ -293,12 +299,6 @@
     },
     "/assets/aistudio/angel_case_angel_modal_on.mp4": {
       "size": 2523863,
-      "crf": 21,
-      "width": 560,
-      "height": 752
-    },
-    "/assets/aistudio/angel_case_ask_promotion_2.mp4": {
-      "size": 1814617,
       "crf": 21,
       "width": 560,
       "height": 752
@@ -810,6 +810,16 @@
       "id": "meditational",
       "title": "Meditational",
       "url": "/assets/aistudio/meditational.mp3"
+    },
+    {
+      "id": "dark_angel",
+      "title": "Dark Angel",
+      "url": "/assets/aistudio/dark_angel_2e69e349.mp3"
+    },
+    {
+      "id": "angels_algorythm",
+      "title": "Angels Algorythm",
+      "url": "/assets/aistudio/angels_algorythm_db8e65b5.mp3"
     }
   ]
 }

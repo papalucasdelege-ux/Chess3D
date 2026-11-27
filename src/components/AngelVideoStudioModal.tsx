@@ -24,6 +24,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import { APP_VERSION } from '../chess/assetVersion';
 import {
   ANGEL_CASE_VIDEO_MAP,
   ANGEL_DEFAULT_SPEAKING_VIDEO_SRC,
@@ -38,6 +39,9 @@ import {
   DEFAULT_DOG_RUN_EXIT_Y_PX,
   DEFAULT_OPENING_FLOWCHART_DENSITY,
   DEFAULT_OPENING_FLOWCHART_START_SEC,
+  DEFAULT_CALC_PURE_TREE_DENSITY,
+  DEFAULT_CALC_PURE_TREE_OFFSET_X,
+  DEFAULT_CALC_PURE_TREE_OFFSET_Y,
   caseHasAlternativeSlotUI,
   compressAngelStudioVideos,
   getAngelBgTransparency,
@@ -57,6 +61,9 @@ import {
   getEscapeVideoPool,
   getOpeningFlowchartDensity,
   getOpeningFlowchartStartSec,
+  getCalcPureTreeDensity,
+  getCalcPureTreeOffsetX,
+  getCalcPureTreeOffsetY,
   getSeductionCaseEntries,
   getSeductionSlotKey,
   getVideoFileDurationSec,
@@ -92,6 +99,7 @@ import {
   updateAngelVideoMaxPlays,
   updateAngelVideoPlayToEnd,
   updateOpeningFlowchartConfig,
+  updateCalcPureTreeConfig,
   uploadAngelPortraitVideo,
   uploadUdoBarkAudio,
   type AngelCompressionPreset,
@@ -1028,7 +1036,7 @@ export function AngelVideoStudioModal({
                 ChessAngel 3D Video Studio
               </h2>
               <span className="font-mono-tabular text-xs font-bold px-1.5 py-0.5 rounded border border-[#d6ae63]/65 bg-[#261d0e] text-[#fde68a] whitespace-nowrap">
-                v4.0
+                v{APP_VERSION}
               </span>
               <span
                 title="Opened via 5 clicks on the game title; hidden from regular players. All attached .mp4 files, Play-per-Game quotas, and No-Cut flags are bundled into the deployed app."
@@ -1225,7 +1233,7 @@ export function AngelVideoStudioModal({
                 </span>
               </div>
               <span className="text-[10px] text-[#b4bdcc]">
-                Attach or replace .mp3 files for the 4 unfold-menu music buttons
+                Attach or replace .mp3 files for the {musicTracks.length} unfold-menu music buttons
               </span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1704,7 +1712,7 @@ export function AngelVideoStudioModal({
                   <p className="text-[11px] text-[#cbbd9f] mt-0.5">
                     Plays on Chess Angel whenever anyone clicks the{' '}
                     <span className="text-[#f3d38b] font-medium">ChessAngel 3D</span> title or{' '}
-                    <span className="text-[#f3d38b] font-medium">v4.0</span> version number. Video
+                    <span className="text-[#f3d38b] font-medium">v{APP_VERSION}</span> version number. Video
                     sound is stripped automatically so Chess Angel&rsquo;s own voice speaks her
                     thank-you message cleanly.
                   </p>
@@ -2779,6 +2787,334 @@ export function AngelVideoStudioModal({
                   <p className="text-[10px] text-[#8daea6]">
                     Tip: Click &ldquo;Test Opening + 3D Flowchart&rdquo; and drag the Density slider live while the opening video plays to match the 3D PCB density directly to the video.
                   </p>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Special 3D Extension — Calculation Deep-Branch 3D Tree Positioning & Density (case:calc_pure) */}
+        {(() => {
+          const calcTreeOffsetX = getCalcPureTreeOffsetX(overrides);
+          const calcTreeOffsetY = getCalcPureTreeOffsetY(overrides);
+          const calcTreeDensity = getCalcPureTreeDensity(overrides);
+          const calcPureUrl = overrides.cases?.calc_pure || ANGEL_CASE_VIDEO_MAP.calc_pure;
+          const calcPureDurationSec = getVideoFileDurationSec(calcPureUrl, overrides) ?? 8.1;
+
+          const previewCalcPureWithTree = () => {
+            primeNextCaseSlotPreview('calc_pure', calcPureUrl);
+            onPreviewCase(
+              'calc_pure_v2',
+              CLIP_TEXT.calc_pure_v2,
+              'DEEP CALCULATION · 3D TREE',
+            );
+          };
+
+          return (
+            <div className="mb-5 rounded-xl border border-emerald-400/45 bg-[#091812] overflow-hidden shadow-lg">
+              <div className="px-4 py-3 bg-[#0d241b] border-b border-emerald-400/25 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-400/20 text-emerald-200 border border-emerald-400/45">
+                      DEEP-BRANCH 3D TREE · CALCULATION
+                    </span>
+                    <h3 className="font-display text-sm font-semibold text-[#f3efe6]">
+                      Calculation Deep-Branch 3D Tree — Positioning &amp; Density
+                    </h3>
+                  </div>
+                  <p className="text-xs text-[#b7d8c5] mt-1">
+                    Adjust horizontal &amp; vertical positioning and deep-branch / foliage density across every 4-border limb, sub-branch fork, and root veil of <code className="text-emerald-200">case:calc_pure</code> ({calcPureDurationSec.toFixed(1)}s).
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={previewCalcPureWithTree}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-[#04180d] transition-colors cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  Test Calculation + 3D Tree
+                </button>
+              </div>
+
+              <div className="p-4 grid grid-cols-1 lg:grid-cols-3 gap-3.5">
+                {/* 1. Horizontal Position (X Offset px) */}
+                <div className="rounded-lg border border-emerald-400/25 bg-[#06110c] p-3 flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-200">
+                      <Crosshair className="w-3.5 h-3.5" />
+                      Horizontal Position (X)
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono-tabular text-xs font-bold px-2 py-0.5 rounded bg-emerald-400/20 text-emerald-100 border border-emerald-400/40">
+                        {calcTreeOffsetX > 0 ? `+${calcTreeOffsetX}` : calcTreeOffsetX}px
+                      </span>
+                      {calcTreeOffsetX !== DEFAULT_CALC_PURE_TREE_OFFSET_X && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void updateCalcPureTreeConfig(
+                              { offsetX: DEFAULT_CALC_PURE_TREE_OFFSET_X },
+                              { immediate: true },
+                            )
+                          }
+                          title="Reset X position to 0px"
+                          className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-white/15 text-[#b5d2c3] hover:text-white hover:border-white/35 cursor-pointer"
+                        >
+                          <RotateCcw className="w-2.5 h-2.5" />
+                          Reset
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={-240}
+                      max={240}
+                      step={2}
+                      value={calcTreeOffsetX}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        if (Number.isFinite(next)) {
+                          void updateCalcPureTreeConfig({ offsetX: next });
+                        }
+                      }}
+                      aria-label="Calculation 3D tree horizontal X position offset in pixels"
+                      className="flex-1 accent-emerald-400 cursor-pointer"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-1 text-[10px] text-[#8ab39d]">
+                    <span>−240px (Left)</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateCalcPureTreeConfig(
+                            { offsetX: Math.max(-240, calcTreeOffsetX - 10) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-emerald-400/35 bg-[#0a2117] hover:bg-[#113324] text-emerald-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        −10
+                      </button>
+                      <input
+                        type="number"
+                        min={-240}
+                        max={240}
+                        step={1}
+                        value={calcTreeOffsetX}
+                        onChange={(e) => {
+                          const next = Number(e.target.value);
+                          if (Number.isFinite(next)) {
+                            void updateCalcPureTreeConfig({ offsetX: next }, { immediate: true });
+                          }
+                        }}
+                        aria-label="Exact calculation 3D tree X offset in pixels"
+                        className="w-16 font-mono-tabular text-xs font-semibold text-center px-1 py-0.5 rounded border border-emerald-400/50 bg-[#0a2117] text-emerald-100 focus:outline-none focus:border-emerald-300"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateCalcPureTreeConfig(
+                            { offsetX: Math.min(240, calcTreeOffsetX + 10) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-emerald-400/35 bg-[#0a2117] hover:bg-[#113324] text-emerald-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        +10
+                      </button>
+                    </div>
+                    <span>+240px (Right)</span>
+                  </div>
+                </div>
+
+                {/* 2. Vertical Position (Y Offset px) */}
+                <div className="rounded-lg border border-emerald-400/25 bg-[#06110c] p-3 flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-200">
+                      <Ruler className="w-3.5 h-3.5" />
+                      Vertical Position (Y)
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono-tabular text-xs font-bold px-2 py-0.5 rounded bg-emerald-400/20 text-emerald-100 border border-emerald-400/40">
+                        {calcTreeOffsetY > 0 ? `+${calcTreeOffsetY}` : calcTreeOffsetY}px
+                      </span>
+                      {calcTreeOffsetY !== DEFAULT_CALC_PURE_TREE_OFFSET_Y && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void updateCalcPureTreeConfig(
+                              { offsetY: DEFAULT_CALC_PURE_TREE_OFFSET_Y },
+                              { immediate: true },
+                            )
+                          }
+                          title="Reset Y position to 0px"
+                          className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-white/15 text-[#b5d2c3] hover:text-white hover:border-white/35 cursor-pointer"
+                        >
+                          <RotateCcw className="w-2.5 h-2.5" />
+                          Reset
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={-240}
+                      max={240}
+                      step={2}
+                      value={calcTreeOffsetY}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        if (Number.isFinite(next)) {
+                          void updateCalcPureTreeConfig({ offsetY: next });
+                        }
+                      }}
+                      aria-label="Calculation 3D tree vertical Y position offset in pixels"
+                      className="flex-1 accent-emerald-400 cursor-pointer"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-1 text-[10px] text-[#8ab39d]">
+                    <span>−240px (Up)</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateCalcPureTreeConfig(
+                            { offsetY: Math.max(-240, calcTreeOffsetY - 10) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-emerald-400/35 bg-[#0a2117] hover:bg-[#113324] text-emerald-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        −10
+                      </button>
+                      <input
+                        type="number"
+                        min={-240}
+                        max={240}
+                        step={1}
+                        value={calcTreeOffsetY}
+                        onChange={(e) => {
+                          const next = Number(e.target.value);
+                          if (Number.isFinite(next)) {
+                            void updateCalcPureTreeConfig({ offsetY: next }, { immediate: true });
+                          }
+                        }}
+                        aria-label="Exact calculation 3D tree Y offset in pixels"
+                        className="w-16 font-mono-tabular text-xs font-semibold text-center px-1 py-0.5 rounded border border-emerald-400/50 bg-[#0a2117] text-emerald-100 focus:outline-none focus:border-emerald-300"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateCalcPureTreeConfig(
+                            { offsetY: Math.min(240, calcTreeOffsetY + 10) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-emerald-400/35 bg-[#0a2117] hover:bg-[#113324] text-emerald-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        +10
+                      </button>
+                    </div>
+                    <span>+240px (Down)</span>
+                  </div>
+                </div>
+
+                {/* 3. Deep-Branch & Foliage Density (0.25x .. 2.50x) */}
+                <div className="rounded-lg border border-emerald-400/25 bg-[#06110c] p-3 flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-200">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Deep-Branch &amp; Leaf Density
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono-tabular text-xs font-bold px-2 py-0.5 rounded bg-emerald-400/20 text-emerald-100 border border-emerald-400/40">
+                        {calcTreeDensity.toFixed(2)}× ({Math.round(calcTreeDensity * 100)}%)
+                      </span>
+                      {Math.abs(calcTreeDensity - DEFAULT_CALC_PURE_TREE_DENSITY) > 0.005 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void updateCalcPureTreeConfig(
+                              { density: DEFAULT_CALC_PURE_TREE_DENSITY },
+                              { immediate: true },
+                            )
+                          }
+                          title="Reset deep-branch density to 1.00×"
+                          className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-white/15 text-[#b5d2c3] hover:text-white hover:border-white/35 cursor-pointer"
+                        >
+                          <RotateCcw className="w-2.5 h-2.5" />
+                          Reset
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={0.25}
+                      max={2.5}
+                      step={0.05}
+                      value={calcTreeDensity}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        if (Number.isFinite(next)) {
+                          void updateCalcPureTreeConfig({ density: next });
+                        }
+                      }}
+                      aria-label="Calculation 3D tree deep-branch and leaf density scale"
+                      className="flex-1 accent-emerald-400 cursor-pointer"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-1 text-[10px] text-[#8ab39d]">
+                    <span>0.25× (Sparse)</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateCalcPureTreeConfig(
+                            { density: Math.max(0.25, Math.round((calcTreeDensity - 0.1) * 100) / 100) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-emerald-400/35 bg-[#0a2117] hover:bg-[#113324] text-emerald-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        −0.10
+                      </button>
+                      <input
+                        type="number"
+                        min={0.25}
+                        max={2.5}
+                        step={0.05}
+                        value={calcTreeDensity}
+                        onChange={(e) => {
+                          const next = Number(e.target.value);
+                          if (Number.isFinite(next)) {
+                            void updateCalcPureTreeConfig({ density: next }, { immediate: true });
+                          }
+                        }}
+                        aria-label="Exact calculation 3D tree deep-branch density"
+                        className="w-16 font-mono-tabular text-xs font-semibold text-center px-1 py-0.5 rounded border border-emerald-400/50 bg-[#0a2117] text-emerald-100 focus:outline-none focus:border-emerald-300"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void updateCalcPureTreeConfig(
+                            { density: Math.min(2.5, Math.round((calcTreeDensity + 0.1) * 100) / 100) },
+                            { immediate: true },
+                          )
+                        }
+                        className="px-1.5 py-0.5 rounded border border-emerald-400/35 bg-[#0a2117] hover:bg-[#113324] text-emerald-200 font-mono-tabular text-[11px] cursor-pointer"
+                      >
+                        +0.10
+                      </button>
+                    </div>
+                    <span>2.50× (Lush)</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -3929,7 +4265,9 @@ export function AngelVideoStudioModal({
                                 ? 'undo movie'
                                 : item.caseId === 'ask_promotion'
                                   ? '8th-row pawn arrival'
-                                  : item.caseId;
+                                  : item.caseId === 'capture_minor'
+                                    ? 'minor capture'
+                                    : item.caseId;
                           return (
                           <div className="mt-2.5 rounded-lg border border-white/12 bg-[#07090e] divide-y divide-white/10 overflow-hidden">
                             {(

@@ -1,4 +1,10 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
+import {
+  getCalcPureTreeDensity,
+  getCalcPureTreeOffsetX,
+  getCalcPureTreeOffsetY,
+  subscribeAngelVideoOverrides,
+} from '../chess/angelPortraitVideos';
 
 export interface CalcPureVideoClock {
   active: boolean;
@@ -50,6 +56,9 @@ interface RootSpore2D {
 interface BuiltRootNetwork {
   w: number;
   h: number;
+  offsetX: number;
+  offsetY: number;
+  density: number;
   segs: RootSeg2D[];
   leaves: RootLeaf2D[];
   spores: RootSpore2D[];
@@ -90,13 +99,20 @@ function createSeededRng(seed: number): () => number {
   };
 }
 
-function buildRootNetwork(w: number, h: number): BuiltRootNetwork {
+function buildRootNetwork(
+  w: number,
+  h: number,
+  offsetX: number,
+  offsetY: number,
+  density: number,
+): BuiltRootNetwork {
   const rng = createSeededRng(419083);
   const segs: RootSeg2D[] = [];
   const leaves: RootLeaf2D[] = [];
   const spores: RootSpore2D[] = [];
 
   const scale = Math.max(0.72, Math.min(1.28, w / 300));
+  const clampedDensity = Math.max(0.25, Math.min(2.5, density));
 
   const growBranch = (
     xStart: number,
@@ -147,7 +163,8 @@ function buildRootNetwork(w: number, h: number): BuiltRootNetwork {
       });
 
       // Small glowing emerald undergrowth leaves & sprouts hugging the gnarled roots
-      const leafChance = depth === 0 ? 0.62 : depth === 1 ? 0.42 : 0.26;
+      const baseLeafChance = depth === 0 ? 0.62 : depth === 1 ? 0.42 : 0.26;
+      const leafChance = Math.min(0.96, baseLeafChance * Math.max(0.3, Math.min(1.65, clampedDensity)));
       if (i >= 1 && rng() < leafChance) {
         const side = rng() < 0.5 ? -1 : 1;
         const leafAng = ang + side * (0.48 + rng() * 0.62);
@@ -164,7 +181,7 @@ function buildRootNetwork(w: number, h: number): BuiltRootNetwork {
       }
 
       // Drifting botanical spores near glowing joints
-      if (rng() < 0.18) {
+      if (rng() < Math.min(0.45, 0.18 * clampedDensity)) {
         spores.push({
           x: nx + (rng() - 0.5) * 14,
           y: ny + (rng() - 0.5) * 12,
@@ -177,8 +194,12 @@ function buildRootNetwork(w: number, h: number): BuiltRootNetwork {
         });
       }
 
-      // Recursive fork into lateral & deeper gnarled sub-roots
-      if (depth > 0 && i >= 2 && i <= steps - 2 && rng() < (depth === 2 ? 0.42 : 0.34)) {
+      // Recursive fork into lateral & deeper gnarled sub-roots (scales with Studio density)
+      const forkChance = Math.min(
+        0.88,
+        (depth === 2 ? 0.42 : 0.34) * Math.pow(clampedDensity, 0.78),
+      );
+      if (depth > 0 && i >= 2 && i <= steps - 2 && rng() < forkChance) {
         const forkSign = (i % 2 === 0 ? 1 : -1) * (rng() < 0.75 ? 1 : -1);
         const forkAngle = ang + forkSign * (0.34 + rng() * 0.42);
         growBranch(
@@ -200,7 +221,7 @@ function buildRootNetwork(w: number, h: number): BuiltRootNetwork {
     }
 
     // Terminal delicate emerald sprout leaf pair at each rootlet tip
-    if (depth === 0 || rng() < 0.55) {
+    if (depth === 0 || rng() < 0.55 * Math.min(1.4, clampedDensity)) {
       for (const sgn of [-1, 1]) {
         leaves.push({
           x: cx,
@@ -216,14 +237,46 @@ function buildRootNetwork(w: number, h: number): BuiltRootNetwork {
     }
   };
 
-  for (const seed of BOTTOM_ROOT_SEEDS) {
-    const startX = seed.tEdge * w;
+  const activeSeeds = [...BOTTOM_ROOT_SEEDS];
+  if (clampedDensity < 0.97) {
+    const keep = Math.max(2, Math.round(BOTTOM_ROOT_SEEDS.length * clampedDensity));
+    activeSeeds.length = 0;
+    for (let k = 0; k < keep; k++) {
+      const idx = Math.min(
+        BOTTOM_ROOT_SEEDS.length - 1,
+        Math.round((k * (BOTTOM_ROOT_SEEDS.length - 1)) / Math.max(1, keep - 1)),
+      );
+      activeSeeds.push(BOTTOM_ROOT_SEEDS[idx]);
+    }
+  } else if (clampedDensity > 1.03) {
+    const extra = Math.round(BOTTOM_ROOT_SEEDS.length * (clampedDensity - 1.0));
+    for (let k = 0; k < extra; k++) {
+      const pairPos = ((k + 0.5) / Math.max(1, extra)) * (BOTTOM_ROOT_SEEDS.length - 1);
+      const i0 = Math.min(BOTTOM_ROOT_SEEDS.length - 1, Math.floor(pairPos));
+      const i1 = Math.min(BOTTOM_ROOT_SEEDS.length - 1, i0 + 1);
+      const f = i0 === i1 ? 0.5 : pairPos - i0;
+      const a = BOTTOM_ROOT_SEEDS[i0];
+      const b = BOTTOM_ROOT_SEEDS[i1];
+      activeSeeds.push({
+        tEdge: a.tEdge + (b.tEdge - a.tEdge) * f + (k % 2 === 0 ? 0.015 : -0.015),
+        fanBias: a.fanBias + (b.fanBias - a.fanBias) * f,
+        curveBend: (a.curveBend + (b.curveBend - a.curveBend) * f) * (k % 2 === 0 ? 1.05 : -0.95),
+        thickness: (a.thickness + (b.thickness - a.thickness) * f) * 0.86,
+        startOffset: a.startOffset + (b.startOffset - a.startOffset) * f + 0.012,
+        hasVein: k % 2 === 0 && (a.hasVein || b.hasVein),
+      });
+    }
+  }
+
+  for (const seed of activeSeeds) {
+    const startX = seed.tEdge * w + offsetX * 0.65;
+    const startY = -2 + offsetY * 0.35;
     // Downward (+PI/2) gently biased outward to connect straight through to the 3D roots below
     const baseAngle = Math.PI * 0.5 + seed.fanBias * 0.55;
     const reachLen = h * (0.94 + rng() * 0.24);
     growBranch(
       startX,
-      -2,
+      startY,
       baseAngle,
       reachLen,
       seed.thickness * scale,
@@ -235,7 +288,7 @@ function buildRootNetwork(w: number, h: number): BuiltRootNetwork {
     );
   }
 
-  return { w, h, segs, leaves, spores };
+  return { w, h, offsetX, offsetY, density: clampedDensity, segs, leaves, spores };
 }
 
 /**
@@ -277,8 +330,18 @@ export function CalcPureModalRootVeil({
         canvas.width = targetW;
         canvas.height = targetH;
       }
-      if (!network || Math.abs(network.w - cw) > 6 || Math.abs(network.h - ch) > 6) {
-        network = buildRootNetwork(cw, ch);
+      const curOffX = getCalcPureTreeOffsetX();
+      const curOffY = getCalcPureTreeOffsetY();
+      const curDensity = getCalcPureTreeDensity();
+      if (
+        !network ||
+        Math.abs(network.w - cw) > 6 ||
+        Math.abs(network.h - ch) > 6 ||
+        network.offsetX !== curOffX ||
+        network.offsetY !== curOffY ||
+        Math.abs(network.density - curDensity) > 0.005
+      ) {
+        network = buildRootNetwork(cw, ch, curOffX, curOffY, curDensity);
       }
       return { cw, ch, dpr };
     };
@@ -497,7 +560,15 @@ export function CalcPureModalRootVeil({
       wake();
     }
 
+    const unsubscribeOverrides = subscribeAngelVideoOverrides(() => {
+      network = null;
+      if (clockRef.current.active) {
+        wake();
+      }
+    });
+
     return () => {
+      unsubscribeOverrides();
       if (clockRef.current.wake === wake) {
         clockRef.current.wake = undefined;
       }

@@ -79,6 +79,8 @@ interface ControlDockProps {
     playerColor: PieceColor | 'random',
     tc: TimeControlId,
   ) => void;
+  onStartAngelVsAngelGame: (tc: TimeControlId) => void;
+  onOpenBoardComposer: (seed?: 'current' | 'standard' | 'kings-only' | 'empty') => void;
   engineLevel: EngineLevel;
   onChangeEngineLevel: (level: EngineLevel) => void;
   humanColorVsAi: PieceColor | 'random';
@@ -392,22 +394,27 @@ export function ControlDock(props: ControlDockProps) {
 
             {/* Tab Switcher at the Far Right End of the Rollout Header */}
             <div className="flex justify-center sm:justify-end">
-              <div className="flex items-center gap-1 bg-[#171c26] border border-white/8 rounded-md p-0.5 text-xs">
-                {(['play', 'training', 'analysis', 'replay'] as DockTab[]).map((t) => (
+              <div className="flex items-center gap-1 bg-[#171c26] border border-white/8 rounded-md p-0.5 text-xs overflow-x-auto">
+                {(['play', 'compose', 'training', 'analysis', 'replay'] as DockTab[]).map((t) => (
                   <button
                     key={t}
                     type="button"
                     onClick={() => {
                       setLoadDrawerOpen(false);
+                      if (t === 'compose') {
+                        props.onOpenBoardComposer('current');
+                        return;
+                      }
                       props.onSelectTab(t);
                     }}
-                    className={`px-3 py-1 rounded capitalize transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                      props.activeTab === t && !(t === 'play' && loadDrawerOpen)
+                    className={`px-2.5 sm:px-3 py-1 rounded capitalize transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      (props.activeTab === t || (t === 'compose' && props.gameMode === 'compose')) &&
+                      !(t === 'play' && loadDrawerOpen)
                         ? 'bg-[#d6ae63] text-[#111419] font-semibold'
                         : 'text-[#9aa3b2] hover:text-white'
                     }`}
                   >
-                    {t === 'training' ? 'Tactical Training' : t}
+                    {t === 'training' ? 'Tactical Training' : t === 'compose' ? 'Compose' : t}
                   </button>
                 ))}
               </div>
@@ -789,7 +796,7 @@ export function ControlDock(props: ControlDockProps) {
             <div className="flex flex-col gap-3.5">
               {/* Row 1: Mode + Time Control + Camera Presets */}
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-1 p-1 bg-[#191f2a] rounded-md border border-white/8">
+                <div className="flex flex-wrap items-center gap-1 p-1 bg-[#191f2a] rounded-md border border-white/8">
                   <button
                     type="button"
                     onClick={() =>
@@ -806,6 +813,28 @@ export function ControlDock(props: ControlDockProps) {
                     }`}
                   >
                     vs Chess Angel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => props.onStartAngelVsAngelGame(props.timeControl)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap cursor-pointer ${
+                      props.gameMode === 'angel-vs-angel'
+                        ? 'bg-[#d6ae63] text-[#111419] font-semibold'
+                        : 'text-[#aeb7c6] hover:text-white'
+                    }`}
+                  >
+                    Angel vs Angel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => props.onOpenBoardComposer('current')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap cursor-pointer ${
+                      props.gameMode === 'compose'
+                        ? 'bg-[#d6ae63] text-[#111419] font-semibold'
+                        : 'text-[#aeb7c6] hover:text-white'
+                    }`}
+                  >
+                    Compose Board
                   </button>
                   <button
                     type="button"
@@ -1049,6 +1078,40 @@ export function ControlDock(props: ControlDockProps) {
                     </button>
                   )}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== COMPOSE BOARD QUICK LAUNCHER TAB ==================== */}
+          {props.activeTab === 'compose' && (
+            <div className="flex flex-wrap items-center justify-between gap-3 py-1">
+              <div className="text-xs text-[#cbd5e1]">
+                Place, move, or remove any White or Black chess figures directly on the 3D board,
+                choose side to move &amp; castling rights, then run against Chess Angel or Angel vs
+                Angel.
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => props.onOpenBoardComposer('current')}
+                  className="px-3 py-1.5 rounded bg-[#d6ae63] hover:bg-[#e3be78] text-[#111419] text-xs font-semibold cursor-pointer whitespace-nowrap"
+                >
+                  Edit Current Board
+                </button>
+                <button
+                  type="button"
+                  onClick={() => props.onOpenBoardComposer('kings-only')}
+                  className="px-3 py-1.5 rounded bg-[#181d27] hover:bg-[#222938] border border-white/12 text-[#e2e8f0] text-xs font-medium cursor-pointer whitespace-nowrap"
+                >
+                  Start from Kings Only
+                </button>
+                <button
+                  type="button"
+                  onClick={() => props.onOpenBoardComposer('empty')}
+                  className="px-3 py-1.5 rounded bg-[#181d27] hover:bg-[#222938] border border-white/12 text-[#e2e8f0] text-xs font-medium cursor-pointer whitespace-nowrap"
+                >
+                  Start from Empty Board
+                </button>
               </div>
             </div>
           )}

@@ -7,7 +7,14 @@ export type LightingMood = 'warm-studio';
 
 export type CameraPreset = 'white' | 'black' | 'top' | 'cinematic';
 
-export type GameMode = 'engine' | 'local' | 'tactical' | 'multiplayer' | 'replay';
+export type GameMode =
+  | 'engine'
+  | 'angel-vs-angel'
+  | 'compose'
+  | 'local'
+  | 'tactical'
+  | 'multiplayer'
+  | 'replay';
 
 export type EngineLevel = 'beginner' | 'intermediate' | 'advanced' | 'master' | 'grandmaster';
 
@@ -33,14 +40,17 @@ export interface SavedGame {
   blackName: string;
   resultLabel: string;
   reason: string;
-  mode: 'engine' | 'local' | 'multiplayer' | 'classic';
+  mode: 'engine' | 'angel-vs-angel' | 'local' | 'multiplayer' | 'classic';
   skinId: BoardSkinId;
   timeControl: TimeControlId;
   dateIso: string;
   moves: MoveRecord[];
+  initialFen?: string;
   finalFen: string;
   pgn: string;
   engineLevel?: EngineLevel;
+  whiteAngelLevel?: EngineLevel;
+  blackAngelLevel?: EngineLevel;
   humanColor?: PieceColor;
   humanColorPref?: PieceColor | 'random';
   clocks?: { w: number; b: number };

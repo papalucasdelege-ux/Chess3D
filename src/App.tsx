@@ -1,6 +1,17 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { APP_VERSION } from './chess/assetVersion';
-import { Maximize2, Minimize2, Music, Volume2, VolumeX, X } from 'lucide-react';
+import {
+  Maximize2,
+  Minimize2,
+  Music,
+  Pause,
+  Play,
+  SlidersHorizontal,
+  Swords,
+  Volume2,
+  VolumeX,
+  X,
+} from 'lucide-react';
 import { Chess, type Move, type Square } from 'chess.js';
 import { ChessScene3D, type SuggestionArrow } from './three/ChessScene3D';
 import { soundEngine } from './three/sound';
@@ -24,8 +35,18 @@ import { EvalBar } from './components/EvalBar';
 import { TopBar, type DockTab } from './components/TopBar';
 import { TacticalTrainingHud, type TacticalRunStatus } from './components/TacticalTrainingHud';
 import { ControlDock } from './components/ControlDock';
+import { BoardComposerHud } from './components/BoardComposerHud';
 import { PromotionModal } from './components/PromotionModal';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton';
+import {
+  invertComposerColors,
+  parseFenToComposerState,
+  sanitizeCastlingFlags,
+  validateComposerState,
+  type CastlingFlags,
+  type ComposerState,
+  type ComposerTool,
+} from './chess/boardComposer';
 const LazyAngelVideoStudioModal = import.meta.env.DEV
   ? lazy(() =>
       import('./components/AngelVideoStudioModal').then((m) => ({
@@ -64,6 +85,9 @@ import {
   getAngelDogRunJumpSec,
   getAngelDogRunVideoUrl,
   getAngelVideoOverridesSnapshot,
+  getCalcPureTreeDensity,
+  getCalcPureTreeOffsetX,
+  getCalcPureTreeOffsetY,
   getOpeningFlowchartDensity,
   getOpeningFlowchartStartSec,
   getVideoFileDurationSec,
@@ -153,15 +177,24 @@ const INITIAL_FEN = new Chess().fen();
 const DEFAULT_SKIN: BoardSkinId = 'walnut-maple';
 const PIECE_MATERIAL: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 
+function tryCreateChess(fen: string): Chess | null {
+  try {
+    return new Chess(fen);
+  } catch {
+    return null;
+  }
+}
+
 function computeMaterialDiff(fen: string): number {
-  const chess = new Chess(fen);
+  const placement = (fen || '').split(' ')[0] || '';
   let diff = 0;
-  for (const row of chess.board()) {
-    for (const cell of row) {
-      if (!cell) continue;
-      const val = PIECE_MATERIAL[cell.type] || 0;
-      diff += cell.color === 'w' ? val : -val;
-    }
+  for (let i = 0; i < placement.length; i++) {
+    const ch = placement[i];
+    if (ch === '/' || (ch >= '1' && ch <= '8')) continue;
+    const lower = ch.toLowerCase();
+    const val = PIECE_MATERIAL[lower] || 0;
+    if (val === 0) continue;
+    diff += ch === lower ? -val : val;
   }
   return diff;
 }
@@ -733,10 +766,14 @@ export default function App() {
   // === Game Mode & Local/Engine State ===
   const [gameMode, setGameMode] = useState<GameMode>('engine');
   const [engineLevel, setEngineLevel] = useState<EngineLevel>('advanced');
+  const [whiteAngelLevel, setWhiteAngelLevel] = useState<EngineLevel>('master');
+  const [blackAngelLevel, setBlackAngelLevel] = useState<EngineLevel>('grandmaster');
+  const [angelDuelPaused, setAngelDuelPaused] = useState<boolean>(false);
   const [humanColorPref, setHumanColorPref] = useState<PieceColor | 'random'>('w');
   const [humanColorActual, setHumanColorActual] = useState<PieceColor>('w');
   const [timeControl, setTimeControl] = useState<TimeControlId>('10+0');
 
+  const [initialMatchFen, setInitialMatchFen] = useState<string>(INITIAL_FEN);
   const [localMoves, setLocalMoves] = useState<MoveRecord[]>([]);
   const [localFen, setLocalFen] = useState<string>(INITIAL_FEN);
   const [localResult, setLocalResult] = useState<RoomResult | null>(null);
@@ -745,6 +782,16 @@ export default function App() {
     b: TIME_CONTROLS['10+0'].initialMs,
   });
   const [isThinkingAi, setIsThinkingAi] = useState(false);
+
+  // === Composable Chessboard Studio State ===
+  const [composerState, setComposerState] = useState<ComposerState>(() =>
+    parseFenToComposerState(INITIAL_FEN),
+  );
+  const [composerTool, setComposerTool] = useState<ComposerTool>({ kind: 'move' });
+  const composerStateRef = useRef<ComposerState>(composerState);
+  composerStateRef.current = composerState;
+  const composerReturnModeRef = useRef<'engine' | 'angel-vs-angel' | 'local'>('engine');
+  const composerValidation = useMemo(() => validateComposerState(composerState), [composerState]);
 
   // === Tactical Training State & Casual Session Snapshot ===
   const [tacticalStats, setTacticalStats] = useState<TacticalTrainingStats>(() =>
@@ -772,13 +819,16 @@ export default function App() {
   const tacticalUsedHintRef = useRef<boolean>(false);
   const tacticalTimerIdsRef = useRef<number[]>([]);
   const casualSessionSnapshotRef = useRef<{
-    mode: 'engine' | 'local';
+    mode: 'engine' | 'angel-vs-angel' | 'local';
+    initialFen: string;
     fen: string;
     moves: MoveRecord[];
     result: RoomResult | null;
     clocks: { w: number; b: number };
     moveEvalMeta: Record<number, AnalyzedMoveMeta>;
     engineLevel: EngineLevel;
+    whiteAngelLevel: EngineLevel;
+    blackAngelLevel: EngineLevel;
     humanColorActual: PieceColor;
     humanColorPref: PieceColor | 'random';
     timeControl: TimeControlId;
@@ -1054,19 +1104,30 @@ export default function App() {
     promo: PieceType;
     report: BotSearchReport | null;
   } | null>(null);
+  const treeBrowserPendingOnBotCommitRef = useRef<{
+    rootFen: string;
+    edges: SearchTreeEdge[];
+    sims: EngineLine[];
+    depth?: number;
+    nodes?: number;
+  } | null>(null);
   const treeActiveOnScreenRef = useRef<boolean>(false);
+  const autoSelectedByArrowRef = useRef<string | null>(null);
+  const treeBrowserRef = useRef<TreeBrowserState | null>(null);
+  treeBrowserRef.current = treeBrowser;
 
   // === Derived Active Game View ===
   const isReplayMode = gameMode === 'replay' && activeReplayGame !== null;
 
   const activeMoves: MoveRecord[] = useMemo(() => {
+    if (gameMode === 'compose') return [];
     if (isReplayMode && activeReplayGame) return activeReplayGame.moves;
     if (gameMode === 'multiplayer' && activeRoom) return activeRoom.moves;
     return localMoves;
-  }, [isReplayMode, activeReplayGame, gameMode, activeRoom, localMoves]);
+  }, [gameMode, isReplayMode, activeReplayGame, activeRoom, localMoves]);
 
   const activeResult: RoomResult | null = useMemo(() => {
-    if (isReplayMode) return null;
+    if (isReplayMode || gameMode === 'compose') return null;
     if (gameMode === 'multiplayer' && activeRoom) return activeRoom.result;
     return localResult;
   }, [isReplayMode, gameMode, activeRoom, localResult]);
@@ -1075,23 +1136,51 @@ export default function App() {
   const isViewingLatest = clampedViewPly === activeMoves.length;
 
   const displayedFen = useMemo(() => {
+    if (gameMode === 'compose') {
+      return composerValidation.fen;
+    }
     if (clampedViewPly === 0) {
-      return gameMode === 'tactical' ? activePuzzle.fen : INITIAL_FEN;
+      if (isReplayMode && activeReplayGame) {
+        return (
+          activeReplayGame.initialFen ||
+          (activeReplayGame.moves.length === 0 ? activeReplayGame.finalFen : INITIAL_FEN)
+        );
+      }
+      return gameMode === 'tactical' ? activePuzzle.fen : initialMatchFen;
     }
     return activeMoves[clampedViewPly - 1]?.fen ?? localFen;
-  }, [clampedViewPly, activeMoves, localFen, gameMode, activePuzzle.fen]);
+  }, [
+    gameMode,
+    composerValidation.fen,
+    clampedViewPly,
+    isReplayMode,
+    activeReplayGame,
+    activePuzzle.fen,
+    initialMatchFen,
+    activeMoves,
+    localFen,
+  ]);
+  const displayedFenRef = useRef<string>(displayedFen);
+  displayedFenRef.current = displayedFen;
 
-  const displayedChess = useMemo(() => new Chess(displayedFen), [displayedFen]);
-  const displayedTurn = displayedChess.turn() as PieceColor;
-  const displayedIsCheck = displayedChess.inCheck();
-  const checkedKingSquare = useMemo(() => findCheckedKingSquare(displayedChess), [displayedChess]);
+  const displayedChess = useMemo(() => tryCreateChess(displayedFen), [displayedFen]);
+  const displayedTurn: PieceColor = displayedChess
+    ? (displayedChess.turn() as PieceColor)
+    : displayedFen.split(' ')[1] === 'b'
+      ? 'b'
+      : 'w';
+  const displayedIsCheck = displayedChess ? displayedChess.inCheck() : false;
+  const checkedKingSquare = useMemo(
+    () => (displayedChess ? findCheckedKingSquare(displayedChess) : null),
+    [displayedChess],
+  );
   const materialDiff = useMemo(() => computeMaterialDiff(displayedFen), [displayedFen]);
 
   const lastDisplayedMove = useMemo(() => {
-    if (clampedViewPly === 0) return null;
+    if (clampedViewPly === 0 || gameMode === 'compose') return null;
     const m = activeMoves[clampedViewPly - 1];
     return m ? { from: m.from, to: m.to } : null;
-  }, [clampedViewPly, activeMoves]);
+  }, [clampedViewPly, activeMoves, gameMode]);
 
   // Keep simulation snapshot ref fresh without recreating the 100ms interval loop
   const simSnapshotRef = useRef({
@@ -1104,6 +1193,7 @@ export default function App() {
     isViewingLatest,
     isThinkingAi,
     humanColorActual,
+    angelDuelPaused,
     angelVoice,
     soundEnabled,
     analysis,
@@ -1125,6 +1215,7 @@ export default function App() {
     isViewingLatest,
     isThinkingAi,
     humanColorActual,
+    angelDuelPaused,
     angelVoice,
     soundEnabled,
     analysis,
@@ -1139,15 +1230,62 @@ export default function App() {
   calcPreviewActiveRef.current = calcPreview !== null || calcShowingPending;
   showSearchTreeRef.current = showSearchTree;
 
+  const refreshContinuousThinkingLines = useCallback(
+    (targetFen?: string, preferredEdges?: SearchTreeEdge[] | null, opacity = 0.88) => {
+      const scene = sceneRef.current;
+      if (!scene || !showSearchTreeRef.current || simSnapshotRef.current.gameMode === 'compose') {
+        return;
+      }
+      const fenToUse = targetFen || displayedFenRef.current || simSnapshotRef.current.localFen;
+      let edges: SearchTreeEdge[] =
+        preferredEdges && preferredEdges.length > 0 ? preferredEdges : [];
+      if (edges.length === 0) {
+        const snapAnalysis = simSnapshotRef.current.analysis;
+        if (
+          snapAnalysis?.fen === fenToUse &&
+          snapAnalysis.treeEdges &&
+          snapAnalysis.treeEdges.length > 0
+        ) {
+          edges = snapAnalysis.treeEdges;
+        } else {
+          try {
+            edges = buildQuickSearchTreeForPosition(fenToUse).edges;
+          } catch {
+            edges = [];
+          }
+        }
+      }
+      if (edges.length > 0) {
+        latestTreeEdgesRef.current = edges;
+        treeActiveOnScreenRef.current = true;
+        setTreeStatusMode('holding');
+        scene.setContinuousThinkingLines(edges, opacity);
+      }
+    },
+    [],
+  );
+  const refreshContinuousThinkingLinesRef = useRef(refreshContinuousThinkingLines);
+  refreshContinuousThinkingLinesRef.current = refreshContinuousThinkingLines;
+
   // Player display names
   const { whiteName, blackName } = useMemo(() => {
     if (isReplayMode && activeReplayGame) {
       return { whiteName: activeReplayGame.whiteName, blackName: activeReplayGame.blackName };
     }
+    if (gameMode === 'compose') {
+      return { whiteName: 'Composer · White', blackName: 'Composer · Black' };
+    }
     if (gameMode === 'multiplayer' && activeRoom) {
       return {
         whiteName: activeRoom.players.w?.name || 'Waiting for White...',
         blackName: activeRoom.players.b?.name || 'Waiting for Black...',
+      };
+    }
+    if (gameMode === 'angel-vs-angel') {
+      const speaker = getSpeakerName();
+      return {
+        whiteName: `${speaker} White · ${ENGINE_LEVELS[whiteAngelLevel].label} (${ENGINE_LEVELS[whiteAngelLevel].elo})`,
+        blackName: `${speaker} Black · ${ENGINE_LEVELS[blackAngelLevel].label} (${ENGINE_LEVELS[blackAngelLevel].elo})`,
       };
     }
     if (gameMode === 'engine') {
@@ -1163,6 +1301,8 @@ export default function App() {
     activeReplayGame,
     gameMode,
     activeRoom,
+    whiteAngelLevel,
+    blackAngelLevel,
     engineLevel,
     humanColorActual,
     playerName,
@@ -1171,14 +1311,19 @@ export default function App() {
   const activeTimeControl: TimeControlId =
     gameMode === 'multiplayer' && activeRoom ? activeRoom.timeControl : timeControl;
   const isTimed =
-    !isReplayMode && gameMode !== 'tactical' && TIME_CONTROLS[activeTimeControl].initialMs > 0;
+    !isReplayMode &&
+    gameMode !== 'tactical' &&
+    gameMode !== 'compose' &&
+    TIME_CONTROLS[activeTimeControl].initialMs > 0;
   const whiteClockMs =
     gameMode === 'multiplayer' && activeRoom ? displayRoomClocks.w : localClocks.w;
   const blackClockMs =
     gameMode === 'multiplayer' && activeRoom ? displayRoomClocks.b : localClocks.b;
 
   const canInteractWithBoard = useMemo(() => {
-    if (isReplayMode || !isViewingLatest || activeResult || calcPreview !== null) return false;
+    if (gameMode === 'compose') return true;
+    if (gameMode === 'angel-vs-angel') return false;
+    if (isReplayMode || !isViewingLatest || activeResult) return false;
     if (gameMode === 'tactical') {
       return (
         (tacticalStatus === 'solving' || tacticalStatus === 'wrong') &&
@@ -1195,11 +1340,10 @@ export default function App() {
     }
     return true;
   }, [
+    gameMode,
     isReplayMode,
     isViewingLatest,
     activeResult,
-    calcPreview,
-    gameMode,
     tacticalStatus,
     activePuzzle.solverColor,
     activeRoom,
@@ -1210,18 +1354,20 @@ export default function App() {
   ]);
 
   const legalMovesForSelected: Move[] = useMemo(() => {
-    if (!selectedSquare || !canInteractWithBoard) return [];
+    if (!selectedSquare || !canInteractWithBoard || gameMode === 'compose' || !displayedChess) {
+      return [];
+    }
     try {
       return displayedChess.moves({ square: selectedSquare as Square, verbose: true });
     } catch {
       return [];
     }
-  }, [selectedSquare, canInteractWithBoard, displayedChess]);
+  }, [selectedSquare, canInteractWithBoard, gameMode, displayedChess]);
 
   const currentFingerprint = useMemo(() => {
     if (activeMoves.length === 0) return '';
-    return `${whiteName}|${blackName}|${activeMoves.map((m) => m.uci).join(',')}`;
-  }, [whiteName, blackName, activeMoves]);
+    return `${whiteName}|${blackName}|${initialMatchFen}|${activeMoves.map((m) => m.uci).join(',')}`;
+  }, [whiteName, blackName, initialMatchFen, activeMoves]);
 
   const currentPgn = useMemo(
     () =>
@@ -1233,8 +1379,22 @@ export default function App() {
             ? activeReplayGame.resultLabel
             : resultToScoreLabel(activeResult),
         dateIso: new Date().toISOString(),
+        initialFen:
+          isReplayMode && activeReplayGame
+            ? activeReplayGame.initialFen
+            : initialMatchFen !== INITIAL_FEN
+              ? initialMatchFen
+              : undefined,
       }),
-    [activeMoves, whiteName, blackName, isReplayMode, activeReplayGame, activeResult],
+    [
+      activeMoves,
+      whiteName,
+      blackName,
+      isReplayMode,
+      activeReplayGame,
+      activeResult,
+      initialMatchFen,
+    ],
   );
 
   // === Save & Load Game Helpers ===
@@ -1250,20 +1410,24 @@ export default function App() {
       const finalFen =
         movesToSave.length > 0
           ? movesToSave[movesToSave.length - 1].fen
-          : displayedFen || INITIAL_FEN;
+          : displayedFen || initialMatchFen;
       const moveNum = Math.ceil(movesToSave.length / 2);
       const progressTag = res ? '' : movesToSave.length > 0 ? ` · Move ${moveNum}` : ' · Start';
       const title =
-        gameMode === 'engine'
-          ? `${whiteName} vs ${blackName}${progressTag}`
-          : gameMode === 'multiplayer' && activeRoom
-            ? `Online #${activeRoom.id} · ${whiteName} vs ${blackName}`
-            : `Pass & Play · ${whiteName} vs ${blackName}${progressTag}`;
+        gameMode === 'angel-vs-angel'
+          ? `Angel vs Angel · ${ENGINE_LEVELS[whiteAngelLevel].label} vs ${ENGINE_LEVELS[blackAngelLevel].label}${progressTag}`
+          : gameMode === 'engine'
+            ? `${whiteName} vs ${blackName}${progressTag}`
+            : gameMode === 'multiplayer' && activeRoom
+              ? `Online #${activeRoom.id} · ${whiteName} vs ${blackName}`
+              : `Pass & Play · ${whiteName} vs ${blackName}${progressTag}`;
 
       const currentClocks =
         gameMode === 'multiplayer' && activeRoom
           ? { w: displayRoomClocks.w, b: displayRoomClocks.b }
           : { w: localClockMsRef.current.w, b: localClockMsRef.current.b };
+
+      const savedInitialFen = initialMatchFen !== INITIAL_FEN ? initialMatchFen : undefined;
 
       return {
         id: currentMatchIdRef.current,
@@ -1272,14 +1436,26 @@ export default function App() {
         blackName,
         resultLabel,
         reason: res?.reason || 'in-progress',
-        mode: gameMode === 'replay' || gameMode === 'tactical' ? 'local' : gameMode,
+        mode:
+          gameMode === 'replay' || gameMode === 'tactical' || gameMode === 'compose'
+            ? 'local'
+            : gameMode,
         skinId: DEFAULT_SKIN,
         timeControl: activeTimeControl,
         dateIso,
         moves: movesToSave,
+        initialFen: savedInitialFen,
         finalFen,
-        pgn: buildPgnFromMoves(movesToSave, { whiteName, blackName, resultLabel, dateIso }),
+        pgn: buildPgnFromMoves(movesToSave, {
+          whiteName,
+          blackName,
+          resultLabel,
+          dateIso,
+          initialFen: savedInitialFen,
+        }),
         engineLevel,
+        whiteAngelLevel,
+        blackAngelLevel,
         humanColor: humanColorActual,
         humanColorPref,
         clocks: currentClocks,
@@ -1293,7 +1469,10 @@ export default function App() {
       clampedViewPly,
       activeMoves,
       displayedFen,
+      initialMatchFen,
       gameMode,
+      whiteAngelLevel,
+      blackAngelLevel,
       whiteName,
       blackName,
       activeRoom,
@@ -1422,12 +1601,10 @@ export default function App() {
         }
         setCalcShowingPending(false);
         sceneRef.current?.stopCalculationPreview(false);
-        sceneRef.current?.stopSearchTreeThinLines();
-        treeActiveOnScreenRef.current = false;
-        setTreeStatusMode('idle');
         setCalcPreview(null);
         clearForkArrowsTimer();
         setCoachArrows([]);
+        autoSelectedByArrowRef.current = null;
         turnStartedAtRef.current = performance.now();
         hesitationStageRef.current = 0;
 
@@ -1452,6 +1629,21 @@ export default function App() {
         setLocalFen(nextFen);
         setViewPly(nextMoves.length);
         setSelectedSquare(null);
+
+        if (showSearchTreeRef.current) {
+          if (botReport?.treeEdges && botReport.treeEdges.length > 0) {
+            latestTreeEdgesRef.current = botReport.treeEdges;
+            treeActiveOnScreenRef.current = true;
+            setTreeStatusMode('holding');
+            sceneRef.current?.setContinuousThinkingLines(botReport.treeEdges, 0.92);
+          } else {
+            refreshContinuousThinkingLinesRef.current(nextFen, null, 0.88);
+          }
+        } else {
+          sceneRef.current?.stopSearchTreeThinLines();
+          treeActiveOnScreenRef.current = false;
+          setTreeStatusMode('idle');
+        }
 
         // Apply clock increment in authoritative ref + state if timed
         const spec = TIME_CONTROLS[timeControl];
@@ -1638,6 +1830,8 @@ export default function App() {
               aiColor,
               humanColorActual,
             );
+            const pendingTreeAfterMove = treeBrowserPendingOnBotCommitRef.current;
+            treeBrowserPendingOnBotCommitRef.current = null;
             if (
               preserveMessageOnBotCommitRef.current &&
               !over &&
@@ -1650,6 +1844,72 @@ export default function App() {
                   ? { ...prev, action: undefined }
                   : prev,
               );
+            } else if (pendingTreeAfterMove) {
+              preserveMessageOnBotCommitRef.current = false;
+              const concreteMsg = composeBotMoveCommentary({
+                fen: nextFen,
+                lastMove: record,
+                aiColor,
+                humanColor: humanColorActual,
+                plyCount: nextMoves.length,
+                analysis,
+                report: botReport,
+                allowCalcProposal: false,
+              });
+              if (concreteMsg || over) {
+                setTreeBrowser(null);
+                if (!showSearchTreeRef.current) {
+                  sceneRef.current?.stopSearchTreeThinLines();
+                  treeActiveOnScreenRef.current = false;
+                  setTreeStatusMode('idle');
+                }
+                if (concreteMsg) {
+                  triggeredEventMessage = true;
+                  setPreviewIdleUrl(null);
+                  setOpponentMessage(concreteMsg);
+                  if (concreteMsg.forkArrows && concreteMsg.forkArrows.length > 0) {
+                    showTemporaryForkArrows(concreteMsg.forkArrows);
+                  }
+                  if (angelVoice === 'on') {
+                    opponentSpeech.playClip(concreteMsg.clipId, angelVoice, soundEnabled);
+                  }
+                }
+              } else {
+                treeActiveOnScreenRef.current = true;
+                setTreeStatusMode('holding');
+                const deliveredBrowse = openTreeBrowserSessionRef.current(
+                  pendingTreeAfterMove.rootFen,
+                  pendingTreeAfterMove.edges,
+                  pendingTreeAfterMove.sims,
+                  false,
+                  pendingTreeAfterMove.depth,
+                  pendingTreeAfterMove.nodes,
+                  true,
+                );
+                if (deliveredBrowse) {
+                  triggeredEventMessage = true;
+                } else {
+                  const fallbackMsg = composeBotMoveCommentary({
+                    fen: nextFen,
+                    lastMove: record,
+                    aiColor,
+                    humanColor: humanColorActual,
+                    plyCount: nextMoves.length,
+                    analysis,
+                    report: botReport,
+                    allowCalcProposal:
+                      showSearchTreeRef.current && !suppressTreeAndThreeMovesRef.current,
+                  });
+                  if (fallbackMsg) {
+                    triggeredEventMessage = true;
+                    setPreviewIdleUrl(null);
+                    setOpponentMessage(fallbackMsg);
+                    if (angelVoice === 'on') {
+                      opponentSpeech.playClip(fallbackMsg.clipId, angelVoice, soundEnabled);
+                    }
+                  }
+                }
+              }
             } else {
               preserveMessageOnBotCommitRef.current = false;
               const msg = composeBotMoveCommentary({
@@ -1681,7 +1941,43 @@ export default function App() {
               }
             }
           }
+        } else if (gameMode === 'angel-vs-angel' && angelVisibleRef.current) {
+          treeBrowserPendingOnBotCommitRef.current = null;
+          awaitingDistractionModalRef.current = false;
+          const moverColor = record.color;
+          const oppColor: PieceColor = moverColor === 'w' ? 'b' : 'w';
+          const duelMsg = composeBotMoveCommentary({
+            fen: nextFen,
+            lastMove: record,
+            aiColor: moverColor,
+            humanColor: oppColor,
+            plyCount: nextMoves.length,
+            analysis,
+            report: botReport,
+            allowCalcProposal: false,
+          });
+          if (duelMsg && (over || chess.inCheck() || Boolean(res.captured))) {
+            triggeredEventMessage = true;
+            const prep = prepareHumanCommentaryPlayback(duelMsg.clipId, `msg:${duelMsg.id}`);
+            setPreviewIdleUrl(null);
+            setOpponentMessage(duelMsg);
+            if (duelMsg.forkArrows && duelMsg.forkArrows.length > 0) {
+              showTemporaryForkArrows(duelMsg.forkArrows);
+            }
+            if (angelVoice === 'on') {
+              opponentSpeech.playClip(duelMsg.clipId, angelVoice, soundEnabled);
+            }
+            if (!over) {
+              const holdSec = Math.min(4.2, Math.max(soundEnabled ? prep.audioSec : 0, 1.4));
+              holdBotUntilRef.current = performance.now() + Math.round(holdSec * 1000) + 220;
+            } else {
+              holdBotUntilRef.current = 0;
+            }
+          } else {
+            holdBotUntilRef.current = 0;
+          }
         } else {
+          treeBrowserPendingOnBotCommitRef.current = null;
           awaitingDistractionModalRef.current = false;
           holdBotUntilRef.current = 0;
         }
@@ -1908,8 +2204,39 @@ export default function App() {
   );
 
   // === Submit Move (routes to Multiplayer Server, Tactical Trainer, or Local/Engine) ===
+  const clearTransientTreeAndCalcForPlayerMove = useCallback(() => {
+    if (calcShowingTimerRef.current !== null) {
+      window.clearTimeout(calcShowingTimerRef.current);
+      calcShowingTimerRef.current = null;
+    }
+    setCalcShowingPending(false);
+    sceneRef.current?.stopCalculationPreview(false);
+    setCalcPreview(null);
+    if (!showSearchTreeRef.current) {
+      sceneRef.current?.stopSearchTreeThinLines();
+      treeActiveOnScreenRef.current = false;
+      setTreeStatusMode('idle');
+    }
+    setTreeBrowser(null);
+    setFrontalTreeViewOpen(false);
+    setCoachArrows([]);
+    autoSelectedByArrowRef.current = null;
+
+    const activeClip = opponentMessageRef.current?.clipId ?? '';
+    if (
+      activeClip.startsWith('tree_browse_') ||
+      activeClip.startsWith('calc_showing_') ||
+      activeClip.startsWith('trial_confirm_')
+    ) {
+      opponentSpeech.stop();
+      setOpponentMessage(null);
+    }
+  }, []);
+
   const submitMove = useCallback(
     (from: string, to: string, promotion?: PieceType) => {
+      autoSelectedByArrowRef.current = null;
+      clearTransientTreeAndCalcForPlayerMove();
       if (gameMode === 'tactical') {
         submitTacticalMove(from, to, promotion);
         return;
@@ -1922,17 +2249,26 @@ export default function App() {
       }
       commitLocalMove(from, to, promotion || 'q', null);
     },
-    [gameMode, activeRoom, submitTacticalMove, commitLocalMove],
+    [
+      clearTransientTreeAndCalcForPlayerMove,
+      gameMode,
+      activeRoom,
+      submitTacticalMove,
+      commitLocalMove,
+    ],
   );
 
   const promptPlayerPawnPromotion = useCallback(
     (from: string, to: string, color: PieceColor) => {
+      autoSelectedByArrowRef.current = null;
+      clearTransientTreeAndCalcForPlayerMove();
       lastMoveAnimHintRef.current = { from, to };
       setSelectedSquare(null);
       setPendingPromotion({ from, to, color });
       if (angelVisibleRef.current) {
         const askMsg = createAskPromotionMessage(to, color);
         prepareHumanCommentaryPlayback(askMsg.clipId, `msg:${askMsg.id}`);
+        setPreviewIdleUrl(null);
         setOpponentMessage(askMsg);
         if (angelVoiceRef.current === 'on') {
           opponentSpeech.unlock();
@@ -1940,47 +2276,414 @@ export default function App() {
         }
       }
     },
-    [],
+    [clearTransientTreeAndCalcForPlayerMove],
+  );
+
+  // === Composable Chessboard Square Click & 3D Drag Handlers ===
+  const handleComposerSquareInteract = useCallback(
+    (square: string): boolean => {
+      if (composerTool.kind === 'erase') {
+        setComposerState((prev) => {
+          if (!prev.pieces[square]) return prev;
+          const nextPieces = { ...prev.pieces };
+          delete nextPieces[square];
+          return {
+            ...prev,
+            pieces: nextPieces,
+            castling: sanitizeCastlingFlags(nextPieces, prev.castling),
+          };
+        });
+        setSelectedSquare(null);
+        if (soundEnabledRef.current) soundEngine.playCapture();
+        return true;
+      }
+
+      if (composerTool.kind === 'piece') {
+        const { color, type } = composerTool;
+        setComposerState((prev) => {
+          const existing = prev.pieces[square];
+          const nextPieces = { ...prev.pieces };
+          if (existing && existing.color === color && existing.type === type && type !== 'k') {
+            delete nextPieces[square];
+          } else {
+            if (type === 'k') {
+              for (const [sq, p] of Object.entries(nextPieces)) {
+                if (p.color === color && p.type === 'k') {
+                  delete nextPieces[sq];
+                }
+              }
+            }
+            nextPieces[square] = { color, type };
+          }
+          return {
+            ...prev,
+            pieces: nextPieces,
+            castling: sanitizeCastlingFlags(nextPieces, prev.castling),
+          };
+        });
+        setSelectedSquare(null);
+        if (soundEnabledRef.current) soundEngine.playMove();
+        return true;
+      }
+
+      // Tool === 'move'
+      const curPieces = composerStateRef.current.pieces;
+      if (selectedSquare) {
+        if (selectedSquare === square) {
+          setSelectedSquare(null);
+          return true;
+        }
+        const moving = curPieces[selectedSquare];
+        if (moving) {
+          const hadTarget = Boolean(curPieces[square]);
+          lastMoveAnimHintRef.current = { from: selectedSquare, to: square };
+          setComposerState((prev) => {
+            const mover = prev.pieces[selectedSquare];
+            if (!mover) return prev;
+            const nextPieces = { ...prev.pieces };
+            delete nextPieces[selectedSquare];
+            nextPieces[square] = mover;
+            return {
+              ...prev,
+              pieces: nextPieces,
+              castling: sanitizeCastlingFlags(nextPieces, prev.castling),
+            };
+          });
+          setSelectedSquare(null);
+          if (soundEnabledRef.current) {
+            if (hadTarget) soundEngine.playCapture();
+            else soundEngine.playMove();
+          }
+          return true;
+        }
+      }
+
+      if (curPieces[square]) {
+        setSelectedSquare(square);
+        return true;
+      }
+      setSelectedSquare(null);
+      return false;
+    },
+    [composerTool, selectedSquare],
   );
 
   // === Click Handler from 3D Raycaster ===
   const handleSquareClick = useCallback(
-    (square: string) => {
-      if (!canInteractWithBoard) return;
+    (square: string): boolean => {
+      if (gameMode === 'compose') {
+        return handleComposerSquareInteract(square);
+      }
+
+      // If Chess Angel's 1s tree-development animation is still finishing when the player
+      // clicks in engine mode, finish Angel's move immediately and handle the player's click on the 1st try!
+      if (
+        gameMode === 'engine' &&
+        pendingBotMoveRef.current &&
+        isViewingLatest &&
+        !isReplayMode &&
+        !activeResult
+      ) {
+        const pending = pendingBotMoveRef.current;
+        treeBrowserPendingOnBotCommitRef.current = null;
+        flushPendingBotMoveRef.current(true);
+        try {
+          const postChess = new Chess(localFen);
+          const mv = postChess.move({
+            from: pending.from,
+            to: pending.to,
+            promotion: pending.promo || 'q',
+          });
+          if (mv && !postChess.isGameOver()) {
+            if (selectedSquare && selectedSquare !== square) {
+              const postLegal = postChess
+                .moves({ square: selectedSquare as Square, verbose: true })
+                .filter((m) => m.to === square);
+              if (postLegal.length > 0) {
+                if (postLegal.some((m) => Boolean(m.promotion))) {
+                  promptPlayerPawnPromotion(selectedSquare, square, humanColorActual);
+                } else {
+                  submitMove(selectedSquare, square);
+                }
+                return true;
+              }
+            }
+            const postPiece = postChess.get(square as Square);
+            if (postPiece && postPiece.color === humanColorActual) {
+              setSelectedSquare(square);
+              return true;
+            }
+          }
+        } catch {
+          // ignore
+        }
+        return true;
+      }
+
+      if (!canInteractWithBoard || !displayedChess) return false;
       if (promoMatchSimActiveRef.current) {
         clearPromoMatchSim();
       }
 
+      // If 3-branch calculation preview is currently playing/holding on the 3D board,
+      // cancel it immediately and fall right through so the player's 1st click plays or selects!
+      if (calcPreview !== null || calcShowingPending) {
+        if (calcShowingTimerRef.current !== null) {
+          window.clearTimeout(calcShowingTimerRef.current);
+          calcShowingTimerRef.current = null;
+        }
+        setCalcShowingPending(false);
+        sceneRef.current?.stopCalculationPreview(true);
+        setCalcPreview(null);
+        const activeClip = opponentMessageRef.current?.clipId ?? '';
+        if (activeClip.startsWith('calc_showing_') || activeClip.startsWith('trial_confirm_')) {
+          opponentSpeech.stop();
+          setOpponentMessage(null);
+        }
+        if (showSearchTreeRef.current) {
+          refreshContinuousThinkingLinesRef.current(displayedFen, null, 0.88);
+        }
+      }
+
       if (selectedSquare) {
         if (selectedSquare === square) {
+          if (autoSelectedByArrowRef.current === square) {
+            // Keep cleaner-arrow piece selected on 1st figure tap so tapping its target square next plays immediately!
+            autoSelectedByArrowRef.current = null;
+            return true;
+          }
           setSelectedSquare(null);
-          return;
+          return true;
         }
         const matchingMoves = legalMovesForSelected.filter((m) => m.to === square);
         if (matchingMoves.length > 0) {
           const isPromo = matchingMoves.some((m) => Boolean(m.promotion));
           if (isPromo) {
             promptPlayerPawnPromotion(selectedSquare, square, displayedTurn);
-            return;
+            return true;
           }
           submitMove(selectedSquare, square);
-          return;
+          return true;
         }
       }
 
       const piece = displayedChess.get(square as Square);
       if (piece && piece.color === displayedTurn) {
+        autoSelectedByArrowRef.current = null;
         setSelectedSquare(square);
-      } else {
-        setSelectedSquare(null);
+        return true;
       }
+
+      // If cleaner-move coachArrows are displayed and the player clicks the destination square of a suggested arrow directly,
+      // play that cleaner arrow's move immediately on the 1st click!
+      if (coachArrows.length > 0) {
+        const directArrow = coachArrows.find(
+          (a) =>
+            (a.kind === 'primary' || a.kind === 'secondary') &&
+            a.to === square &&
+            displayedChess.get(a.from as Square)?.color === displayedTurn,
+        );
+        if (directArrow) {
+          const arrowMoves = displayedChess
+            .moves({ square: directArrow.from as Square, verbose: true })
+            .filter((m) => m.to === square);
+          if (arrowMoves.length > 0) {
+            if (arrowMoves.some((m) => Boolean(m.promotion))) {
+              promptPlayerPawnPromotion(directArrow.from, square, displayedTurn);
+            } else {
+              submitMove(directArrow.from, square);
+            }
+            return true;
+          }
+        }
+      }
+
+      if (selectedSquare) {
+        autoSelectedByArrowRef.current = null;
+        setSelectedSquare(null);
+        return true;
+      }
+      return false;
     },
     [
-      canInteractWithBoard,
+      gameMode,
+      handleComposerSquareInteract,
+      isViewingLatest,
+      isReplayMode,
+      activeResult,
+      localFen,
       selectedSquare,
+      humanColorActual,
+      canInteractWithBoard,
+      displayedChess,
+      calcPreview,
+      calcShowingPending,
+      displayedFen,
       legalMovesForSelected,
       displayedTurn,
+      coachArrows,
+      promptPlayerPawnPromotion,
+      submitMove,
+      clearPromoMatchSim,
+    ],
+  );
+
+  const handleCanDragPiece = useCallback(
+    (square: string): boolean => {
+      if (gameMode === 'compose') {
+        return Boolean(composerStateRef.current.pieces[square]);
+      }
+      if (
+        gameMode === 'engine' &&
+        pendingBotMoveRef.current &&
+        isViewingLatest &&
+        !isReplayMode &&
+        !activeResult
+      ) {
+        const pending = pendingBotMoveRef.current;
+        try {
+          const postChess = new Chess(localFen);
+          const mv = postChess.move({
+            from: pending.from,
+            to: pending.to,
+            promotion: pending.promo || 'q',
+          });
+          if (mv && !postChess.isGameOver()) {
+            return postChess.get(square as Square)?.color === humanColorActual;
+          }
+        } catch {
+          return false;
+        }
+      }
+      if (!canInteractWithBoard || !displayedChess) return false;
+      const p = displayedChess.get(square as Square);
+      return Boolean(p && p.color === displayedTurn);
+    },
+    [
+      gameMode,
+      isViewingLatest,
+      isReplayMode,
+      activeResult,
+      localFen,
+      humanColorActual,
+      canInteractWithBoard,
       displayedChess,
+      displayedTurn,
+    ],
+  );
+
+  const handleDragMove = useCallback(
+    (from: string, to: string): boolean => {
+      if (from === to) return false;
+      if (gameMode === 'compose') {
+        const moving = composerStateRef.current.pieces[from];
+        if (!moving) return false;
+        const hadTarget = Boolean(composerStateRef.current.pieces[to]);
+        lastMoveAnimHintRef.current = { from, to };
+        setComposerState((prev) => {
+          const m = prev.pieces[from];
+          if (!m) return prev;
+          const nextPieces = { ...prev.pieces };
+          delete nextPieces[from];
+          nextPieces[to] = m;
+          return {
+            ...prev,
+            pieces: nextPieces,
+            castling: sanitizeCastlingFlags(nextPieces, prev.castling),
+          };
+        });
+        setSelectedSquare(null);
+        if (soundEnabledRef.current) {
+          if (hadTarget) soundEngine.playCapture();
+          else soundEngine.playMove();
+        }
+        return true;
+      }
+
+      if (
+        gameMode === 'engine' &&
+        pendingBotMoveRef.current &&
+        isViewingLatest &&
+        !isReplayMode &&
+        !activeResult
+      ) {
+        const pending = pendingBotMoveRef.current;
+        treeBrowserPendingOnBotCommitRef.current = null;
+        flushPendingBotMoveRef.current(true);
+        try {
+          const postChess = new Chess(localFen);
+          const mv = postChess.move({
+            from: pending.from,
+            to: pending.to,
+            promotion: pending.promo || 'q',
+          });
+          if (mv && !postChess.isGameOver()) {
+            const matching = postChess
+              .moves({ square: from as Square, verbose: true })
+              .filter((m) => m.to === to);
+            if (matching.length > 0) {
+              if (matching.some((m) => Boolean(m.promotion))) {
+                promptPlayerPawnPromotion(from, to, humanColorActual);
+              } else {
+                submitMove(from, to);
+              }
+              return true;
+            }
+          }
+        } catch {
+          return false;
+        }
+        return false;
+      }
+
+      if (!canInteractWithBoard || !displayedChess) return false;
+      if (promoMatchSimActiveRef.current) {
+        clearPromoMatchSim();
+      }
+      if (calcPreview !== null || calcShowingPending) {
+        if (calcShowingTimerRef.current !== null) {
+          window.clearTimeout(calcShowingTimerRef.current);
+          calcShowingTimerRef.current = null;
+        }
+        setCalcShowingPending(false);
+        sceneRef.current?.stopCalculationPreview(true);
+        setCalcPreview(null);
+        const activeClip = opponentMessageRef.current?.clipId ?? '';
+        if (activeClip.startsWith('calc_showing_') || activeClip.startsWith('trial_confirm_')) {
+          opponentSpeech.stop();
+          setOpponentMessage(null);
+        }
+      }
+
+      try {
+        const matchingMoves = displayedChess
+          .moves({ square: from as Square, verbose: true })
+          .filter((m) => m.to === to);
+        if (matchingMoves.length > 0) {
+          if (matchingMoves.some((m) => Boolean(m.promotion))) {
+            promptPlayerPawnPromotion(from, to, displayedTurn);
+            return true;
+          }
+          submitMove(from, to);
+          return true;
+        }
+      } catch {
+        return false;
+      }
+      return false;
+    },
+    [
+      gameMode,
+      isViewingLatest,
+      isReplayMode,
+      activeResult,
+      localFen,
+      humanColorActual,
+      canInteractWithBoard,
+      displayedChess,
+      calcPreview,
+      calcShowingPending,
+      displayedTurn,
       promptPlayerPawnPromotion,
       submitMove,
       clearPromoMatchSim,
@@ -1989,6 +2692,10 @@ export default function App() {
 
   const squareClickRef = useRef(handleSquareClick);
   squareClickRef.current = handleSquareClick;
+  const canDragPieceRef = useRef(handleCanDragPiece);
+  canDragPieceRef.current = handleCanDragPiece;
+  const dragMoveRef = useRef(handleDragMove);
+  dragMoveRef.current = handleDragMove;
 
   // Subscribe to Chess Angel voice state and play standard welcome greeting on startup
   useEffect(() => {
@@ -2085,6 +2792,8 @@ export default function App() {
 
     const scene = new ChessScene3D(container, 'walnut-maple', 'warm-studio', {
       onSquareClick: (sq) => squareClickRef.current(sq),
+      canDragPieceAtSquare: (sq) => canDragPieceRef.current(sq),
+      onDragMove: (from, to) => dragMoveRef.current(from, to),
       onTreeSquareClick: (sq) => treeSquareClickRef.current(sq),
       onUpperRightVoidChange: (spec) => setUpperRightVoid(spec),
       onContextLost: () => setWebglLost(true),
@@ -2095,6 +2804,9 @@ export default function App() {
           : undefined,
     });
     sceneRef.current = scene;
+    if (showSearchTreeRef.current) {
+      refreshContinuousThinkingLinesRef.current(INITIAL_FEN, null, 0.88);
+    }
 
     return () => {
       scene.dispose();
@@ -2495,7 +3207,9 @@ export default function App() {
       const isPausedForShowcaseOrModal =
         calcPreviewActiveRef.current ||
         awaitingDistractionModalRef.current ||
-        treeActiveOnScreenRef.current ||
+        pendingBotMoveRef.current !== null ||
+        snap.treeBrowserOpen ||
+        (snap.gameMode === 'angel-vs-angel' && snap.angelDuelPaused) ||
         promoMatchSimActiveRef.current ||
         pendingPromotionRef.current !== null ||
         holdBotUntilRef.current > now;
@@ -2504,6 +3218,7 @@ export default function App() {
       if (
         snap.gameMode !== 'multiplayer' &&
         snap.gameMode !== 'tactical' &&
+        snap.gameMode !== 'compose' &&
         !snap.isReplayMode &&
         !snap.localResult &&
         snap.localMovesLen > 0 &&
@@ -2832,7 +3547,8 @@ export default function App() {
       hasPendingBotMove: boolean,
       depth?: number,
       nodes?: number,
-    ) => {
+      preserveExistingWhenExhausted = false,
+    ): boolean => {
       activeTreeRootFenRef.current = rootFen;
       activeTreeFullEdgesRef.current = edges;
       const resolvedSims = ensureTreeSimulations(rootFen, simulations);
@@ -2861,15 +3577,19 @@ export default function App() {
         nodes,
       );
       if (browseMsg) {
+        setPreviewIdleUrl(null);
         setOpponentMessage(browseMsg);
         if (angelVoiceRef.current === 'on') {
           opponentSpeech.unlock();
           opponentSpeech.playClip(browseMsg.clipId, angelVoiceRef.current, soundEnabledRef.current);
         }
-      } else {
+        return true;
+      }
+      if (!preserveExistingWhenExhausted) {
         opponentSpeech.stop();
         setOpponentMessage(null);
       }
+      return false;
     },
     [],
   );
@@ -2878,9 +3598,6 @@ export default function App() {
   openTreeBrowserSessionRef.current = openTreeBrowserSession;
 
   const flushPendingBotMove = useCallback((executeMove: boolean) => {
-    sceneRef.current?.stopSearchTreeThinLines();
-    treeActiveOnScreenRef.current = false;
-    setTreeStatusMode('idle');
     setTreeBrowser(null);
 
     const pending = pendingBotMoveRef.current;
@@ -2889,6 +3606,12 @@ export default function App() {
 
     if (executeMove && pending) {
       commitLocalMoveRef.current(pending.from, pending.to, pending.promo, pending.report);
+    } else if (showSearchTreeRef.current && simSnapshotRef.current.gameMode !== 'compose') {
+      refreshContinuousThinkingLinesRef.current(undefined, pending?.report?.treeEdges);
+    } else {
+      sceneRef.current?.stopSearchTreeThinLines();
+      treeActiveOnScreenRef.current = false;
+      setTreeStatusMode('idle');
     }
   }, []);
 
@@ -2914,6 +3637,18 @@ export default function App() {
         }
         if (msg.type === 'done' && msg.treeEdges.length > 0) {
           latestTreeEdgesRef.current = msg.treeEdges;
+          if (
+            showSearchTreeRef.current &&
+            simSnapshotRef.current.gameMode !== 'compose' &&
+            !pendingBotMoveRef.current &&
+            !calcPreviewActiveRef.current &&
+            !treeBrowserRef.current &&
+            msg.fen === displayedFenRef.current
+          ) {
+            treeActiveOnScreenRef.current = true;
+            setTreeStatusMode('holding');
+            sceneRef.current?.setContinuousThinkingLines(msg.treeEdges, 0.9);
+          }
         }
         if (msg.type === 'done' && msg.allSimulations.length > 0) {
           latestAllSimulationsRef.current = msg.allSimulations;
@@ -2932,7 +3667,7 @@ export default function App() {
                 ? prev.allSimulations
                 : undefined,
           treeEdges:
-            msg.type === 'done'
+            msg.type === 'done' && msg.treeEdges.length > 0
               ? msg.treeEdges
               : prev?.fen === msg.fen
                 ? prev.treeEdges
@@ -2943,7 +3678,7 @@ export default function App() {
         if (msg.requestId !== botReqIdRef.current) return;
         if (msg.treeEdges.length > 0) {
           latestTreeEdgesRef.current = msg.treeEdges;
-          if (showSearchTreeRef.current && simSnapshotRef.current.localMovesLen > 0) {
+          if (showSearchTreeRef.current && simSnapshotRef.current.gameMode !== 'compose') {
             treeActiveOnScreenRef.current = true;
             setTreeStatusMode('developing');
             sceneRef.current?.updateDevelopingSearchTree(msg.treeEdges);
@@ -2964,23 +3699,10 @@ export default function App() {
           }
 
           const snap = simSnapshotRef.current;
-          const aiColorForMove: PieceColor = snap.humanColorActual === 'w' ? 'b' : 'w';
-          const forkPreview =
-            snap.gameMode === 'engine'
-              ? inspectPostMoveForkState(
-                  snap.localFen,
-                  from,
-                  to,
-                  promo,
-                  aiColorForMove,
-                  snap.humanColorActual,
-                )
-              : { isFork: false, shouldWarn: false };
 
           if (
-            snap.localMovesLen > 0 &&
-            !forkPreview.isFork &&
             showSearchTreeRef.current &&
+            snap.gameMode !== 'compose' &&
             msg.report?.treeEdges &&
             msg.report.treeEdges.length > 0 &&
             sceneRef.current
@@ -2992,6 +3714,7 @@ export default function App() {
               msg.report.allSimulations && msg.report.allSimulations.length > 0
                 ? msg.report.allSimulations
                 : msg.report.triedLines;
+            const isDuel = snap.gameMode === 'angel-vs-angel';
 
             pendingBotMoveRef.current = {
               requestId: reqIdSnapshot,
@@ -3004,20 +3727,23 @@ export default function App() {
             setTreeStatusMode('developing');
 
             sceneRef.current.presentDevelopedSearchTree(edgesSnapshot, {
-              minDevelopSec: 1.35,
+              minDevelopSec: isDuel ? 0.8 : 1.15,
               holdSec: 0,
-              fadeSec: 0.3,
+              fadeSec: 0.25,
               onDeveloped: () => {
                 if (pendingBotMoveRef.current?.requestId !== reqIdSnapshot) return;
-                setTreeStatusMode('holding');
-                openTreeBrowserSessionRef.current(
-                  reportSnapshot.rootFen,
-                  edgesSnapshot,
-                  simsSnapshot,
-                  true,
-                  reportSnapshot.depth,
-                  reportSnapshot.nodes,
-                );
+                pendingBotMoveRef.current = null;
+                setIsThinkingAi(false);
+                if (!isDuel) {
+                  treeBrowserPendingOnBotCommitRef.current = {
+                    rootFen: reportSnapshot.rootFen,
+                    edges: edgesSnapshot,
+                    sims: simsSnapshot,
+                    depth: reportSnapshot.depth,
+                    nodes: reportSnapshot.nodes,
+                  };
+                }
+                commitLocalMoveRef.current(from, to, promo, reportSnapshot);
               },
               onComplete: () => {
                 if (pendingBotMoveRef.current?.requestId === reqIdSnapshot) {
@@ -3026,15 +3752,19 @@ export default function App() {
               },
             });
           } else {
-            treeActiveOnScreenRef.current = false;
             setIsThinkingAi(false);
-            setTreeStatusMode('idle');
+            if (!showSearchTreeRef.current) {
+              treeActiveOnScreenRef.current = false;
+              setTreeStatusMode('idle');
+            }
             commitLocalMoveRef.current(from, to, promo, msg.report);
           }
         } else {
-          treeActiveOnScreenRef.current = false;
           setIsThinkingAi(false);
-          setTreeStatusMode('idle');
+          if (!showSearchTreeRef.current) {
+            treeActiveOnScreenRef.current = false;
+            setTreeStatusMode('idle');
+          }
         }
       }
     };
@@ -3057,7 +3787,7 @@ export default function App() {
       ply === 1
         ? gameMode === 'tactical'
           ? activePuzzle.fen
-          : INITIAL_FEN
+          : initialMatchFen
         : activeMoves[ply - 2]?.fen;
     const prevScore = prevFen ? prevEvalByFenRef.current.get(prevFen) : undefined;
     const postScore = analysis.lines[0].scoreCp;
@@ -3073,12 +3803,14 @@ export default function App() {
         [ply]: { ply, evalCp: postScore, quality, cpLoss },
       }));
     }
-  }, [analysis, clampedViewPly, activeMoves]);
+  }, [analysis, clampedViewPly, activeMoves, gameMode, activePuzzle.fen, initialMatchFen]);
 
   // Trigger continuous position analysis when enabled (and not during active AI search)
   useEffect(() => {
     const worker = workerRef.current;
     if (!worker || !analysisEnabled || isThinkingAi) return;
+    if (gameMode === 'compose' && !composerValidation.valid) return;
+    if (!tryCreateChess(displayedFen)) return;
 
     const reqId = ++analysisReqIdRef.current;
     const req: EngineWorkerRequest = {
@@ -3090,12 +3822,13 @@ export default function App() {
       multiPv: 3,
     };
     worker.postMessage(req);
-  }, [analysisEnabled, displayedFen, isThinkingAi]);
+  }, [analysisEnabled, displayedFen, isThinkingAi, gameMode, composerValidation.valid]);
 
-  // Trigger Chess Angel's mathematical routine move when it's her turn (respecting undo-offer window)
+  // Trigger Chess Angel's mathematical routine move when it's her turn (or both turns in Angel vs Angel!)
   useEffect(() => {
     if (
-      gameMode !== 'engine' ||
+      (gameMode !== 'engine' && gameMode !== 'angel-vs-angel') ||
+      (gameMode === 'angel-vs-angel' && angelDuelPaused) ||
       localResult ||
       !isViewingLatest ||
       calcPreview !== null ||
@@ -3104,10 +3837,14 @@ export default function App() {
     ) {
       return;
     }
-    const chess = new Chess(localFen);
+    const chess = tryCreateChess(localFen);
+    if (!chess || chess.isGameOver()) return;
     const turn = chess.turn() as PieceColor;
-    const aiColor: PieceColor = humanColorActual === 'w' ? 'b' : 'w';
-    if (turn !== aiColor) return;
+
+    if (gameMode === 'engine') {
+      const aiColor: PieceColor = humanColorActual === 'w' ? 'b' : 'w';
+      if (turn !== aiColor) return;
+    }
 
     if (
       pendingBotMoveRef.current ||
@@ -3120,30 +3857,41 @@ export default function App() {
     const worker = workerRef.current;
     if (!worker) return;
 
+    const activeLevelForTurn: EngineLevel =
+      gameMode === 'angel-vs-angel'
+        ? turn === 'w'
+          ? whiteAngelLevel
+          : blackAngelLevel
+        : engineLevel;
+
     setIsThinkingAi(true);
-    if (showSearchTreeRef.current && localMoves.length > 0) {
+    if (showSearchTreeRef.current) {
       setTreeStatusMode('developing');
     }
     const reqId = ++botReqIdRef.current;
+    const delayMs = gameMode === 'angel-vs-angel' ? 420 : 280;
     const delay = window.setTimeout(() => {
       const req: EngineWorkerRequest = {
         type: 'bot-move',
         requestId: reqId,
         fen: localFen,
-        level: engineLevel,
+        level: activeLevelForTurn,
       };
       worker.postMessage(req);
-    }, 280);
+    }, delayMs);
 
     return () => {
       window.clearTimeout(delay);
     };
   }, [
     gameMode,
+    angelDuelPaused,
     localFen,
     localResult,
     humanColorActual,
     engineLevel,
+    whiteAngelLevel,
+    blackAngelLevel,
     isViewingLatest,
     calcPreview,
     pendingPromotion,
@@ -3344,23 +4092,18 @@ export default function App() {
   }, []);
 
   const handleContinueFromTree = useCallback(() => {
-    // Once the player pushes "Continue · Play Move", stop showing the tree on the board
-    // and stop proposing the three best moves until the player opens the tree again,
-    // while letting the active voice message continue playing and her modal keep its content.
-    showSearchTreeRef.current = false;
-    setShowSearchTree(false);
-    suppressTreeAndThreeMovesRef.current = true;
-    setSuppressTreeAndThreeMoves(true);
     setFrontalTreeViewOpen(false);
+    setTreeBrowser(null);
 
     if (pendingBotMoveRef.current) {
       preserveMessageOnBotCommitRef.current = true;
       flushPendingBotMove(true);
+    } else if (showSearchTreeRef.current) {
+      refreshContinuousThinkingLinesRef.current(displayedFen, null, 0.88);
     } else {
-      setTreeBrowser(null);
       sceneRef.current?.confirmSearchTreeContinue();
     }
-  }, [flushPendingBotMove]);
+  }, [flushPendingBotMove, displayedFen]);
 
   treeSquareClickRef.current = (sq: string) => {
     setTreeBrowser((prev) => {
@@ -3509,7 +4252,7 @@ export default function App() {
 
   // === Game & Interactive Coach Handlers ===
   const resetLocalState = useCallback(
-    (tc: TimeControlId) => {
+    (tc: TimeControlId, startFen: string = INITIAL_FEN) => {
       clearTacticalTimers();
       casualSessionSnapshotRef.current = null;
       botReqIdRef.current++;
@@ -3522,6 +4265,7 @@ export default function App() {
       goodMoveStreakRef.current = 0;
       lastSeductionPlyRef.current = -99;
       noUndoOfferGuardRef.current = null;
+      autoSelectedByArrowRef.current = null;
       turnStartedAtRef.current = performance.now();
       hesitationStageRef.current = 0;
       if (calcShowingTimerRef.current !== null) {
@@ -3533,11 +4277,14 @@ export default function App() {
       sceneRef.current?.stopCalculationPreview(false);
       sceneRef.current?.stopOpeningFlowchart();
       setCalcPreview(null);
+      setTreeBrowser(null);
       setCoachArrows([]);
       setIsThinkingAi(false);
+      setInitialMatchFen(startFen);
       setLocalMoves([]);
-      setLocalFen(INITIAL_FEN);
-      setLocalResult(null);
+      setLocalFen(startFen);
+      const startChess = tryCreateChess(startFen);
+      setLocalResult(startChess ? evaluateLocalGameOver(startChess) : null);
       setViewPly(0);
       setSelectedSquare(null);
       setPendingPromotion(null);
@@ -3557,6 +4304,13 @@ export default function App() {
         b: Math.ceil(ms / 1000),
       };
       setLocalClocks({ w: ms, b: ms });
+      if (showSearchTreeRef.current) {
+        refreshContinuousThinkingLinesRef.current(startFen, null, 0.88);
+      } else {
+        sceneRef.current?.stopSearchTreeThinLines();
+        treeActiveOnScreenRef.current = false;
+        setTreeStatusMode('idle');
+      }
       setBotHoldEpoch((n) => n + 1);
     },
     [clearTacticalTimers, clearForkArrowsTimer, flushPendingBotMove, clearPromoMatchSim],
@@ -3568,6 +4322,7 @@ export default function App() {
       colorPref: PieceColor | 'random',
       tc: TimeControlId,
       announcement: 'intro' | 'new_match' | 'none' = 'intro',
+      customStartFen?: string,
     ) => {
       if (activeRoom) {
         mpClientRef.current?.leaveRoom();
@@ -3577,6 +4332,8 @@ export default function App() {
         url.searchParams.delete('room');
         window.history.replaceState({}, '', url.toString());
       }
+      const startFen = customStartFen || INITIAL_FEN;
+      setAngelDuelPaused(false);
       setEngineLevel(level);
       setHumanColorPref(colorPref);
       setTimeControl(tc);
@@ -3584,7 +4341,8 @@ export default function App() {
         colorPref === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : colorPref;
       setHumanColorActual(actual);
       setGameMode('engine');
-      resetLocalState(tc);
+      setActiveTab('play');
+      resetLocalState(tc, startFen);
       if (announcement !== 'none') {
         const startMsg =
           announcement === 'new_match' ? createNewMatchMessage() : createIntroMessage();
@@ -3603,7 +4361,11 @@ export default function App() {
   );
 
   const handleStartLocalGame = useCallback(
-    (tc: TimeControlId, announcement: 'new_match' | 'none' = 'none') => {
+    (
+      tc: TimeControlId,
+      announcement: 'new_match' | 'none' = 'none',
+      customStartFen?: string,
+    ) => {
       if (activeRoom) {
         mpClientRef.current?.leaveRoom();
         setActiveRoom(null);
@@ -3612,9 +4374,12 @@ export default function App() {
         url.searchParams.delete('room');
         window.history.replaceState({}, '', url.toString());
       }
+      const startFen = customStartFen || INITIAL_FEN;
+      setAngelDuelPaused(false);
       setTimeControl(tc);
       setGameMode('local');
-      resetLocalState(tc);
+      setActiveTab('play');
+      resetLocalState(tc, startFen);
       if (announcement === 'new_match') {
         announceControlEvent(createNewMatchMessage());
       }
@@ -3624,6 +4389,114 @@ export default function App() {
     },
     [activeRoom, resetLocalState, announceControlEvent],
   );
+
+  const handleStartAngelVsAngelGame = useCallback(
+    (tc: TimeControlId, customStartFen?: string) => {
+      if (activeRoom) {
+        mpClientRef.current?.leaveRoom();
+        setActiveRoom(null);
+        setMyRoomRole(null);
+        const url = new URL(window.location.href);
+        url.searchParams.delete('room');
+        window.history.replaceState({}, '', url.toString());
+      }
+      const startFen = customStartFen || INITIAL_FEN;
+      setAngelDuelPaused(false);
+      setTimeControl(tc);
+      setGameMode('angel-vs-angel');
+      setActiveTab('play');
+      resetLocalState(tc, startFen);
+      announceControlEvent(createNewMatchMessage());
+      setDockCollapsed(true);
+      const nextCam: CameraPreset =
+        cameraPreset === 'black' || cameraPreset === 'top' ? cameraPreset : 'white';
+      setCameraPreset(nextCam);
+      sceneRef.current?.setCameraPreset(nextCam);
+    },
+    [activeRoom, resetLocalState, announceControlEvent, cameraPreset],
+  );
+
+  const handleTakeOverFromAngelDuel = useCallback(
+    (playerColor: PieceColor) => {
+      const oppLevel = playerColor === 'w' ? blackAngelLevel : whiteAngelLevel;
+      setAngelDuelPaused(false);
+      setEngineLevel(oppLevel);
+      setHumanColorPref(playerColor);
+      setHumanColorActual(playerColor);
+      setGameMode('engine');
+      setActiveTab('play');
+      const curChess = tryCreateChess(localFen);
+      if (curChess && curChess.turn() === playerColor) {
+        botReqIdRef.current++;
+        flushPendingBotMove(false);
+        setIsThinkingAi(false);
+      }
+      const cam: CameraPreset = playerColor === 'b' ? 'black' : 'white';
+      setCameraPreset(cam);
+      sceneRef.current?.setCameraPreset(cam);
+    },
+    [blackAngelLevel, whiteAngelLevel, localFen, flushPendingBotMove],
+  );
+
+  const handleOpenBoardComposer = useCallback(
+    (seed: 'current' | 'standard' | 'kings-only' | 'empty' = 'current') => {
+      if (activeRoom) {
+        mpClientRef.current?.leaveRoom();
+        setActiveRoom(null);
+        setMyRoomRole(null);
+        const url = new URL(window.location.href);
+        url.searchParams.delete('room');
+        window.history.replaceState({}, '', url.toString());
+      }
+      clearPromoMatchSim();
+      clearTacticalTimers();
+      botReqIdRef.current++;
+      flushPendingBotMove(false);
+      setIsThinkingAi(false);
+      if (gameMode === 'angel-vs-angel' || gameMode === 'local' || gameMode === 'engine') {
+        composerReturnModeRef.current = gameMode;
+      }
+      const seedFen =
+        seed === 'standard'
+          ? INITIAL_FEN
+          : seed === 'kings-only'
+            ? '4k3/8/8/8/8/8/8/4K3 w - - 0 1'
+            : seed === 'empty'
+              ? '8/8/8/8/8/8/8/8 w - - 0 1'
+              : displayedFen;
+      setComposerState(parseFenToComposerState(seedFen));
+      setComposerTool({ kind: 'move' });
+      sceneRef.current?.stopCalculationPreview(false);
+      sceneRef.current?.stopSearchTreeThinLines();
+      treeActiveOnScreenRef.current = false;
+      setTreeStatusMode('idle');
+      setTreeBrowser(null);
+      setCalcPreview(null);
+      setCoachArrows([]);
+      setSelectedSquare(null);
+      setPendingPromotion(null);
+      setGameMode('compose');
+      setActiveTab('compose');
+      setDockCollapsed(true);
+    },
+    [
+      activeRoom,
+      clearPromoMatchSim,
+      clearTacticalTimers,
+      flushPendingBotMove,
+      gameMode,
+      displayedFen,
+    ],
+  );
+
+  const handleCloseBoardComposer = useCallback(() => {
+    setSelectedSquare(null);
+    setGameMode(composerReturnModeRef.current);
+    setActiveTab('play');
+    if (showSearchTreeRef.current) {
+      refreshContinuousThinkingLinesRef.current(localFen, null, 0.88);
+    }
+  }, [localFen]);
 
   const handleLeaveMultiplayer = useCallback(() => {
     mpClientRef.current?.leaveRoom();
@@ -3755,17 +4628,31 @@ export default function App() {
     turnStartedAtRef.current = performance.now();
     hesitationStageRef.current = 0;
 
-    const currentTurn = new Chess(localFen).turn() as PieceColor;
+    const currentTurn = (tryCreateChess(localFen)?.turn() ?? 'w') as PieceColor;
     const stepsBack =
       gameMode === 'engine' && localMoves.length >= 2 && currentTurn === humanColorActual ? 2 : 1;
     const nextMoves = localMoves.slice(0, Math.max(0, localMoves.length - stepsBack));
-    const nextFen = nextMoves.length > 0 ? nextMoves[nextMoves.length - 1].fen : INITIAL_FEN;
+    const nextFen = nextMoves.length > 0 ? nextMoves[nextMoves.length - 1].fen : initialMatchFen;
+    autoSelectedByArrowRef.current = null;
     setLocalMoves(nextMoves);
     setLocalFen(nextFen);
     setLocalResult(null);
     setViewPly(nextMoves.length);
     setSelectedSquare(null);
-  }, [gameMode, isReplayMode, localMoves, localFen, humanColorActual, flushPendingBotMove]);
+    if (showSearchTreeRef.current) {
+      refreshContinuousThinkingLinesRef.current(nextFen, null, 0.88);
+    }
+  }, [
+    clearPromoMatchSim,
+    clearForkArrowsTimer,
+    gameMode,
+    isReplayMode,
+    localMoves,
+    localFen,
+    initialMatchFen,
+    humanColorActual,
+    flushPendingBotMove,
+  ]);
 
   const startCalcPreviewOnScene = useCallback(
     (validReport: BotSearchReport, restoreFen: string) => {
@@ -3802,6 +4689,9 @@ export default function App() {
           setCalcPreview(null);
           setOpponentMessage(null);
           turnStartedAtRef.current = performance.now();
+          if (showSearchTreeRef.current) {
+            refreshContinuousThinkingLinesRef.current(restoreFen, null, 0.88);
+          }
         },
       });
     },
@@ -3886,14 +4776,18 @@ export default function App() {
     setOpponentMessage(null);
     sceneRef.current?.stopCalculationPreview(true);
     if (!pendingBotMoveRef.current) {
-      sceneRef.current?.stopSearchTreeThinLines();
-      treeActiveOnScreenRef.current = false;
-      setTreeStatusMode('idle');
+      if (showSearchTreeRef.current) {
+        refreshContinuousThinkingLinesRef.current(displayedFen, null, 0.88);
+      } else {
+        sceneRef.current?.stopSearchTreeThinLines();
+        treeActiveOnScreenRef.current = false;
+        setTreeStatusMode('idle');
+      }
     }
     setCalcPreview(null);
     setCoachArrows([]);
     turnStartedAtRef.current = performance.now();
-  }, []);
+  }, [displayedFen]);
 
   const [frontalTreeViewOpen, setFrontalTreeViewOpen] = useState(false);
   frontalTreeViewOpenRef.current = frontalTreeViewOpen;
@@ -4415,15 +5309,10 @@ export default function App() {
     sceneRef.current?.stopCalculationPreview(true);
     setCalcPreview(null);
 
-    const hadTreeLines =
-      treeStatusMode !== 'idle' || treeBrowser !== null || treeActiveOnScreenRef.current;
-
-    if (hadTreeLines) {
-      showSearchTreeRef.current = false;
-      setShowSearchTree(false);
-      suppressTreeAndThreeMovesRef.current = true;
-      setSuppressTreeAndThreeMoves(true);
-    }
+    showSearchTreeRef.current = false;
+    setShowSearchTree(false);
+    suppressTreeAndThreeMovesRef.current = true;
+    setSuppressTreeAndThreeMoves(true);
 
     const activeClip = opponentMessageRef.current?.clipId ?? '';
     const isLineSpecificPrompt =
@@ -4452,7 +5341,17 @@ export default function App() {
     setShowBestMoveArrow(false);
     setFrontalTreeViewOpen(false);
     turnStartedAtRef.current = performance.now();
-  }, [treeStatusMode, treeBrowser, flushPendingBotMove]);
+  }, [flushPendingBotMove]);
+
+  const handleSwitchOnThinkingLines = useCallback(() => {
+    showSearchTreeRef.current = true;
+    setShowSearchTree(true);
+    suppressTreeAndThreeMovesRef.current = false;
+    setSuppressTreeAndThreeMoves(false);
+    if (!pendingBotMoveRef.current) {
+      handleShowFullSearchTree();
+    }
+  }, [handleShowFullSearchTree]);
 
   // 2) Undo the player's blunder (from Chess Angel modal or banner) and light up stronger alternatives on the 3D board
   const handleUndoAndShowBetter = useCallback(
@@ -4478,12 +5377,12 @@ export default function App() {
       hesitationStageRef.current = 0;
 
       // Rewind back to the human's pre-blunder turn (1 ply if AI hasn't moved yet, 2 plies if AI already replied)
-      const currentTurn = new Chess(localFen).turn() as PieceColor;
+      const currentTurn = (tryCreateChess(localFen)?.turn() ?? 'w') as PieceColor;
       const stepsBack =
         currentTurn === humanColorActual && localMoves.length >= 2 ? 2 : 1;
       const removedMoves = localMoves.slice(Math.max(0, localMoves.length - stepsBack));
       const nextMoves = localMoves.slice(0, Math.max(0, localMoves.length - stepsBack));
-      const nextFen = nextMoves.length > 0 ? nextMoves[nextMoves.length - 1].fen : INITIAL_FEN;
+      const nextFen = nextMoves.length > 0 ? nextMoves[nextMoves.length - 1].fen : initialMatchFen;
 
       // Roll back any increment added on the undone move(s)
       const spec = TIME_CONTROLS[timeControl];
@@ -4500,7 +5399,6 @@ export default function App() {
       setLocalFen(nextFen);
       setLocalResult(null);
       setViewPly(nextMoves.length);
-      setSelectedSquare(null);
 
       const resolvedAlts =
         alternatives.filter((a) => a.uci.length >= 4).length > 0
@@ -4520,6 +5418,13 @@ export default function App() {
         kind: idx === 0 ? 'primary' : 'secondary',
       }));
       setCoachArrows(arrows);
+      const primaryFromSq = arrows[0]?.from ?? null;
+      autoSelectedByArrowRef.current = primaryFromSq;
+      setSelectedSquare(primaryFromSq);
+
+      if (showSearchTreeRef.current) {
+        refreshContinuousThinkingLinesRef.current(nextFen, null, 0.88);
+      }
 
       const doneMsg = createUndoConfirmedMessage(resolvedAlts[0]?.san);
       if (doneMsg) {
@@ -4536,6 +5441,7 @@ export default function App() {
     [
       localMoves,
       localFen,
+      initialMatchFen,
       humanColorActual,
       timeControl,
       angelVoice,
@@ -4553,12 +5459,16 @@ export default function App() {
       }
       setCalcShowingPending(false);
       sceneRef.current?.stopCalculationPreview(false);
-      sceneRef.current?.stopSearchTreeThinLines();
-      treeActiveOnScreenRef.current = false;
-      setTreeStatusMode('idle');
       setTreeBrowser(null);
       setCalcPreview(null);
       setFrontalTreeViewOpen(false);
+      if (showSearchTreeRef.current) {
+        refreshContinuousThinkingLinesRef.current(displayedFen, null, 0.88);
+      } else {
+        sceneRef.current?.stopSearchTreeThinLines();
+        treeActiveOnScreenRef.current = false;
+        setTreeStatusMode('idle');
+      }
 
       let chosenUci = '';
       let chosenSan = san;
@@ -4588,9 +5498,12 @@ export default function App() {
       }
 
       if (chosenUci.length >= 4) {
+        const fromSq = chosenUci.slice(0, 2);
+        autoSelectedByArrowRef.current = fromSq;
+        setSelectedSquare(fromSq);
         setCoachArrows([
           {
-            from: chosenUci.slice(0, 2),
+            from: fromSq,
             to: chosenUci.slice(2, 4),
             kind: 'primary',
           },
@@ -4687,21 +5600,36 @@ export default function App() {
       };
       setLocalClocks({ ...restoredClocks });
 
-      const targetMode: 'engine' | 'local' = game.mode === 'local' ? 'local' : 'engine';
+      const targetMode: 'engine' | 'angel-vs-angel' | 'local' =
+        game.mode === 'local'
+          ? 'local'
+          : game.mode === 'angel-vs-angel'
+            ? 'angel-vs-angel'
+            : 'engine';
       const restoredHumanColor: PieceColor = game.humanColor === 'b' ? 'b' : 'w';
+      setAngelDuelPaused(false);
       if (targetMode === 'engine') {
         if (game.engineLevel && ENGINE_LEVELS[game.engineLevel]) {
           setEngineLevel(game.engineLevel);
         }
         setHumanColorActual(restoredHumanColor);
         setHumanColorPref(game.humanColorPref ?? restoredHumanColor);
+      } else if (targetMode === 'angel-vs-angel') {
+        if (game.whiteAngelLevel && ENGINE_LEVELS[game.whiteAngelLevel]) {
+          setWhiteAngelLevel(game.whiteAngelLevel);
+        }
+        if (game.blackAngelLevel && ENGINE_LEVELS[game.blackAngelLevel]) {
+          setBlackAngelLevel(game.blackAngelLevel);
+        }
       }
       setGameMode(targetMode);
 
       const targetFen =
         game.moves.length > 0
           ? game.moves[game.moves.length - 1].fen
-          : game.finalFen || INITIAL_FEN;
+          : game.finalFen || game.initialFen || INITIAL_FEN;
+      const restoredInitFen =
+        game.initialFen || (game.moves.length === 0 ? targetFen : INITIAL_FEN);
 
       let restoredResult: RoomResult | null = game.result ?? null;
       if (!restoredResult && game.reason !== 'in-progress') {
@@ -4724,6 +5652,8 @@ export default function App() {
 
       clockTimeoutAnnouncedForIdRef.current =
         restoredResult?.reason === 'timeout' ? game.id : null;
+      autoSelectedByArrowRef.current = null;
+      setInitialMatchFen(restoredInitFen);
       setLocalMoves([...game.moves]);
       setLocalFen(targetFen);
       setLocalResult(restoredResult);
@@ -4731,6 +5661,10 @@ export default function App() {
       setViewPly(game.moves.length);
       setActiveTab('play');
       setDockCollapsed(true);
+
+      if (showSearchTreeRef.current) {
+        refreshContinuousThinkingLinesRef.current(targetFen, null, 0.88);
+      }
 
       const cam: CameraPreset =
         targetMode === 'engine' && restoredHumanColor === 'b' ? 'black' : 'white';
@@ -4745,7 +5679,13 @@ export default function App() {
       }
       setBotHoldEpoch((n) => n + 1);
     },
-    [activeRoom, clearTacticalTimers, flushPendingBotMove, announceControlEvent],
+    [
+      activeRoom,
+      clearPromoMatchSim,
+      clearTacticalTimers,
+      flushPendingBotMove,
+      announceControlEvent,
+    ],
   );
 
   const handleImportSaveFile = useCallback(
@@ -4887,15 +5827,18 @@ export default function App() {
   const handleStartTacticalTraining = useCallback(
     (puzzleId?: string) => {
       // Snapshot active Casual Play session so switching back restores exact board & clocks
-      if (gameMode === 'engine' || gameMode === 'local') {
+      if (gameMode === 'engine' || gameMode === 'angel-vs-angel' || gameMode === 'local') {
         casualSessionSnapshotRef.current = {
           mode: gameMode,
+          initialFen: initialMatchFen,
           fen: localFen,
           moves: [...localMoves],
           result: localResult,
           clocks: { w: localClockMsRef.current.w, b: localClockMsRef.current.b },
           moveEvalMeta: { ...moveEvalMeta },
           engineLevel,
+          whiteAngelLevel,
+          blackAngelLevel,
           humanColorActual,
           humanColorPref,
           timeControl,
@@ -4928,11 +5871,14 @@ export default function App() {
     },
     [
       gameMode,
+      initialMatchFen,
       localFen,
       localMoves,
       localResult,
       moveEvalMeta,
       engineLevel,
+      whiteAngelLevel,
+      blackAngelLevel,
       humanColorActual,
       humanColorPref,
       timeControl,
@@ -4948,12 +5894,15 @@ export default function App() {
     clearTacticalTimers();
     clearForkArrowsTimer();
     setCoachArrows([]);
+    autoSelectedByArrowRef.current = null;
     setSelectedSquare(null);
     setPendingPromotion(null);
 
     const snap = casualSessionSnapshotRef.current;
     if (snap) {
       setEngineLevel(snap.engineLevel);
+      setWhiteAngelLevel(snap.whiteAngelLevel);
+      setBlackAngelLevel(snap.blackAngelLevel);
       setHumanColorActual(snap.humanColorActual);
       setHumanColorPref(snap.humanColorPref);
       setTimeControl(snap.timeControl);
@@ -4963,6 +5912,7 @@ export default function App() {
         b: Math.ceil(snap.clocks.b / 1000),
       };
       setLocalClocks({ ...snap.clocks });
+      setInitialMatchFen(snap.initialFen);
       setLocalMoves([...snap.moves]);
       setLocalFen(snap.fen);
       setLocalResult(snap.result);
@@ -4971,6 +5921,9 @@ export default function App() {
       setGameMode(snap.mode);
       setActiveTab('play');
       setDockCollapsed(true);
+      if (showSearchTreeRef.current) {
+        refreshContinuousThinkingLinesRef.current(snap.fen, null, 0.88);
+      }
 
       const cam: CameraPreset =
         snap.mode === 'engine' && snap.humanColorActual === 'b' ? 'black' : 'white';
@@ -5030,12 +5983,14 @@ export default function App() {
     const toSq = expectedUci.slice(2, 4);
 
     if (tacticalHintStage === 0) {
+      autoSelectedByArrowRef.current = fromSq;
       setSelectedSquare(fromSq);
       setTacticalHintStage(1);
       setTacticalStatus('solving');
       setTacticalFeedback(`Hint: Look for a forcing move with the piece on ${fromSq}.`);
     } else {
       const san = uciToSanInPosition(localFen, expectedUci);
+      autoSelectedByArrowRef.current = fromSq;
       setSelectedSquare(fromSq);
       setCoachArrows([
         {
@@ -5150,6 +6105,10 @@ export default function App() {
       handleExitReplay();
       return;
     }
+    if (gameMode === 'compose') {
+      handleCloseBoardComposer();
+      return;
+    }
     if (gameMode === 'tactical') {
       handleTacticalNextPuzzle();
       return;
@@ -5158,26 +6117,37 @@ export default function App() {
       handleLeaveMultiplayer();
       return;
     }
-    if (gameMode === 'local') {
-      handleStartLocalGame(timeControl, 'new_match');
+    if (gameMode === 'angel-vs-angel') {
+      handleStartAngelVsAngelGame(timeControl, initialMatchFen);
+    } else if (gameMode === 'local') {
+      handleStartLocalGame(timeControl, 'new_match', initialMatchFen);
     } else {
-      handleStartEngineGame(engineLevel, humanColorPref, timeControl, 'new_match');
+      handleStartEngineGame(engineLevel, humanColorPref, timeControl, 'new_match', initialMatchFen);
     }
   }, [
     isReplayMode,
     handleExitReplay,
     gameMode,
+    handleCloseBoardComposer,
     handleTacticalNextPuzzle,
     activeRoom,
     handleLeaveMultiplayer,
+    handleStartAngelVsAngelGame,
     handleStartLocalGame,
     handleStartEngineGame,
     engineLevel,
     humanColorPref,
     timeControl,
+    initialMatchFen,
   ]);
 
   const statusNote = useMemo(() => {
+    if (gameMode === 'compose') {
+      return 'Composable Chessboard · Set any White or Black situation';
+    }
+    if (gameMode === 'angel-vs-angel' && angelDuelPaused) {
+      return 'Angel vs Angel · Paused';
+    }
     if (!isViewingLatest && !isReplayMode) {
       return `Inspecting Ply ${clampedViewPly}/${activeMoves.length}`;
     }
@@ -5185,7 +6155,15 @@ export default function App() {
       return `Waiting for Opponent · Room ${activeRoom.id}`;
     }
     return null;
-  }, [isViewingLatest, isReplayMode, clampedViewPly, activeMoves.length, gameMode, activeRoom]);
+  }, [
+    gameMode,
+    angelDuelPaused,
+    isViewingLatest,
+    isReplayMode,
+    clampedViewPly,
+    activeMoves.length,
+    activeRoom,
+  ]);
 
   const angelCandidate = useMemo(() => {
     if (gameMode === 'multiplayer') return null;
@@ -5201,13 +6179,13 @@ export default function App() {
     if (treeStatusMode === 'developing') {
       return 'Developing full search tree...';
     }
-    if (treeStatusMode === 'holding') {
+    if (treeBrowser !== null) {
       return isThinkingAi
         ? 'Browsing simulations · click Continue to play move'
         : 'Browsing simulations · click Done to close';
     }
     return null;
-  }, [isThinkingAi, treeStatusMode]);
+  }, [isThinkingAi, treeStatusMode, treeBrowser]);
 
   return (
     <div
@@ -5408,10 +6386,171 @@ export default function App() {
                   {isSoundVoiceActive ? 'Voice' : 'Off'}
                 </span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (gameMode === 'compose') {
+                    handleCloseBoardComposer();
+                  } else {
+                    handleOpenBoardComposer('current');
+                  }
+                }}
+                aria-pressed={gameMode === 'compose'}
+                title={
+                  gameMode === 'compose'
+                    ? 'Exit Composable Chessboard'
+                    : 'Open Composable Chessboard (set any White or Black match position)'
+                }
+                className={`pointer-events-auto inline-flex items-center gap-1 h-[22px] px-1.5 rounded border text-[9.5px] leading-none font-medium transition-colors cursor-pointer ${
+                  gameMode === 'compose'
+                    ? 'bg-[#2a2112]/90 hover:bg-[#382b16] border-[#e5c176] text-[#f5dba1]'
+                    : 'bg-black/55 hover:bg-black/80 border-[#d6ae63]/40 text-[#e8cf97]'
+                }`}
+              >
+                <SlidersHorizontal className="w-3 h-3" />
+                <span className="hidden sm:inline">
+                  {gameMode === 'compose' ? 'Exit Compose' : 'Compose'}
+                </span>
+              </button>
             </>
           );
         })()}
       </div>
+
+      {/* Non-Obstructive Angel vs Angel Live Duel Control Strip */}
+      {gameMode === 'angel-vs-angel' && !activeResult && (
+        <div className="fixed top-9 sm:top-11 left-1/2 -translate-x-1/2 z-[32] flex flex-wrap items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#11151e]/92 border border-[#d6ae63]/40 shadow-xl">
+          <span className="inline-flex items-center gap-1 text-[10.5px] font-semibold text-[#f3cf83] pr-1 whitespace-nowrap">
+            <Swords className="w-3.5 h-3.5 text-[#d6ae63]" />
+            Angel vs Angel
+          </span>
+          <button
+            type="button"
+            onClick={() => setAngelDuelPaused((p) => !p)}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white/8 hover:bg-white/15 border border-white/14 text-[10.5px] font-medium text-[#f4efe4] transition-colors cursor-pointer whitespace-nowrap"
+          >
+            {angelDuelPaused ? (
+              <>
+                <Play className="w-3 h-3 text-[#4ade80]" />
+                Resume
+              </>
+            ) : (
+              <>
+                <Pause className="w-3 h-3 text-[#f3cf83]" />
+                Pause
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleTakeOverFromAngelDuel('w')}
+            className="px-2 py-0.5 rounded bg-white/8 hover:bg-white/15 border border-white/14 text-[10.5px] font-medium text-[#f4efe4] transition-colors cursor-pointer whitespace-nowrap"
+          >
+            Play as White
+          </button>
+          <button
+            type="button"
+            onClick={() => handleTakeOverFromAngelDuel('b')}
+            className="px-2 py-0.5 rounded bg-white/8 hover:bg-white/15 border border-white/14 text-[10.5px] font-medium text-[#f4efe4] transition-colors cursor-pointer whitespace-nowrap"
+          >
+            Play as Black
+          </button>
+          <button
+            type="button"
+            onClick={() => handleOpenBoardComposer('current')}
+            className="px-2 py-0.5 rounded bg-[#2a2112]/85 hover:bg-[#382c18] border border-[#d6ae63]/45 text-[10.5px] font-medium text-[#f3cf83] transition-colors cursor-pointer whitespace-nowrap"
+          >
+            Edit Board
+          </button>
+        </div>
+      )}
+
+      {/* Composable Chessboard Studio HUD (3D & 2D synchronized piece placement + match launcher) */}
+      {gameMode === 'compose' && (
+        <BoardComposerHud
+          state={composerState}
+          validation={composerValidation}
+          activeTool={composerTool}
+          selectedSquare={selectedSquare}
+          cameraPreset={cameraPreset}
+          engineLevel={engineLevel}
+          whiteAngelLevel={whiteAngelLevel}
+          blackAngelLevel={blackAngelLevel}
+          onSelectTool={(tool) => {
+            setComposerTool(tool);
+            if (tool.kind !== 'move') {
+              setSelectedSquare(null);
+            }
+          }}
+          onSquareInteract={(sq) => {
+            handleComposerSquareInteract(sq);
+          }}
+          onChangeTurn={(turn) => {
+            setComposerState((prev) => ({ ...prev, turn, enPassant: '-' }));
+          }}
+          onToggleCastling={(flag: keyof CastlingFlags) => {
+            setComposerState((prev) => {
+              const nextCastling = { ...prev.castling, [flag]: !prev.castling[flag] };
+              return {
+                ...prev,
+                castling: sanitizeCastlingFlags(prev.pieces, nextCastling),
+              };
+            });
+          }}
+          onChangeEnPassant={(sq) => {
+            setComposerState((prev) => ({ ...prev, enPassant: sq }));
+          }}
+          onLoadPresetFen={(fen) => {
+            setSelectedSquare(null);
+            setComposerState(parseFenToComposerState(fen));
+          }}
+          onLoadCurrentMatchFen={() => {
+            setSelectedSquare(null);
+            setComposerState(parseFenToComposerState(localFen));
+          }}
+          onClearBoard={() => {
+            setSelectedSquare(null);
+            setComposerState(parseFenToComposerState('8/8/8/8/8/8/8/8 w - - 0 1'));
+          }}
+          onInvertColors={() => {
+            setSelectedSquare(null);
+            setComposerState((prev) => invertComposerColors(prev));
+          }}
+          onApplyRawFen={(rawFen) => {
+            const trimmed = rawFen.trim();
+            if (!trimmed) return false;
+            const ranks = trimmed.split(/\s+/)[0]?.split('/') ?? [];
+            if (ranks.length !== 8) return false;
+            setSelectedSquare(null);
+            setComposerState(parseFenToComposerState(trimmed));
+            return true;
+          }}
+          onSelectCameraPreset={handleSelectCameraPreset}
+          onChangeEngineLevel={setEngineLevel}
+          onChangeWhiteAngelLevel={setWhiteAngelLevel}
+          onChangeBlackAngelLevel={setBlackAngelLevel}
+          onRunVsAngel={(playerColor) => {
+            if (!composerValidation.valid) return;
+            handleStartEngineGame(
+              engineLevel,
+              playerColor,
+              timeControl,
+              'new_match',
+              composerValidation.fen,
+            );
+          }}
+          onRunAngelVsAngel={() => {
+            if (!composerValidation.valid) return;
+            handleStartAngelVsAngelGame(timeControl, composerValidation.fen);
+          }}
+          onRunPassAndPlay={() => {
+            if (!composerValidation.valid) return;
+            handleStartLocalGame(timeControl, 'new_match', composerValidation.fen);
+          }}
+          onCloseComposer={handleCloseBoardComposer}
+        />
+      )}
 
       {/* Transparent Bottom-Left Full Screen / Reduce Button + Prominent Version Mark */}
       <div
@@ -5466,27 +6605,31 @@ export default function App() {
         onToggleCollapse={() => setDockCollapsed((c) => !c)}
         onPrimaryAction={handlePrimaryHeaderAction}
         gameMode={gameMode}
-        onStartLocalGame={handleStartLocalGame}
-        onStartEngineGame={handleStartEngineGame}
+        onStartLocalGame={(tc) => handleStartLocalGame(tc)}
+        onStartEngineGame={(lvl, side, tc) => handleStartEngineGame(lvl, side, tc)}
+        onStartAngelVsAngelGame={(tc) => handleStartAngelVsAngelGame(tc)}
+        onOpenBoardComposer={handleOpenBoardComposer}
         engineLevel={engineLevel}
         onChangeEngineLevel={(lvl) => {
           setEngineLevel(lvl);
           if (gameMode !== 'engine') {
-            handleStartEngineGame(lvl, humanColorPref, timeControl, 'none');
+            handleStartEngineGame(lvl, humanColorPref, timeControl, 'none', initialMatchFen);
           }
           announceControlEvent(createEngineLevelMessage(lvl));
         }}
         humanColorVsAi={humanColorPref}
         onChangeHumanColorVsAi={(side) => {
-          handleStartEngineGame(engineLevel, side, timeControl);
+          handleStartEngineGame(engineLevel, side, timeControl, 'intro', initialMatchFen);
         }}
         timeControl={timeControl}
         onChangeTimeControl={(tc) => {
           setTimeControl(tc);
           if (gameMode === 'engine') {
-            handleStartEngineGame(engineLevel, humanColorPref, tc);
+            handleStartEngineGame(engineLevel, humanColorPref, tc, 'intro', initialMatchFen);
+          } else if (gameMode === 'angel-vs-angel') {
+            handleStartAngelVsAngelGame(tc, initialMatchFen);
           } else if (gameMode === 'local') {
-            handleStartLocalGame(tc);
+            handleStartLocalGame(tc, 'none', initialMatchFen);
           }
         }}
         cameraPreset={cameraPreset}
@@ -5596,7 +6739,7 @@ export default function App() {
           const from = uci.slice(0, 2);
           const to = uci.slice(2, 4);
           if (uci.length === 4) {
-            const p = displayedChess.get(from as Square);
+            const p = displayedChess?.get(from as Square);
             if (p && p.type === 'p' && (to[1] === '8' || to[1] === '1')) {
               promptPlayerPawnPromotion(from, to, displayedTurn);
               return;
@@ -5743,7 +6886,12 @@ export default function App() {
           });
         }}
         onCalcPureVideoProgress={(active, currentTime, portraitRect) => {
-          sceneRef.current?.syncCalcPureTree(active, currentTime, portraitRect);
+          const snap = getAngelVideoOverridesSnapshot();
+          sceneRef.current?.syncCalcPureTree(active, currentTime, portraitRect, {
+            offsetX: getCalcPureTreeOffsetX(snap),
+            offsetY: getCalcPureTreeOffsetY(snap),
+            density: getCalcPureTreeDensity(snap),
+          });
         }}
         danceWithStarsActive={danceStarsActive}
         onSelectTreeSimulation={handleSelectTreeSimulation}
@@ -5754,7 +6902,9 @@ export default function App() {
         onExportTreeJpg={handleToggleFrontalTreeView}
         frontalTreeViewOpen={frontalTreeViewOpen}
         thinkingLinesProjected={thinkingLinesProjected}
+        linesEnabled={showSearchTree}
         onSwitchOffThinkingLines={handleSwitchOffThinkingLines}
+        onSwitchOnThinkingLines={handleSwitchOnThinkingLines}
         proposeThreeMoves={
           !suppressTreeAndThreeMoves || Boolean(treeBrowser) || frontalTreeViewOpen
         }

@@ -3,25 +3,51 @@ import type { BoardSkinId, MoveRecord, PieceColor, PieceType, SavedGame, TimeCon
 
 const ARCHIVE_STORAGE_KEY = 'staunton3d_saved_games_v1';
 
+const DEFAULT_START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
 export function buildPgnFromMoves(
   moves: MoveRecord[],
-  meta: { whiteName: string; blackName: string; resultLabel: string; dateIso: string },
+  meta: {
+    whiteName: string;
+    blackName: string;
+    resultLabel: string;
+    dateIso: string;
+    initialFen?: string;
+  },
 ): string {
   const datePart = meta.dateIso.slice(0, 10).replace(/-/g, '.');
-  const headers = [
+  const headerLines = [
     `[Event "ChessAngel 3D Match"]`,
     `[Date "${datePart}"]`,
     `[White "${meta.whiteName}"]`,
     `[Black "${meta.blackName}"]`,
     `[Result "${meta.resultLabel}"]`,
-  ].join('\n');
+  ];
+  if (meta.initialFen && meta.initialFen !== DEFAULT_START_FEN) {
+    headerLines.push(`[SetUp "1"]`);
+    headerLines.push(`[FEN "${meta.initialFen}"]`);
+  }
+  const headers = headerLines.join('\n');
 
   const tokens: string[] = [];
-  for (let i = 0; i < moves.length; i += 2) {
-    const moveNum = Math.floor(i / 2) + 1;
-    const w = moves[i]?.san ?? '';
-    const b = moves[i + 1]?.san ?? '';
-    tokens.push(b ? `${moveNum}. ${w} ${b}` : `${moveNum}. ${w}`);
+  const startBlack =
+    Boolean(meta.initialFen && meta.initialFen.split(/\s+/)[1] === 'b') &&
+    moves[0]?.color === 'b';
+  if (startBlack && moves.length > 0) {
+    tokens.push(`1... ${moves[0].san}`);
+    for (let i = 1; i < moves.length; i += 2) {
+      const moveNum = Math.floor((i + 1) / 2) + 1;
+      const w = moves[i]?.san ?? '';
+      const b = moves[i + 1]?.san ?? '';
+      tokens.push(b ? `${moveNum}. ${w} ${b}` : `${moveNum}. ${w}`);
+    }
+  } else {
+    for (let i = 0; i < moves.length; i += 2) {
+      const moveNum = Math.floor(i / 2) + 1;
+      const w = moves[i]?.san ?? '';
+      const b = moves[i + 1]?.san ?? '';
+      tokens.push(b ? `${moveNum}. ${w} ${b}` : `${moveNum}. ${w}`);
+    }
   }
   return `${headers}\n\n${tokens.join(' ')} ${meta.resultLabel}`.trim();
 }
@@ -229,6 +255,7 @@ export function parseImportedSavedGame(rawText: string, fileName?: string): Save
             mode:
               candidate.mode === 'local' ||
               candidate.mode === 'engine' ||
+              candidate.mode === 'angel-vs-angel' ||
               candidate.mode === 'multiplayer' ||
               candidate.mode === 'classic'
                 ? candidate.mode
@@ -243,12 +270,27 @@ export function parseImportedSavedGame(rawText: string, fileName?: string): Save
                 : '10+0',
             dateIso,
             moves: validMoves,
+            initialFen:
+              typeof candidate.initialFen === 'string' && candidate.initialFen.trim()
+                ? candidate.initialFen.trim()
+                : undefined,
             finalFen,
             pgn:
               typeof candidate.pgn === 'string' && candidate.pgn.trim()
                 ? candidate.pgn
-                : buildPgnFromMoves(validMoves, { whiteName, blackName, resultLabel, dateIso }),
+                : buildPgnFromMoves(validMoves, {
+                    whiteName,
+                    blackName,
+                    resultLabel,
+                    dateIso,
+                    initialFen:
+                      typeof candidate.initialFen === 'string'
+                        ? candidate.initialFen
+                        : undefined,
+                  }),
             engineLevel: candidate.engineLevel,
+            whiteAngelLevel: candidate.whiteAngelLevel,
+            blackAngelLevel: candidate.blackAngelLevel,
             humanColor: candidate.humanColor === 'b' ? 'b' : 'w',
             humanColorPref:
               candidate.humanColorPref === 'w' ||
