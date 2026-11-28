@@ -275,24 +275,24 @@ const BRANCH_FRAG = /* glsl */ `
     if (reveal <= 0.004 || uOpacity <= 0.004) discard;
 
     float d = abs(vUv.y - 0.5) * 2.0; // 0 = branch centerline, 1 = bark outer edge
-    float bodyMask = 1.0 - smoothstep(0.74, 1.0, d);
-    float edgeHighlight = exp(-pow((d - 0.64) / 0.22, 2.0));
+    float bodyMask = 1.0 - smoothstep(0.68, 0.96, d);
+    float edgeHighlight = exp(-pow((d - 0.56) / 0.22, 2.0));
 
     // Organic braided woodgrain & golden sap filaments running along branch length (matches calc_pure.mp4!)
-    float grain1 = 0.5 + 0.5 * sin(vUv.y * 20.0 + vTime * 34.0 + sin(vTime * 12.0) * 1.4);
-    float grain2 = 0.5 + 0.5 * cos(vUv.y * 12.0 - vTime * 24.0);
+    float grain1 = 0.5 + 0.5 * sin(vUv.y * 18.0 + vTime * 34.0 + sin(vTime * 12.0) * 1.4);
+    float grain2 = 0.5 + 0.5 * cos(vUv.y * 11.0 - vTime * 24.0);
     float barkRidge = smoothstep(0.45, 0.92, grain1 * 0.65 + grain2 * 0.35);
 
     vec3 darkBark = vec3(0.24, 0.09, 0.03);     // deep rich mahogany bark shadow
     vec3 warmCopper = vec3(0.68, 0.34, 0.09);   // burnished copper-chestnut wood
     vec3 goldHighlight = vec3(1.0, 0.80, 0.32); // luminous golden rim & sap highlight
-    vec3 crimsonVein = vec3(0.95, 0.14, 0.22);  // intertwined ruby-crimson energy filament on thick trunks/roots
+    vec3 crimsonVein = vec3(0.95, 0.14, 0.22);  // intertwined ruby-crimson energy filament on roots/boughs
 
-    vec3 col = mix(darkBark, warmCopper, 0.42 + 0.42 * barkRidge);
+    vec3 col = mix(darkBark, warmCopper, 0.44 + 0.42 * barkRidge);
     col = mix(col, goldHighlight, edgeHighlight * 0.68 + pow(barkRidge, 2.4) * 0.38);
 
-    // Subtle flowing golden sap shimmer & crimson vein on thick boughs/roots
-    float veinWave = exp(-pow((vUv.y - (0.5 + 0.26 * sin(vTime * 22.0))) / 0.12, 2.0));
+    // Subtle flowing golden sap shimmer & crimson vein on roots/boughs
+    float veinWave = exp(-pow((vUv.y - (0.5 + 0.24 * sin(vTime * 22.0))) / 0.14, 2.0));
     float sapPulse = 0.72 + 0.28 * sin(vTime * 16.0 - uClock * 3.4);
     col = mix(col, crimsonVein * (0.9 + 0.35 * sapPulse), vVein * veinWave * 0.85);
     col += goldHighlight * (0.14 * sapPulse * edgeHighlight);
@@ -302,9 +302,9 @@ const BRANCH_FRAG = /* glsl */ `
     vec3 sproutGlow = vec3(0.56, 1.0, 0.46);
     col = mix(col, sproutGlow, clamp(tipGlow * 0.88, 0.0, 0.9));
 
-    // Soft glowing green-gold halo outside the solid bark rim
-    float outerHalo = exp(-d * d * 3.8) * 0.26;
-    float alpha = clamp((bodyMask * 0.96 + outerHalo + tipGlow * 0.35) * reveal * uOpacity, 0.0, 1.0);
+    // Tight glowing rim outside the slender bark so thin twigs stay crisp without looking bloated
+    float outerHalo = exp(-d * d * 6.5) * 0.16;
+    float alpha = clamp((bodyMask * 0.96 + outerHalo + tipGlow * 0.28) * reveal * uOpacity, 0.0, 1.0);
     if (alpha <= 0.005) discard;
 
     gl_FragColor = vec4(col, alpha);
@@ -601,8 +601,8 @@ export class CalcPureTree3D {
         .addScaledVector(depthAxis, (rand() - 0.5) * 0.24)
         .normalize();
 
-      const baseH = (0.145 + rand() * 0.085) * unitScale * sizeScale;
-      const baseW = baseH * (0.56 + rand() * 0.14);
+      const baseH = (0.105 + rand() * 0.062) * unitScale * sizeScale;
+      const baseW = baseH * (0.52 + rand() * 0.14);
       const tint = LEAF_TINTS[Math.floor(rand() * LEAF_TINTS.length)];
 
       this.leaves.push({
@@ -659,8 +659,9 @@ export class CalcPureTree3D {
         curDir.normalize();
 
         const nextPos = curPos.clone().addScaledVector(curDir, stepLen);
-        const w0 = baseWidth * (1.0 - 0.46 * u0);
-        const w1 = baseWidth * (1.0 - 0.46 * u1);
+        const minTwigW = 0.0034 * unitScale;
+        const w0 = Math.max(minTwigW, baseWidth * (1.0 - 0.56 * u0));
+        const w1 = Math.max(minTwigW, baseWidth * (1.0 - 0.56 * u1));
         const segT0 = tStart + tSpan * u0;
         const segT1 = tStart + tSpan * u1;
 
@@ -710,7 +711,7 @@ export class CalcPureTree3D {
             nextPos,
             forkDir,
             length * (0.56 + rand() * 0.16),
-            w1 * 0.72,
+            w1 * 0.62,
             segT1,
             Math.max(0.08, tSpan * 0.68),
             forkSide * (0.16 + rand() * 0.18),
@@ -748,7 +749,7 @@ export class CalcPureTree3D {
             curPos,
             childDir,
             length * (0.58 + rand() * 0.18),
-            baseWidth * 0.54,
+            baseWidth * 0.42,
             tStart + tSpan,
             Math.max(0.08, tSpan * 0.65),
             (side === 0 ? (rand() < 0.5 ? -0.5 : 0.5) : side) * (0.18 + rand() * 0.16),
@@ -867,7 +868,15 @@ export class CalcPureTree3D {
             ? portraitWorldH * 0.72
             : portraitWorldH * 0.58) * spec.reachFactor;
 
-      const baseWidth = 0.072 * unitScale * spec.thickness;
+      // Match the exact slender outer-border branch & twig widths of `angel_case_calc_pure.mp4`
+      // (top crown twigs ~2.5-4px, side boughs ~3.5-6px, bottom gnarled roots ~6-9px on a 752px frame)
+      const edgeBaseWidthFactor =
+        spec.edge === 'top'
+          ? 0.0155
+          : spec.edge === 'bottom' || spec.isRoot
+            ? 0.0255
+            : 0.0195;
+      const baseWidth = edgeBaseWidthFactor * unitScale * spec.thickness;
       const tSpan = spec.isRoot ? 0.34 : 0.32;
 
       growOrganicBranch(

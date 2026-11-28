@@ -1,6 +1,9 @@
-// 100% procedural Web Audio synthesizer for wooden Staunton chess acoustics (zero external audio files)
+// Procedural Web Audio synthesizer for wooden Staunton chess acoustics + custom Udo bark playback
 
+import { withAssetBuildVersion } from '../chess/assetVersion';
 import { opponentSpeech } from '../chess/opponentVoice';
+
+const DEFAULT_BAKED_UDO_BARK_URL = '/assets/aistudio/udo_bark.mp3';
 
 interface MoveWoodVariant {
   startFreq: number;
@@ -253,7 +256,7 @@ class ChessSoundEngine {
   private lastMoveIdx = -1;
   private lastCaptureIdx = -1;
   private lastCheckIdx = -1;
-  private udoBarkAudioUrl: string | null = null;
+  private udoBarkAudioUrl: string | null = withAssetBuildVersion(DEFAULT_BAKED_UDO_BARK_URL);
   private udoBarkRawBytes: ArrayBuffer | null = null;
   private udoBarkDecodedBuffer: AudioBuffer | null = null;
   private udoBarkFetchPromise: Promise<ArrayBuffer | null> | null = null;
@@ -266,6 +269,9 @@ class ChessSoundEngine {
 
   public unlock(): void {
     this.ensureContext();
+    if (this.udoBarkAudioUrl && !this.udoBarkRawBytes && typeof window !== 'undefined') {
+      void this.preloadUdoBarkBytes(this.udoBarkAudioUrl);
+    }
   }
 
   public setUdoBarkAudioUrl(url: string | null): void {
@@ -296,30 +302,30 @@ class ChessSoundEngine {
     if (this.udoBarkFetchPromise && this.udoBarkAudioUrl === url) {
       return this.udoBarkFetchPromise;
     }
+    const cleanFallbackUrl = url.split('?')[0];
+    const candidates = cleanFallbackUrl !== url ? [url, cleanFallbackUrl] : [url];
+
     const p = (async () => {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) {
-          if (this.udoBarkAudioUrl === url) this.udoBarkAudioUrl = null;
-          return null;
+      for (const candidateUrl of candidates) {
+        try {
+          const res = await fetch(candidateUrl, { cache: 'default' });
+          if (!res.ok) continue;
+          const ct = (res.headers.get('content-type') || '').toLowerCase();
+          if (ct.includes('text/html')) continue;
+          const bytes = await res.arrayBuffer();
+          if (bytes.byteLength < 64) continue;
+          if (this.udoBarkAudioUrl === url) {
+            this.udoBarkRawBytes = bytes;
+          }
+          return bytes;
+        } catch {
+          // Try next candidate or retry on next playback without wiping custom bark URL
         }
-        const ct = (res.headers.get('content-type') || '').toLowerCase();
-        if (ct.includes('text/html')) {
-          if (this.udoBarkAudioUrl === url) this.udoBarkAudioUrl = null;
-          return null;
-        }
-        const bytes = await res.arrayBuffer();
-        if (bytes.byteLength < 64) {
-          if (this.udoBarkAudioUrl === url) this.udoBarkAudioUrl = null;
-          return null;
-        }
-        if (this.udoBarkAudioUrl === url) {
-          this.udoBarkRawBytes = bytes;
-        }
-        return bytes;
-      } catch {
-        return null;
       }
+      if (this.udoBarkAudioUrl === url && !this.udoBarkRawBytes) {
+        this.udoBarkFetchPromise = null;
+      }
+      return null;
     })();
     this.udoBarkFetchPromise = p;
     return p;
@@ -332,12 +338,13 @@ class ChessSoundEngine {
     this.stopWildDogBarkLoop();
     const seq = ++this.udoBarkLoopSeq;
     const url = this.udoBarkAudioUrl;
+    const cleanFallbackUrl = url.split('?')[0];
     const clampedPan = Math.max(-0.95, Math.min(0.95, initialPan));
 
-    const startHtmlLoop = () => {
+    const startHtmlLoop = (srcUrl = url, allowCleanFallback = true) => {
       if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
       try {
-        const audio = new Audio(url);
+        const audio = new Audio(srcUrl);
         audio.loop = true;
         audio.preload = 'auto';
         audio.volume = 0.92;
@@ -346,9 +353,14 @@ class ChessSoundEngine {
           if (this.udoBarkLoopHtmlAudio === audio) {
             this.udoBarkLoopHtmlAudio = null;
           }
+          if (allowCleanFallback && cleanFallbackUrl !== srcUrl) {
+            startHtmlLoop(cleanFallbackUrl, false);
+          }
         });
       } catch {
-        // ignore
+        if (allowCleanFallback && cleanFallbackUrl !== srcUrl) {
+          startHtmlLoop(cleanFallbackUrl, false);
+        }
       }
     };
 
@@ -384,26 +396,41 @@ class ChessSoundEngine {
     };
 
     const ctx = this.ensureContext();
-    if (ctx && this.udoBarkDecodedBuffer) {
+    if (ctx && this.udoBarkDecodedBuffer && ctx.state === 'running') {
       startWebAudioLoop(ctx, this.udoBarkDecodedBuffer);
       return true;
     }
 
     if (ctx) {
       void (async () => {
-        const bytes = await this.preloadUdoBarkBytes(url);
-        if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
-        if (bytes) {
+        if (ctx.state === 'suspended') {
           try {
-            const decoded = await ctx.decodeAudioData(bytes.slice(0));
-            if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
-            if (this.udoBarkAudioUrl === url) {
-              this.udoBarkDecodedBuffer = decoded;
-            }
-            startWebAudioLoop(ctx, decoded);
-            return;
+            await ctx.resume();
           } catch {
-            // Fall through to HTMLAudio loop
+            // Fall through to HTMLAudio loop if AudioContext cannot resume
+          }
+        }
+        if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
+
+        if (ctx.state === 'running') {
+          if (this.udoBarkDecodedBuffer && this.udoBarkAudioUrl === url) {
+            startWebAudioLoop(ctx, this.udoBarkDecodedBuffer);
+            return;
+          }
+          const bytes = await this.preloadUdoBarkBytes(url);
+          if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
+          if (bytes) {
+            try {
+              const decoded = await ctx.decodeAudioData(bytes.slice(0));
+              if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
+              if (this.udoBarkAudioUrl === url) {
+                this.udoBarkDecodedBuffer = decoded;
+              }
+              startWebAudioLoop(ctx, decoded);
+              return;
+            } catch {
+              // Fall through to HTMLAudio loop (never synthesize over user's MP3)
+            }
           }
         }
         startHtmlLoop();

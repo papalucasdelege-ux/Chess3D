@@ -79,14 +79,14 @@ const BOTTOM_ROOT_SEEDS: ReadonlyArray<{
   startOffset: number;
   hasVein: boolean;
 }> = [
-  { tEdge: 0.08, fanBias: -0.34, curveBend: -0.22, thickness: 5.4, startOffset: 0.14, hasVein: true },
-  { tEdge: 0.19, fanBias: -0.24, curveBend: -0.16, thickness: 6.2, startOffset: 0.13, hasVein: true },
-  { tEdge: 0.31, fanBias: -0.15, curveBend: -0.12, thickness: 6.8, startOffset: 0.12, hasVein: true },
-  { tEdge: 0.43, fanBias: -0.06, curveBend: 0.11, thickness: 7.4, startOffset: 0.11, hasVein: true },
-  { tEdge: 0.55, fanBias: 0.07, curveBend: -0.11, thickness: 7.2, startOffset: 0.11, hasVein: true },
-  { tEdge: 0.67, fanBias: 0.16, curveBend: 0.14, thickness: 6.5, startOffset: 0.13, hasVein: true },
-  { tEdge: 0.79, fanBias: 0.25, curveBend: 0.17, thickness: 5.8, startOffset: 0.14, hasVein: true },
-  { tEdge: 0.91, fanBias: 0.34, curveBend: 0.21, thickness: 5.0, startOffset: 0.16, hasVein: false },
+  { tEdge: 0.08, fanBias: -0.34, curveBend: -0.22, thickness: 2.3, startOffset: 0.14, hasVein: true },
+  { tEdge: 0.19, fanBias: -0.24, curveBend: -0.16, thickness: 2.7, startOffset: 0.13, hasVein: true },
+  { tEdge: 0.31, fanBias: -0.15, curveBend: -0.12, thickness: 3.1, startOffset: 0.12, hasVein: true },
+  { tEdge: 0.43, fanBias: -0.06, curveBend: 0.11, thickness: 3.5, startOffset: 0.11, hasVein: true },
+  { tEdge: 0.55, fanBias: 0.07, curveBend: -0.11, thickness: 3.4, startOffset: 0.11, hasVein: true },
+  { tEdge: 0.67, fanBias: 0.16, curveBend: 0.14, thickness: 2.9, startOffset: 0.13, hasVein: true },
+  { tEdge: 0.79, fanBias: 0.25, curveBend: 0.17, thickness: 2.5, startOffset: 0.14, hasVein: true },
+  { tEdge: 0.91, fanBias: 0.34, curveBend: 0.21, thickness: 2.1, startOffset: 0.16, hasVein: false },
 ];
 
 function createSeededRng(seed: number): () => number {
@@ -144,8 +144,8 @@ function buildRootNetwork(
       const nx = cx + Math.cos(ang) * stepLen;
       const ny = cy + Math.sin(ang) * stepLen;
 
-      const w0 = Math.max(0.65, widthStart * (1 - u0 * 0.58));
-      const w1 = Math.max(0.55, widthStart * (1 - u1 * 0.58));
+      const w0 = Math.max(0.45, widthStart * (1 - u0 * 0.62));
+      const w1 = Math.max(0.38, widthStart * (1 - u1 * 0.62));
       const t0 = tStart + tSpan * u0;
       const t1 = tStart + tSpan * u1;
 
@@ -158,7 +158,7 @@ function buildRootNetwork(
         w1,
         t0,
         t1,
-        hasVein: hasVein && w0 >= 2.2 * scale,
+        hasVein: hasVein && w0 >= 1.15 * scale,
         sway: Math.min(1, 0.15 + (ny / Math.max(80, h)) * 0.85),
       });
 
@@ -172,8 +172,8 @@ function buildRootNetwork(
           x: nx,
           y: ny,
           angle: leafAng,
-          len: (7.5 + rng() * 6.5) * scale * (depth === 0 ? 0.92 : 1.05),
-          wid: (3.2 + rng() * 2.6) * scale,
+          len: (5.8 + rng() * 4.8) * scale * (depth === 0 ? 0.92 : 1.05),
+          wid: (2.3 + rng() * 1.8) * scale,
           appearAt: Math.min(0.95, t1 + 0.025),
           phase: rng() * Math.PI * 2,
           bright: 0.72 + rng() * 0.28,
@@ -207,7 +207,7 @@ function buildRootNetwork(
           ny,
           forkAngle,
           length * (0.48 + rng() * 0.22),
-          w1 * 0.72,
+          w1 * 0.62,
           t1,
           Math.max(0.12, (1 - t1) * 0.58),
           -bend * 0.85,
@@ -440,7 +440,7 @@ export function CalcPureModalRootVeil({
 
         // Warm mahogany outer bark glow
         ctx.strokeStyle = `rgba(148, 72, 22, ${(segAlpha * 0.72).toFixed(3)})`;
-        ctx.lineWidth = width + 2.0;
+        ctx.lineWidth = width + 0.85;
         ctx.beginPath();
         ctx.moveTo(x0, y0);
         ctx.lineTo(x1, y1);
@@ -448,7 +448,7 @@ export function CalcPureModalRootVeil({
 
         // Luminous golden-amber braided bark core
         ctx.strokeStyle = `rgba(232, 168, 66, ${(segAlpha * 0.92).toFixed(3)})`;
-        ctx.lineWidth = Math.max(0.8, width * 0.68);
+        ctx.lineWidth = Math.max(0.55, width * 0.68);
         ctx.beginPath();
         ctx.moveTo(x0, y0);
         ctx.lineTo(x1, y1);
@@ -458,7 +458,7 @@ export function CalcPureModalRootVeil({
         if (s.hasVein) {
           const pulse = 0.78 + 0.22 * Math.sin(animClock * 3.1 - y0 * 0.04);
           ctx.strokeStyle = `rgba(255, 62, 68, ${(segAlpha * 0.62 * pulse).toFixed(3)})`;
-          ctx.lineWidth = Math.max(0.7, width * 0.28);
+          ctx.lineWidth = Math.max(0.5, width * 0.3);
           ctx.beginPath();
           ctx.moveTo(x0, y0);
           ctx.lineTo(x1, y1);
@@ -469,7 +469,7 @@ export function CalcPureModalRootVeil({
         if (frac > 0.05 && frac < 0.98) {
           ctx.fillStyle = `rgba(175, 255, 142, ${(segAlpha * 0.95).toFixed(3)})`;
           ctx.beginPath();
-          ctx.arc(x1, y1, Math.max(1.8, width * 0.55), 0, Math.PI * 2);
+          ctx.arc(x1, y1, Math.max(1.2, width * 0.52), 0, Math.PI * 2);
           ctx.fill();
         }
       }
