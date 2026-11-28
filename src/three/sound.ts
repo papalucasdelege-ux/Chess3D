@@ -253,7 +253,7 @@ class ChessSoundEngine {
   private lastMoveIdx = -1;
   private lastCaptureIdx = -1;
   private lastCheckIdx = -1;
-  private udoBarkAudioUrl: string | null = '/assets/aistudio/udo_bark.mp3';
+  private udoBarkAudioUrl: string | null = null;
   private udoBarkRawBytes: ArrayBuffer | null = null;
   private udoBarkDecodedBuffer: AudioBuffer | null = null;
   private udoBarkFetchPromise: Promise<ArrayBuffer | null> | null = null;
@@ -299,11 +299,20 @@ class ChessSoundEngine {
     const p = (async () => {
       try {
         const res = await fetch(url);
-        if (!res.ok) return null;
+        if (!res.ok) {
+          if (this.udoBarkAudioUrl === url) this.udoBarkAudioUrl = null;
+          return null;
+        }
         const ct = (res.headers.get('content-type') || '').toLowerCase();
-        if (ct.includes('text/html')) return null;
+        if (ct.includes('text/html')) {
+          if (this.udoBarkAudioUrl === url) this.udoBarkAudioUrl = null;
+          return null;
+        }
         const bytes = await res.arrayBuffer();
-        if (bytes.byteLength < 64) return null;
+        if (bytes.byteLength < 64) {
+          if (this.udoBarkAudioUrl === url) this.udoBarkAudioUrl = null;
+          return null;
+        }
         if (this.udoBarkAudioUrl === url) {
           this.udoBarkRawBytes = bytes;
         }

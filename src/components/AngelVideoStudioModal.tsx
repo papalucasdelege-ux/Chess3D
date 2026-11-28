@@ -14,9 +14,12 @@ import {
   Music,
   Play,
   Plus,
+  RefreshCw,
   Repeat,
   RotateCcw,
   Ruler,
+  Save,
+  Search,
   Sparkles,
   Trash2,
   Unlock,
@@ -53,6 +56,8 @@ import {
   getAngelIdleVideoPool,
   getAngelVideoOverridesSnapshot,
   getCaseEscapeCueStatus,
+  getCaseSlotEntries,
+  getCaseSlotKey,
   getCaseSlotKeys,
   getCaseVideoPool,
   getEscapeCueEntries,
@@ -72,6 +77,7 @@ import {
   getVideoSlotMaxPlays,
   LONG_VIDEO_AUTO_NO_CUT_MIN_SEC,
   IS_VIDEO_STUDIO_DEV_ENV,
+  isCaseDynamicMultiSlot,
   isCaseUsingDefaultLipSync,
   isEffectiveCasePlayToEnd,
   isEscapeCueEnabled,
@@ -102,6 +108,10 @@ import {
   updateCalcPureTreeConfig,
   uploadAngelPortraitVideo,
   uploadUdoBarkAudio,
+  bakeAllAngelStudioAssets,
+  getStudioUnbakedCount,
+  markStudioChangeUnbaked,
+  subscribeStudioUnbaked,
   type AngelCompressionPreset,
   type AngelEscapeCueKey,
   type AngelEscapeSlotKey,
@@ -148,6 +158,54 @@ function getTargetCrfForPreset(preset: AngelCompressionPreset): number {
   if (preset === 'balanced_24') return 24;
   if (preset === 'mobile_27') return 27;
   return 21;
+}
+
+type WildcardPredicate = (...fields: Array<string | number | null | undefined>) => boolean;
+
+/**
+ * Compiles a wildcard search query into a case-insensitive matcher over arbitrary text fields.
+ * Supports `*` (any chars), `?` (single char), `|` (OR within token), space-separated AND tokens,
+ * and `!term` negation.
+ */
+function compileWildcardMatcher(rawQuery: string): WildcardPredicate | null {
+  const trimmed = rawQuery.trim();
+  if (!trimmed) return null;
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+
+  const escapeRegex = (s: string) => s.replace(/[.+^${}()[\]\\]/g, '\\$&');
+  const globToRegex = (glob: string): RegExp => {
+    const pattern = escapeRegex(glob).replace(/\*/g, '.*').replace(/\?/g, '.');
+    return new RegExp(pattern, 'i');
+  };
+
+  const compiledTokens = tokens
+    .map((tok) => {
+      const negated = tok.startsWith('!') && tok.length > 1;
+      const body = negated ? tok.slice(1) : tok;
+      const branches = body
+        .split('|')
+        .map((b) => b.trim())
+        .filter(Boolean)
+        .map(globToRegex);
+      if (branches.length === 0) return null;
+      return { negated, branches };
+    })
+    .filter((t): t is { negated: boolean; branches: RegExp[] } => t !== null);
+
+  if (compiledTokens.length === 0) return null;
+
+  return (...fields) => {
+    const haystack = fields
+      .filter((f): f is string | number => f !== null && f !== undefined && f !== '')
+      .map((f) => String(f))
+      .join(' \n ');
+    if (!haystack) return false;
+    return compiledTokens.every(({ negated, branches }) => {
+      const matched = branches.some((re) => re.test(haystack));
+      return negated ? !matched : matched;
+    });
+  };
 }
 
 interface UdoPortraitPixelRulerProps {
@@ -461,6 +519,9 @@ export function AngelVideoStudioModal({
   });
   const [visibleIdleCount, setVisibleIdleCount] = useState<number>(2);
   const [visibleSeductionCount, setVisibleSeductionCount] = useState<number>(3);
+  const [visibleCaseSlotCounts, setVisibleCaseSlotCounts] = useState<Record<string, number>>({
+    hesitate_hint: 3,
+  });
   const [visibleEscapeCounts, setVisibleEscapeCounts] = useState<
     Record<AngelEscapeCueKey, number>
   >({
@@ -475,13 +536,114 @@ export function AngelVideoStudioModal({
   const [compressingUrl, setCompressingUrl] = useState<string | null>(null);
   const [lastCompressRun, setLastCompressRun] = useState<CompressAngelVideosResult | null>(null);
   const [showPixelScale, setShowPixelScale] = useState<boolean>(true);
+  const [unbakedCount, setUnbakedCount] = useState<number>(() => getStudioUnbakedCount());
+  const [bakingAll, setBakingAll] = useState<boolean>(false);
+  const [lastBakedInfo, setLastBakedInfo] = useState<{
+    bakedVideos: number;
+    bakedAudio: number;
+    bakedAt: number;
+  } | null>(null);
+  const [confirmCloseUnbaked, setConfirmCloseUnbaked] = useState<boolean>(false);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const studioBodyRef = useRef<HTMLDivElement | null>(null);
+  const initialHydrationDoneRef = useRef<boolean>(false);
 
   useEffect(() => {
-    void refreshAngelVideoOverrides();
-    return subscribeAngelVideoOverrides(() => {
-      setOverrides({ ...getAngelVideoOverridesSnapshot() });
+    let active = true;
+    void refreshAngelVideoOverrides().finally(() => {
+      if (active) {
+        initialHydrationDoneRef.current = true;
+      }
     });
+    const unsubOverrides = subscribeAngelVideoOverrides(() => {
+      setOverrides({ ...getAngelVideoOverridesSnapshot() });
+      if (initialHydrationDoneRef.current) {
+        markStudioChangeUnbaked();
+      }
+    });
+    const unsubUnbaked = subscribeStudioUnbaked(() => {
+      setUnbakedCount(getStudioUnbakedCount());
+    });
+    return () => {
+      active = false;
+      unsubOverrides();
+      unsubUnbaked();
+    };
   }, []);
+
+  // Guard against accidental preview reload while the developer is working in Video Studio
+  useEffect(() => {
+    if (!IS_VIDEO_STUDIO_DEV_ENV || typeof window === 'undefined') return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (unbakedCount > 0 || busySlot !== null || compressingAll || bakingAll) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [unbakedCount, busySlot, compressingAll, bakingAll]);
+
+  // Restore scroll position seamlessly if the host platform ever refreshes the preview while working
+  useEffect(() => {
+    const el = studioBodyRef.current;
+    if (!el || typeof window === 'undefined') return;
+    try {
+      const savedScroll = Number(window.sessionStorage.getItem('chess_angel_studio_scroll_v1') || '0');
+      if (Number.isFinite(savedScroll) && savedScroll > 0) {
+        el.scrollTop = savedScroll;
+      }
+    } catch {
+      // ignore
+    }
+    const onScroll = () => {
+      try {
+        window.sessionStorage.setItem('chess_angel_studio_scroll_v1', String(Math.round(el.scrollTop)));
+      } catch {
+        // ignore
+      }
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+    };
+  }, []);
+
+  const handleSaveAndBakeAll = async (): Promise<boolean> => {
+    if (bakingAll || !IS_VIDEO_STUDIO_DEV_ENV) return false;
+    setBakingAll(true);
+    setConfirmCloseUnbaked(false);
+    setStatusNote('Saving & baking all Studio videos, audio, and slider settings…');
+    try {
+      const res = await bakeAllAngelStudioAssets();
+      setLastBakedInfo({
+        bakedVideos: res.bakedVideos,
+        bakedAudio: res.bakedAudio,
+        bakedAt: res.bakedAt,
+      });
+      setStatusNote(
+        `SAVED & BAKED: ${res.bakedVideos} videos, ${res.bakedAudio} audio files, and all slider settings are locked in. You can now safely reload or continue.`,
+      );
+      return true;
+    } catch {
+      setStatusNote('Could not save & bake Studio assets. Check your developer Studio session and retry.');
+      return false;
+    } finally {
+      setBakingAll(false);
+    }
+  };
+
+  const handleRequestClose = () => {
+    if (IS_VIDEO_STUDIO_DEV_ENV && unbakedCount > 0 && !confirmCloseUnbaked) {
+      setConfirmCloseUnbaked(true);
+      return;
+    }
+    setConfirmCloseUnbaked(false);
+    onClose();
+  };
 
   const currentCompressionPreset: AngelCompressionPreset =
     overrides.compressionPreset || 'lossless_21';
@@ -1022,6 +1184,278 @@ export function AngelVideoStudioModal({
     },
   ];
 
+  const wildcardMatcher = compileWildcardMatcher(searchQuery);
+  const isSearching = wildcardMatcher !== null;
+
+  const showCompressionSection =
+    !wildcardMatcher ||
+    wildcardMatcher(
+      'Portrait .mp4 Compression Routine',
+      'compression',
+      'crf',
+      'optimize',
+      'bitrate',
+      '560x752',
+      'faststart',
+      'mute_only',
+      currentCompressionPreset,
+    );
+
+  const matchingMusicTracks = musicTracks
+    .map((track, idx) => ({ track, idx }))
+    .filter(
+      ({ track }) =>
+        !wildcardMatcher ||
+        wildcardMatcher(
+          'Background Music Buttons .mp3 soundtrack song audio',
+          track.id,
+          track.title,
+          track.url,
+        ),
+    );
+  const showMusicSection =
+    musicTracks.length > 0 && Boolean(onUploadMusicTrack) && matchingMusicTracks.length > 0;
+
+  const showIdleSection =
+    !wildcardMatcher ||
+    wildcardMatcher(
+      '0. Idle / Quiet Listening Pool',
+      'idle',
+      'quiet',
+      'listening',
+      'idle_1',
+      'idle_2',
+      'idle_3',
+      ANGEL_IDLE_LISTENING_VIDEO_SRC,
+      ...getAngelIdleVideoPool(overrides),
+      ...Object.keys(overrides.idleVariants || {}),
+      ...Object.values(overrides.idleVariants || {}),
+    );
+
+  const showDefaultSpeakingSection =
+    !wildcardMatcher ||
+    wildcardMatcher(
+      'Default Speaking Lip-Movement Fallback',
+      'default',
+      'speaking',
+      'lip-sync',
+      'lip sync',
+      'fallback',
+      overrides.defaultSpeaking,
+      ANGEL_DEFAULT_SPEAKING_VIDEO_SRC,
+    );
+
+  const showModalToggleSection =
+    !wildcardMatcher ||
+    wildcardMatcher(
+      'Angel & Modal — On / Off Dedicated Studio Points',
+      'angel_modal_on',
+      'angel_modal_off',
+      'modal on',
+      'modal off',
+      overrides.cases.angel_modal_on,
+      overrides.cases.angel_modal_off,
+      ANGEL_CASE_VIDEO_MAP.angel_modal_on,
+      ANGEL_CASE_VIDEO_MAP.angel_modal_off,
+    );
+
+  const showThankJanSection =
+    !wildcardMatcher ||
+    wildcardMatcher(
+      'Special Title / Version Click Video — Thank You, Jan',
+      'thank_jan',
+      'thank you jan',
+      'thank_jan.mp3',
+      'version click',
+      overrides.cases.thank_jan,
+      ANGEL_CASE_VIDEO_MAP.thank_jan,
+      overrides.thankJanAudioUrl,
+    );
+
+  const showUdoSection =
+    !wildcardMatcher ||
+    wildcardMatcher(
+      'Special Event Video — White Fluffy Puppy Rampage Udo 3D Board Run',
+      'special:dog_run',
+      'dog_run',
+      'udo',
+      'puppy',
+      'dog',
+      'bark',
+      'udo_bark',
+      'pixel',
+      'jump-out',
+      getAngelDogRunVideoUrl(overrides),
+      overrides.udoBarkAudioUrl,
+    );
+
+  const showHamstersSection =
+    !wildcardMatcher ||
+    wildcardMatcher(
+      'Special 3D Board Idle Event — Mini Hamsters Wild Chase',
+      'hamster',
+      'hamsters',
+      'russian',
+      'mini',
+      'chase',
+      '3d board',
+    );
+
+  const showDanceStarsSection =
+    !wildcardMatcher ||
+    wildcardMatcher(
+      'Special Event Video — Dance with Stars',
+      'special:dance_stars',
+      'dance_stars',
+      'dance',
+      'stars',
+      getAngelDanceStarsVideoUrl(overrides),
+    );
+
+  const showBgTransparencySection =
+    !wildcardMatcher ||
+    wildcardMatcher(
+      'Transparent Black Background — All Chess Angel Videos GPU Exterior Flood Keyer',
+      'transparent',
+      'transparency',
+      'black background',
+      'keyer',
+      'flood',
+      'alpha',
+    );
+
+  const showOpeningFlowchartSection =
+    !wildcardMatcher ||
+    wildcardMatcher(
+      'Special 3D Extension — Opening Flowchart Timer & Density Scaler',
+      'opening',
+      'flowchart',
+      '3d extension',
+      'timer',
+      'density',
+      overrides.cases.opening,
+      ANGEL_CASE_VIDEO_MAP.opening,
+    );
+
+  const showCalcPureTreeSection =
+    !wildcardMatcher ||
+    wildcardMatcher(
+      'Special 3D Extension — Calculation Deep-Branch 3D Tree Positioning & Density',
+      'case:calc_pure',
+      'calc_pure',
+      'calculation',
+      'tree',
+      'branch',
+      'foliage',
+      'offset',
+      'density',
+      '3d extension',
+      overrides.cases.calc_pure,
+      ANGEL_CASE_VIDEO_MAP.calc_pure,
+    );
+
+  const showPromotionSection =
+    !wildcardMatcher ||
+    wildcardMatcher(
+      'Special Board Event Video — Pawn Reaches 8th Row / Promotion Choice',
+      'case:ask_promotion',
+      'ask_promotion',
+      'promotion',
+      'pawn',
+      '8th row',
+      'queen',
+      ...getCaseVideoPool('ask_promotion', overrides),
+    );
+
+  const matchingEscapeSpecs = escapeSpecs.filter(
+    (esc) =>
+      !wildcardMatcher ||
+      wildcardMatcher(
+        'Word-Triggered Escape Overlay Videos',
+        'escape',
+        'overlay',
+        esc.key,
+        esc.shortWord,
+        esc.title,
+        esc.triggerBadge,
+        esc.description,
+        esc.previewTag,
+        ...getEscapeVideoPool(esc.key, overrides),
+      ),
+  );
+  const showEscapeSection = matchingEscapeSpecs.length > 0;
+
+  const showSeductionSection =
+    !wildcardMatcher ||
+    wildcardMatcher(
+      'Special Seduction Distraction Videos Multi-Option Pool Trigger Mode',
+      'case:seduction',
+      'seduction',
+      'distraction',
+      'seduction.mp3',
+      ...getSeductionCaseEntries(overrides).flatMap((e) => [e.key, e.url]),
+      overrides.seductionAudioUrl,
+    );
+
+  const filteredStudioGroups = ANGEL_VIDEO_STUDIO_GROUPS.map((grp) => {
+    const groupOverride =
+      overrides.groups[grp.id as AngelExpressionGroup] || ANGEL_GROUP_VIDEO_MAP[grp.id];
+    const groupHeaderMatches =
+      !wildcardMatcher ||
+      wildcardMatcher(
+        `${grp.number}. ${grp.title}`,
+        `group:${grp.id}`,
+        grp.id,
+        grp.title,
+        groupOverride,
+      );
+    const matchingCases = groupHeaderMatches
+      ? grp.cases
+      : grp.cases.filter((item) => {
+          const [slot1Key, slot2Key] = getCaseSlotKeys(item.caseId);
+          const dynamicEntries = getCaseSlotEntries(item.caseId, overrides);
+          return wildcardMatcher!(
+            item.caseId,
+            `case:${item.caseId}`,
+            slot1Key,
+            slot2Key,
+            item.sampleText,
+            item.sampleClipId,
+            item.v2Text,
+            item.v2ClipId,
+            item.v3Text,
+            item.v3ClipId,
+            ...(item.extraVariants || []).flatMap((ev) => [ev.clipId, ev.text]),
+            grp.title,
+            grp.id,
+            ...dynamicEntries.flatMap((e) => [e.key, e.url]),
+            ...getCaseVideoPool(item.caseId, overrides),
+            overrides.cases[slot1Key],
+            overrides.cases[slot2Key],
+            ANGEL_CASE_VIDEO_MAP[item.caseId as CommentaryCaseId],
+          );
+        });
+    return { grp, cases: matchingCases };
+  }).filter((entry) => entry.cases.length > 0);
+
+  const totalSearchMatches =
+    (showCompressionSection ? 1 : 0) +
+    (showMusicSection ? matchingMusicTracks.length : 0) +
+    (showIdleSection ? 1 : 0) +
+    (showDefaultSpeakingSection ? 1 : 0) +
+    (showModalToggleSection ? 1 : 0) +
+    (showThankJanSection ? 1 : 0) +
+    (showUdoSection ? 1 : 0) +
+    (showHamstersSection ? 1 : 0) +
+    (showDanceStarsSection ? 1 : 0) +
+    (showBgTransparencySection ? 1 : 0) +
+    (showOpeningFlowchartSection ? 1 : 0) +
+    (showCalcPureTreeSection ? 1 : 0) +
+    (showPromotionSection ? 1 : 0) +
+    (showEscapeSection ? matchingEscapeSpecs.length : 0) +
+    (showSeductionSection ? 1 : 0) +
+    filteredStudioGroups.reduce((sum, entry) => sum + entry.cases.length, 0);
+
   return (
     <div className="fixed inset-y-6 left-4 z-50 w-[min(585px,calc(100vw-2rem))] flex flex-col rounded-2xl bg-[#07090d]/98 border border-[#d6ae63]/70 shadow-2xl overflow-hidden">
       {/* Header */}
@@ -1055,6 +1489,53 @@ export function AngelVideoStudioModal({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {IS_VIDEO_STUDIO_DEV_ENV && (
+            <button
+              type="button"
+              disabled={bakingAll || Boolean(busySlot) || compressingAll}
+              onClick={() => void handleSaveAndBakeAll()}
+              title={
+                unbakedCount > 0
+                  ? `${unbakedCount} unbaked change(s) — click to save & bake all videos, audio, and sliders before preview reinitializes`
+                  : 'Save & bake all Studio videos, audio, and slider settings into the app build'
+              }
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap disabled:opacity-60 ${
+                unbakedCount > 0
+                  ? 'border-[#f59e0b] bg-[#3b2507] hover:bg-[#4d310a] text-[#fde68a] shadow-md'
+                  : lastBakedInfo
+                    ? 'border-emerald-400/75 bg-emerald-950/60 hover:bg-emerald-900/65 text-emerald-200'
+                    : 'border-[#d6ae63]/65 bg-[#241b0c] hover:bg-[#332612] text-[#f7e7c2]'
+              }`}
+            >
+              {bakingAll ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+              ) : unbakedCount === 0 && lastBakedInfo ? (
+                <Check className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+              ) : (
+                <Save className="w-3.5 h-3.5 shrink-0" />
+              )}
+              <span>
+                {bakingAll
+                  ? 'Baking…'
+                  : unbakedCount > 0
+                    ? `Save & Bake All (${unbakedCount})`
+                    : lastBakedInfo
+                      ? 'All Baked'
+                      : 'Save & Bake All'}
+              </span>
+            </button>
+          )}
+          {IS_VIDEO_STUDIO_DEV_ENV && lastBakedInfo && unbakedCount === 0 && (
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              title="All videos & settings are baked — click to refresh preview now"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-sky-400/55 bg-sky-950/45 hover:bg-sky-900/55 text-[11px] font-medium text-sky-200 transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <RefreshCw className="w-3 h-3" />
+              <span>Reload</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setShowPixelScale((v) => !v)}
@@ -1082,7 +1563,7 @@ export function AngelVideoStudioModal({
           )}
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleRequestClose}
             title="Close Video Studio"
             className="p-1.5 rounded-md text-[#9aa3b2] hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
           >
@@ -1090,6 +1571,37 @@ export function AngelVideoStudioModal({
           </button>
         </div>
       </div>
+
+      {confirmCloseUnbaked && (
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 bg-[#331d07] border-b border-amber-400/70 text-[11px] text-amber-100">
+          <span>
+            You have <strong>{unbakedCount}</strong> unbaked Studio change{unbakedCount === 1 ? '' : 's'}. Save &amp; bake all videos before closing?
+          </span>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={bakingAll}
+              onClick={async () => {
+                const ok = await handleSaveAndBakeAll();
+                if (ok) onClose();
+              }}
+              className="px-2.5 py-1 rounded bg-[#d6ae63] hover:bg-[#e5c179] text-[#111419] font-semibold cursor-pointer"
+            >
+              Save &amp; Bake, Then Close
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmCloseUnbaked(false);
+                onClose();
+              }}
+              className="px-2 py-1 rounded border border-white/20 bg-white/5 hover:bg-white/10 text-amber-200 cursor-pointer"
+            >
+              Close Without Baking
+            </button>
+          </div>
+        </div>
+      )}
 
       {showPixelScale && (
         <UdoPortraitPixelRuler
@@ -1107,11 +1619,11 @@ export function AngelVideoStudioModal({
 
       {!IS_VIDEO_STUDIO_DEV_ENV ? (
         <div className="px-4 py-2.5 bg-[#29170a] border-b border-amber-500/55 text-[11px] text-amber-200 leading-snug">
-          <strong>Deployed Static / Cloud Run Mode:</strong> Uploading new <code className="text-amber-100">.mp4</code> files here cannot be saved permanently because Netlify &amp; published containers are read-only/ephemeral. Always upload new <code className="text-amber-100">.mp4</code> files inside the <strong>AI Studio Build preview</strong>, then send one chat message (e.g. <em>&quot;save my new videos&quot;</em>) before closing or publishing!
+          <strong>Deployed Static / Cloud Run Mode:</strong> Uploading new <code className="text-amber-100">.mp4</code> files here cannot be saved permanently because Netlify &amp; published containers are read-only/ephemeral. Always upload new <code className="text-amber-100">.mp4</code> files inside the <strong>AI Studio Build preview</strong>, click <strong>Save &amp; Bake All</strong>, then send one chat message before closing or publishing!
         </div>
       ) : (
         <div className="px-4 py-2 bg-[#131b26] border-b border-sky-500/35 text-[11px] text-sky-200 leading-snug">
-          <strong>Permanent Save Tip:</strong> After uploading any new <code className="text-sky-100">.mp4</code> here, send a quick message in AI Studio chat (e.g. <em>&quot;lock in my uploaded videos&quot;</em>) before ending your session so AI Studio commits the files into permanent workspace storage!
+          <strong>Studio Work Lock Active:</strong> Local preview auto-reloads are blocked while you work here and Studio reopens automatically if refreshed. Click <strong>Save &amp; Bake All</strong> at the top when ready to lock all videos &amp; audio into the build.
         </div>
       )}
 
@@ -1121,9 +1633,68 @@ export function AngelVideoStudioModal({
         </div>
       )}
 
+      {/* Wildcard Search Bar */}
+      <div className="px-4 py-2 bg-[#0b0e14] border-b border-white/12 flex items-center gap-2">
+        <div className="relative flex-1 min-w-0">
+          <Search className="w-3.5 h-3.5 text-[#d6ae63] absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              if (studioBodyRef.current) {
+                studioBodyRef.current.scrollTop = 0;
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && searchQuery) {
+                e.stopPropagation();
+                setSearchQuery('');
+              }
+            }}
+            placeholder="Wildcard search (*, ?, |, !) — e.g. check*win, *jan*, udo|hamster, *mp3"
+            aria-label="Wildcard search inside ChessAngel 3D Video Studio"
+            className="w-full pl-8 pr-7 py-1.5 rounded-lg bg-black border border-white/15 focus:border-[#d6ae63]/75 focus:outline-none text-xs text-[#f7f1e5] placeholder:text-[#6f7a8c] font-mono-tabular"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                searchInputRef.current?.focus();
+              }}
+              title="Clear wildcard search"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded text-[#8e98a8] hover:text-white hover:bg-white/10 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+        {isSearching ? (
+          <span
+            className={`text-[10.5px] font-mono-tabular font-semibold px-2 py-1 rounded-md border whitespace-nowrap shrink-0 ${
+              totalSearchMatches > 0
+                ? 'border-[#d6ae63]/55 bg-[#231b0e] text-[#fde68a]'
+                : 'border-rose-500/55 bg-rose-950/45 text-rose-200'
+            }`}
+          >
+            {totalSearchMatches} {totalSearchMatches === 1 ? 'match' : 'matches'}
+          </span>
+        ) : (
+          <span
+            title="Supports * (any characters), ? (single character), | (OR), spaces (AND), and !term (NOT)"
+            className="text-[10px] font-mono-tabular text-[#8e98a8] whitespace-nowrap shrink-0 hidden sm:inline"
+          >
+            * ? | !
+          </span>
+        )}
+      </div>
+
       {/* Body */}
-      <div className="flex-1 overflow-y-auto thin-scroll p-4 space-y-3">
+      <div ref={studioBodyRef} className="flex-1 overflow-y-auto thin-scroll p-4 space-y-3">
         {/* Studio Portrait .mp4 Compression Engine */}
+        {showCompressionSection && (
         <div className="rounded-xl border border-emerald-500/45 bg-gradient-to-b from-[#0a1512] to-[#070a0d] p-3">
           <div className="flex flex-wrap items-start justify-between gap-2.5">
             <div className="min-w-0">
@@ -1221,9 +1792,10 @@ export function AngelVideoStudioModal({
             </div>
           </div>
         </div>
+        )}
 
         {/* Soundtrack / Background Music Buttons (.mp3) */}
-        {musicTracks.length > 0 && onUploadMusicTrack && (
+        {showMusicSection && onUploadMusicTrack && (
           <div className="rounded-xl border border-[#d6ae63]/45 bg-gradient-to-b from-[#15120b] to-[#080a0f] p-3">
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
               <div className="flex items-center gap-1.5">
@@ -1237,7 +1809,7 @@ export function AngelVideoStudioModal({
               </span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {musicTracks.map((track, idx) => {
+              {matchingMusicTracks.map(({ track, idx }) => {
                 const slotKey = `music:${track.id}`;
                 const isBusy = busySlot === slotKey;
                 const isMissing = unavailableMusicIndices.includes(idx);
@@ -1333,6 +1905,7 @@ export function AngelVideoStudioModal({
         )}
 
         {/* 0. Multi-Video Idle / Quiet Listening Pool */}
+        {showIdleSection && (
         <div className="rounded-xl border border-[#d6ae63]/40 bg-black overflow-hidden">
           <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 bg-[#0c1017] border-b border-white/10">
             <div className="min-w-0">
@@ -1462,8 +2035,10 @@ export function AngelVideoStudioModal({
             </div>
           </div>
         </div>
+        )}
 
         {/* Default Speaking Lip-Movement Fallback */}
+        {showDefaultSpeakingSection && (
         <div
           {...makeDropHandlers('default', 'speaking_default', () =>
             onPreviewCase(
@@ -1559,9 +2134,11 @@ export function AngelVideoStudioModal({
             Saying below to activate Default Lip-Sync on some and keep calm Idle Listening on others.
           </div>
         </div>
+        )}
 
         {/* Angel & Modal — On / Off Dedicated Studio Points (Pinned Near Top) */}
         {(() => {
+          if (!showModalToggleSection) return null;
           const modalToggleSlots: ReadonlyArray<{
             caseId: 'angel_modal_on' | 'angel_modal_off';
             title: string;
@@ -1682,6 +2259,7 @@ export function AngelVideoStudioModal({
 
         {/* Special Title / Version Click Video — Thank You, Jan (Pinned Near Top) */}
         {(() => {
+          if (!showThankJanSection) return null;
           const customUrl = overrides.cases.thank_jan;
           const activeUrl = customUrl || ANGEL_CASE_VIDEO_MAP.thank_jan;
           const clipSec = getVideoFileDurationSec(activeUrl, overrides);
@@ -1771,6 +2349,7 @@ export function AngelVideoStudioModal({
 
         {/* Special Event Video — White Fluffy Puppy Rampage (special:dog_run) */}
         {(() => {
+          if (!showUdoSection) return null;
           const dogVideoUrl = getAngelDogRunVideoUrl(overrides);
           const dogClipSec = getVideoFileDurationSec(dogVideoUrl || undefined, overrides);
           const jumpSec = getAngelDogRunJumpSec(overrides);
@@ -2287,6 +2866,7 @@ export function AngelVideoStudioModal({
         })()}
 
         {/* Special 3D Board Idle Event — Mini Hamsters Wild Chase */}
+        {showHamstersSection && (
         <div className="rounded-xl border border-sky-400/45 bg-[#0c1118] overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#101824]">
             <div className="min-w-[260px] flex-1">
@@ -2314,9 +2894,11 @@ export function AngelVideoStudioModal({
             </button>
           </div>
         </div>
+        )}
 
         {/* Special Event Video — Dance with Stars (special:dance_stars) */}
         {(() => {
+          if (!showDanceStarsSection) return null;
           const danceStarsUrl = getAngelDanceStarsVideoUrl(overrides);
           const danceClipSec = getVideoFileDurationSec(danceStarsUrl || undefined, overrides);
           const previewDanceStars = () => onTriggerDanceStarsEvent?.();
@@ -2410,6 +2992,7 @@ export function AngelVideoStudioModal({
 
         {/* Transparent Black Background — All Chess Angel Videos (GPU Exterior Flood Keyer) */}
         {(() => {
+          if (!showBgTransparencySection) return null;
           const bgTrans = getAngelBgTransparency(overrides);
           const bgTransPct = Math.round(bgTrans * 100);
           const isBgTransparent = bgTrans > 0.001;
@@ -2524,6 +3107,7 @@ export function AngelVideoStudioModal({
 
         {/* Special 3D Extension — Opening Flowchart (Timer & Density Scaler) */}
         {(() => {
+          if (!showOpeningFlowchartSection) return null;
           const startSec = getOpeningFlowchartStartSec(overrides);
           const density = getOpeningFlowchartDensity(overrides);
           const openingUrl =
@@ -2795,6 +3379,7 @@ export function AngelVideoStudioModal({
 
         {/* Special 3D Extension — Calculation Deep-Branch 3D Tree Positioning & Density (case:calc_pure) */}
         {(() => {
+          if (!showCalcPureTreeSection) return null;
           const calcTreeOffsetX = getCalcPureTreeOffsetX(overrides);
           const calcTreeOffsetY = getCalcPureTreeOffsetY(overrides);
           const calcTreeDensity = getCalcPureTreeDensity(overrides);
@@ -3123,6 +3708,7 @@ export function AngelVideoStudioModal({
 
         {/* Special Board Event Video — Pawn Reaches 8th Row / Promotion Choice (case:ask_promotion) */}
         {(() => {
+          if (!showPromotionSection) return null;
           const [promoSlot1Key, promoSlot2Key] = getCaseSlotKeys('ask_promotion');
           const promoUrl1 = overrides.cases?.[promoSlot1Key];
           const promoUrl2 = overrides.cases?.[promoSlot2Key];
@@ -3302,6 +3888,7 @@ export function AngelVideoStudioModal({
         })()}
 
         {/* Special Word-Triggered Escape Overlay Videos ("you", "me", & "push a button") */}
+        {showEscapeSection && (
         <div className="rounded-xl border border-[#c084fc]/45 bg-black overflow-hidden">
           <div className="px-3.5 py-2.5 bg-[#120d1d] border-b border-white/10">
             <div className="flex flex-wrap items-center gap-2">
@@ -3328,7 +3915,7 @@ export function AngelVideoStudioModal({
           </div>
 
           <div className="divide-y divide-white/15">
-            {escapeSpecs.map((esc) => {
+            {matchingEscapeSpecs.map((esc) => {
               const isEnabled = isEscapeCueEnabled(esc.key, overrides);
               const activePool = getEscapeVideoPool(esc.key, overrides);
               const configuredEntries = getEscapeCueEntries(esc.key, overrides);
@@ -3537,9 +4124,11 @@ export function AngelVideoStudioModal({
             })}
           </div>
         </div>
+        )}
 
         {/* Special Seduction Distraction Videos (Multi-Option Pool + Trigger Mode Options) */}
         {(() => {
+          if (!showSeductionSection) return null;
           const seductionEntries = getSeductionCaseEntries(overrides);
           const highestConfiguredSeduction = Object.keys(overrides.cases || {}).reduce((max, k) => {
             const n = parseSeductionSlotNumber(k);
@@ -3776,8 +4365,8 @@ export function AngelVideoStudioModal({
         })()}
 
         {/* Groups 1–9 & Individual Sayings */}
-        {ANGEL_VIDEO_STUDIO_GROUPS.map((grp) => {
-          const isOpen = Boolean(expandedGroups[grp.id]);
+        {filteredStudioGroups.map(({ grp, cases: visibleGroupCases }) => {
+          const isOpen = isSearching || Boolean(expandedGroups[grp.id]);
           const groupOverride =
             overrides.groups[grp.id as AngelExpressionGroup] || ANGEL_GROUP_VIDEO_MAP[grp.id];
           const groupClipSec = getVideoFileDurationSec(groupOverride, overrides);
@@ -3908,13 +4497,20 @@ export function AngelVideoStudioModal({
 
               {isOpen && (
                 <div className="divide-y divide-white/10 border-t border-white/10">
-                  {grp.cases.map((item) => {
+                  {visibleGroupCases.map((item) => {
                     const hasAltSlots = caseHasAlternativeSlotUI(item.caseId, overrides);
-                    const [slot1Key, slot2Key] = getCaseSlotKeys(item.caseId);
-                    const customCaseUrl1 = overrides.cases[slot1Key];
-                    const customCaseUrl2 = overrides.cases[slot2Key];
+                    const isDynamicMultiSlot = isCaseDynamicMultiSlot(item.caseId);
+                    const caseEntries = getCaseSlotEntries(item.caseId, overrides);
+                    const maxAttachedSlotNum = caseEntries.reduce(
+                      (m, e) => Math.max(m, e.num),
+                      0,
+                    );
+                    const totalCaseSlots = isDynamicMultiSlot
+                      ? Math.max(visibleCaseSlotCounts[item.caseId] ?? 3, maxAttachedSlotNum, 2)
+                      : Math.max(2, maxAttachedSlotNum);
+                    const customCaseUrl1 = overrides.cases[item.caseId];
                     const casePool = getCaseVideoPool(item.caseId, overrides);
-                    const customCaseUrl = customCaseUrl1 || customCaseUrl2;
+                    const customCaseUrl = caseEntries[0]?.url;
                     const explicitCaseLipRule = lipSyncCfg.cases[item.caseId as CommentaryCaseId];
                     const builtInCaseUrl = !customCaseUrl
                       ? ANGEL_CASE_VIDEO_MAP[item.caseId as CommentaryCaseId]
@@ -3932,8 +4528,8 @@ export function AngelVideoStudioModal({
                     const effectiveLabel =
                       casePool.length >= 2
                         ? caseLipSyncEffective
-                          ? '✓ 2 Alternating .mp4s + Lip-Sync tail'
-                          : '✓ 2 Alternating .mp4s (Idle after)'
+                          ? `✓ ${casePool.length} Alternating .mp4s + Lip-Sync tail`
+                          : `✓ ${casePool.length} Alternating .mp4s (Idle after)`
                         : customCaseUrl
                           ? caseLipSyncEffective
                             ? '✓ Custom .mp4 + Lip-Sync tail'
@@ -3954,6 +4550,33 @@ export function AngelVideoStudioModal({
                                     ? 'Default lip-sync'
                                     : 'Idle Only (No lip-sync)';
 
+                    const allVoiceVariants: Array<{
+                      clipId: VoiceClipId;
+                      text: string;
+                      tag: string;
+                    }> = [
+                      {
+                        clipId: item.sampleClipId,
+                        text: item.sampleText,
+                        tag: item.caseId.toUpperCase(),
+                      },
+                      {
+                        clipId: item.v2ClipId,
+                        text: item.v2Text,
+                        tag: `${item.caseId.toUpperCase()} · 2ND`,
+                      },
+                      {
+                        clipId: item.v3ClipId,
+                        text: item.v3Text,
+                        tag: `${item.caseId.toUpperCase()} · 3RD`,
+                      },
+                      ...(item.extraVariants || []).map((ev) => ({
+                        clipId: ev.clipId,
+                        text: ev.text,
+                        tag: `${item.caseId.toUpperCase()} · ${ev.ordinal.toUpperCase()}`,
+                      })),
+                    ];
+
                     const previewThis = () =>
                       onPreviewCase(
                         item.sampleClipId,
@@ -3961,9 +4584,13 @@ export function AngelVideoStudioModal({
                         item.caseId.toUpperCase(),
                       );
 
-                    const previewCaseSlot = (preferredUrl?: string) => {
+                    const previewCaseSlot = (preferredUrl?: string, slotIndex = 0) => {
                       primeNextCaseSlotPreview(item.caseId, preferredUrl);
-                      previewThis();
+                      const v =
+                        isDynamicMultiSlot && allVoiceVariants.length > 0
+                          ? allVoiceVariants[slotIndex % allVoiceVariants.length]
+                          : allVoiceVariants[0];
+                      onPreviewCase(v.clipId, v.text, v.tag);
                     };
 
                     return (
@@ -4165,6 +4792,25 @@ export function AngelVideoStudioModal({
                                 </button>
                                 &ldquo;{item.v3Text}&rdquo;
                               </p>
+                              {(item.extraVariants || []).map((ev) => (
+                                <p key={ev.clipId} className="text-[#7c8698]">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onPreviewCase(
+                                        ev.clipId,
+                                        ev.text,
+                                        `${item.caseId.toUpperCase()} · ${ev.ordinal.toUpperCase()}`,
+                                      )
+                                    }
+                                    title={`Preview ${ev.ordinal} stage (${ev.clipId} · ${formatSec(ev.sec)})`}
+                                    className="font-mono-tabular text-[10px] text-[#7dd3fc] hover:underline mr-1 cursor-pointer"
+                                  >
+                                    {ev.ordinal}:
+                                  </button>
+                                  &ldquo;{ev.text}&rdquo;
+                                </p>
+                              ))}
                             </div>
                           </div>
 
@@ -4239,7 +4885,7 @@ export function AngelVideoStudioModal({
                               }}
                               title={
                                 hasAltSlots && casePool.length >= 2
-                                  ? `Play ${item.caseId} voice (${formatSec(item.talkSec)}) — alternates between #1 and #2`
+                                  ? `Play ${item.caseId} voice (${formatSec(item.talkSec)}) — alternates across ${casePool.length} options`
                                   : `Play ${item.caseId} voice (${formatSec(item.talkSec)}) & video on Chess Angel`
                               }
                               className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#151c28] border border-white/16 text-[11px] text-[#cbd5e1] cursor-pointer"
@@ -4247,6 +4893,23 @@ export function AngelVideoStudioModal({
                               <Play className="w-3 h-3 text-[#7dd3fc]" />
                               Test
                             </button>
+                            {isDynamicMultiSlot && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setVisibleCaseSlotCounts((prev) => ({
+                                    ...prev,
+                                    [item.caseId]:
+                                      Math.max(prev[item.caseId] ?? 3, totalCaseSlots) + 1,
+                                  }))
+                                }
+                                title={`Add another alternative video option for ${item.caseId}`}
+                                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-[#1f190e] hover:bg-[#2c2313] border border-[#d6ae63]/50 text-[11px] font-semibold text-[#fde68a] cursor-pointer whitespace-nowrap"
+                              >
+                                <Plus className="w-3 h-3 text-[#f3cf83]" />
+                                Add Option
+                              </button>
+                            )}
                             {!hasAltSlots &&
                               renderUploadButton(
                                 'case',
@@ -4261,44 +4924,55 @@ export function AngelVideoStudioModal({
                           const slotKindNoun =
                             item.caseId === 'warn_fork_2step' || item.caseId === 'warn_double'
                               ? 'fork warning'
-                              : item.caseId === 'undo_done'
-                                ? 'undo movie'
-                                : item.caseId === 'ask_promotion'
-                                  ? '8th-row pawn arrival'
-                                  : item.caseId === 'capture_minor'
-                                    ? 'minor capture'
-                                    : item.caseId;
+                              : item.caseId === 'hesitate_hint'
+                                ? 'hesitate hint'
+                                : item.caseId === 'undo_done'
+                                  ? 'undo movie'
+                                  : item.caseId === 'ask_promotion'
+                                    ? '8th-row pawn arrival'
+                                    : item.caseId === 'capture_minor'
+                                      ? 'minor capture'
+                                      : item.caseId === 'checkmate_win'
+                                        ? 'checkmate win'
+                                        : item.caseId === 'checkmate_lose'
+                                          ? 'checkmate defeat'
+                                          : item.caseId;
+                          const slotNumbers = Array.from(
+                            { length: totalCaseSlots },
+                            (_, idx) => idx + 1,
+                          );
                           return (
                           <div className="mt-2.5 rounded-lg border border-white/12 bg-[#07090e] divide-y divide-white/10 overflow-hidden">
-                            {(
-                              [
-                                {
-                                  slotKey: slot1Key,
-                                  quotaSlotId: `case:${item.caseId}_primary`,
-                                  slotLabel: `${item.caseId} #1`,
-                                  slotUrl: customCaseUrl1,
-                                  emptyHint: `Empty — attach or drop primary ${slotKindNoun} .mp4`,
-                                  subCaption: `Primary ${slotKindNoun} video (#1)`,
-                                },
-                                {
-                                  slotKey: slot2Key,
-                                  quotaSlotId: `case:${slot2Key}`,
-                                  slotLabel: `${item.caseId} #2`,
-                                  slotUrl: customCaseUrl2,
-                                  emptyHint: `Empty — attach or drop 2nd alternative ${slotKindNoun} .mp4`,
-                                  subCaption: `2nd alternative ${slotKindNoun} video (#2 · alternates automatically with #1)`,
-                                },
-                              ] as const
-                            ).map((slot) => {
-                              const slotClipSec = getVideoFileDurationSec(slot.slotUrl, overrides);
+                            {slotNumbers.map((num, slotIdx) => {
+                              const slotKey = getCaseSlotKey(item.caseId, num);
+                              const quotaSlotId =
+                                num === 1 ? `case:${item.caseId}_primary` : `case:${slotKey}`;
+                              const slotLabel = `${item.caseId} #${num}`;
+                              const slotUrl =
+                                overrides.cases[slotKey] ||
+                                (num === 1
+                                  ? ANGEL_CASE_VIDEO_MAP[item.caseId as CommentaryCaseId]
+                                  : undefined);
+                              const emptyHint =
+                                num === 1
+                                  ? `Empty — attach or drop primary ${slotKindNoun} .mp4`
+                                  : `Empty — attach or drop Option #${num} ${slotKindNoun} .mp4`;
+                              const subCaption =
+                                num === 1
+                                  ? `Primary ${slotKindNoun} video (#1)`
+                                  : item.caseId === 'checkmate_win' ||
+                                      item.caseId === 'checkmate_lose'
+                                    ? `Alternative ${slotKindNoun} video (#${num} · random first pick, then alternates on next match)`
+                                    : `Alternative ${slotKindNoun} video (#${num} · alternates automatically with active options)`;
+                              const slotClipSec = getVideoFileDurationSec(slotUrl, overrides);
                               return (
                                 <div
-                                  key={slot.slotKey}
-                                  {...makeDropHandlers('case', slot.slotKey, (uploadedUrl) =>
-                                    previewCaseSlot(uploadedUrl),
+                                  key={slotKey}
+                                  {...makeDropHandlers('case', slotKey, (uploadedUrl) =>
+                                    previewCaseSlot(uploadedUrl, slotIdx),
                                   )}
                                   className={`px-3 py-2 transition-colors ${
-                                    dragOverSlot === `case:${slot.slotKey}`
+                                    dragOverSlot === `case:${slotKey}`
                                       ? 'bg-[#162334]'
                                       : 'bg-[#07090e] hover:bg-[#0d111a]'
                                   }`}
@@ -4307,44 +4981,41 @@ export function AngelVideoStudioModal({
                                     <div className="min-w-0">
                                       <div className="flex flex-wrap items-center gap-1.5">
                                         <span className="font-mono-tabular text-[11px] font-semibold text-[#f3cf83]">
-                                          {slot.slotLabel}
+                                          {slotLabel}
                                         </span>
                                         <span
                                           className={`text-[10px] px-1.5 py-0.5 rounded border truncate ${
-                                            slot.slotUrl
+                                            slotUrl
                                               ? 'border-emerald-500/45 bg-emerald-950/40 text-emerald-300 font-medium'
                                               : 'border-white/12 text-[#9aa3b2]'
                                           }`}
                                         >
-                                          {slot.slotUrl ? '✓ Active (.mp4)' : slot.emptyHint}
+                                          {slotUrl ? '✓ Active (.mp4)' : emptyHint}
                                         </span>
                                         {slotClipSec !== null && (
                                           <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200 whitespace-nowrap">
                                             Video: {formatSec(slotClipSec)}
                                           </span>
                                         )}
-                                        {renderVideoSizeBadge(slot.slotUrl, slot.slotLabel)}
-                                        {renderMaxPlaysControl(
-                                          slot.quotaSlotId,
-                                          slot.slotLabel,
-                                        )}
+                                        {renderVideoSizeBadge(slotUrl, slotLabel)}
+                                        {renderMaxPlaysControl(quotaSlotId, slotLabel)}
                                         {renderPlayToEndFlagButton(
-                                          `case:${slot.slotKey}`,
-                                          slot.slotLabel,
+                                          `case:${slotKey}`,
+                                          slotLabel,
                                         )}
                                       </div>
                                       <div className="text-[10px] text-[#8e98a8] truncate mt-0.5">
-                                        {slot.slotUrl
-                                          ? slot.slotUrl.split('?')[0]
-                                          : slot.subCaption}
+                                        {slotUrl
+                                          ? slotUrl.split('?')[0]
+                                          : subCaption}
                                       </div>
                                     </div>
 
                                     <div className="flex items-center gap-1.5 shrink-0">
                                       <button
                                         type="button"
-                                        onClick={() => previewCaseSlot(slot.slotUrl)}
-                                        title={`Preview ${slot.slotLabel} on Chess Angel`}
+                                        onClick={() => previewCaseSlot(slotUrl, slotIdx)}
+                                        title={`Preview ${slotLabel} on Chess Angel`}
                                         className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#151c28] border border-white/16 text-[11px] text-[#cbd5e1] cursor-pointer"
                                       >
                                         <Play className="w-3 h-3 text-[#7dd3fc]" />
@@ -4352,9 +5023,9 @@ export function AngelVideoStudioModal({
                                       </button>
                                       {renderUploadButton(
                                         'case',
-                                        slot.slotKey,
-                                        Boolean(slot.slotUrl),
-                                        (uploadedUrl) => previewCaseSlot(uploadedUrl),
+                                        slotKey,
+                                        Boolean(overrides.cases[slotKey]),
+                                        (uploadedUrl) => previewCaseSlot(uploadedUrl, slotIdx),
                                       )}
                                     </div>
                                   </div>
@@ -4372,6 +5043,31 @@ export function AngelVideoStudioModal({
             </div>
           );
         })}
+
+        {isSearching && totalSearchMatches === 0 && (
+          <div className="rounded-xl border border-white/12 bg-[#0c1017] p-6 text-center space-y-2.5">
+            <div className="text-xs font-semibold text-[#f7f1e5]">
+              No Studio items match <span className="font-mono-tabular text-[#fde68a]">&ldquo;{searchQuery.trim()}&rdquo;</span>
+            </div>
+            <p className="text-[11px] text-[#8e98a8]">
+              Try wildcards like <code className="text-sky-200">*check*</code>,{' '}
+              <code className="text-sky-200">idle_?</code>,{' '}
+              <code className="text-sky-200">udo|hamster</code>, or{' '}
+              <code className="text-sky-200">*mp3</code>.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                searchInputRef.current?.focus();
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-[#d6ae63]/60 bg-[#241b0c] hover:bg-[#332612] text-[11px] font-semibold text-[#f7e7c2] cursor-pointer"
+            >
+              <X className="w-3 h-3" />
+              Clear Search
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

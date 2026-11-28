@@ -28,6 +28,7 @@ export type CommentaryCaseId =
   | 'intro'
   | 'checkmate_win'
   | 'checkmate_lose'
+  | 'checkmate_lose_constructed'
   | 'stalemate'
   | 'draw'
   | 'check_knight'
@@ -158,6 +159,14 @@ export const CLIP_TEXT: Record<VoiceClipId, string> = {
     'Checkmate again! Truly well played, you outcalculated every defense I had.',
   checkmate_lose_v3:
     'Another checkmate for you... crisp, fearless, and wonderfully played.',
+
+  // 3b. Checkmate (Player wins out of a Constructed Boardgame — smiling follow-up)
+  checkmate_lose_constructed_v1:
+    "Well, it wasn't a real match, was it? If you want to see me play, push 'New Match'.",
+  checkmate_lose_constructed_v2:
+    "Well, it wasn't a real match, was it? If you want to see me play, push 'New Match'.",
+  checkmate_lose_constructed_v3:
+    "Well, it wasn't a real match, was it? If you want to see me play, push 'New Match'.",
 
   // 4. Stalemate
   stalemate_v1:
@@ -1035,6 +1044,21 @@ export function createThankJanMessage(): OpponentMessage {
     clipId: entry.clipId,
     text: entry.text,
     tag: 'FOR JAN · CHESS ANGEL',
+    tone: 'opening',
+    speaker: SPEAKER_NAME,
+  };
+}
+
+export function createConstructedCheckmateFollowupMessage(): OpponentMessage {
+  const entry = tryPickCaseClip('checkmate_lose_constructed') || {
+    clipId: 'checkmate_lose_constructed_v1' as VoiceClipId,
+    text: CLIP_TEXT.checkmate_lose_constructed_v1,
+  };
+  return {
+    id: messageSeq++,
+    clipId: entry.clipId,
+    text: entry.text,
+    tag: 'CONSTRUCTED BOARD · SMILING',
     tone: 'opening',
     speaker: SPEAKER_NAME,
   };
@@ -2502,6 +2526,14 @@ export const ANGELS_ALGORYTHM_MUSIC_URL = withAssetBuildVersion(
   '/assets/aistudio/angels_algorythm_db8e65b5.mp3',
 );
 
+export const GREGORIAN_ENTHROPY_MUSIC_URL = withAssetBuildVersion(
+  '/assets/aistudio/gregorian_enthropy_db8337f2.mp3',
+);
+
+export const LA_DAME_AU_DAMIER_MUSIC_URL = withAssetBuildVersion(
+  '/assets/aistudio/dame_au_damier_e5564693.mp3',
+);
+
 const SAVED_MUSIC_TRACK_ID_KEY = 'chess_angel_music_track_id_v1';
 
 export const DEFAULT_MUSIC_TRACKS: readonly MusicTrack[] = [
@@ -2534,6 +2566,16 @@ export const DEFAULT_MUSIC_TRACKS: readonly MusicTrack[] = [
     id: 'angels_algorythm',
     title: 'Angels Algorythm',
     url: ANGELS_ALGORYTHM_MUSIC_URL,
+  },
+  {
+    id: 'gregorian_enthropy',
+    title: 'Gregorian Enthropy',
+    url: GREGORIAN_ENTHROPY_MUSIC_URL,
+  },
+  {
+    id: 'la_dame_au_damier',
+    title: 'La Dame au Damier',
+    url: LA_DAME_AU_DAMIER_MUSIC_URL,
   },
 ];
 
@@ -3591,10 +3633,16 @@ class OpponentSpeechController {
         voices.find(
           (v) =>
             v.lang.toLowerCase().startsWith('en') &&
-            /female|zira|aria|jenny|samantha|victoria|karen|moira|google uk english female|google us english/i.test(
+            /aria|jenny|ava|emma|google uk english female|google us english|samantha/i.test(
               v.name,
             ),
-        ) || voices.find((v) => v.lang.toLowerCase().startsWith('en'));
+        ) ||
+        voices.find(
+          (v) =>
+            v.lang.toLowerCase().startsWith('en') &&
+            /female|zira|victoria|karen|moira/i.test(v.name),
+        ) ||
+        voices.find((v) => v.lang.toLowerCase().startsWith('en'));
       if (femaleVoice) {
         utter.voice = femaleVoice;
       }
@@ -3685,7 +3733,12 @@ class OpponentSpeechController {
       if (this.activeHtmlAudio === audio) {
         this.activeHtmlAudio = null;
         if (seq === this.speakSeq) {
-          // Never fall back to robotic browser SpeechSynthesis — Angel only speaks in her own recorded MP3 voice.
+          if (clipInfo.clipId.startsWith('checkmate_lose_constructed_')) {
+            if (this.speakViaSpeechSynthesis(clipInfo.clipId, seq)) {
+              return;
+            }
+          }
+          // Never fall back to robotic browser SpeechSynthesis for standard clips — Angel speaks in her recorded MP3 voice.
           this.pendingSpeechClip = false;
           this.setPlaybackState('idle');
         }
@@ -3785,6 +3838,12 @@ class OpponentSpeechController {
             if (playedViaWebAudio) return;
           } catch {
             // Fall through to HTMLAudioElement playback
+          }
+        }
+
+        if (!mp3Bytes && clipId.startsWith('checkmate_lose_constructed_')) {
+          if (this.speakViaSpeechSynthesis(clipId, seq)) {
+            return;
           }
         }
 

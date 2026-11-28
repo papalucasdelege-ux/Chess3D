@@ -52,14 +52,14 @@
     Cache-Control = "public, max-age=0, must-revalidate"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "no-referrer"
-    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=(self)"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=*"
     Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
     X-Robots-Tag = "index, follow, noarchive, noai, noimageai"
 
 [[headers]]
   for = "/*"
   [headers.values]
-    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=(self)"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=*"
     X-Robots-Tag = "index, follow, noarchive, noai, noimageai"
 
 [[headers]]

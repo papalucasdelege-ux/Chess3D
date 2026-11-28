@@ -68,7 +68,13 @@
     "level_master": "/assets/aistudio/builtin_level_master.mp4",
     "level_grandmaster": "/assets/aistudio/builtin_level_grandmaster.mp4",
     "seduction_6": "/assets/aistudio/builtin_seduction_6.mp4",
-    "warn_mate": "/assets/aistudio/angel_case_warn_mate.mp4"
+    "warn_mate": "/assets/aistudio/angel_case_warn_mate.mp4",
+    "checkmate_win_2": "/assets/aistudio/angel_case_checkmate_win_2.mp4",
+    "checkmate_lose": "/assets/aistudio/angel_case_checkmate_lose.mp4",
+    "hesitate_hint_2": "/assets/aistudio/angel_case_hesitate_hint_2.mp4",
+    "hesitate_hint_3": "/assets/aistudio/angel_case_hesitate_hint_3.mp4",
+    "checkmate_lose_2": "/assets/aistudio/angel_case_checkmate_lose_2.mp4",
+    "checkmate_lose_constructed": "/assets/aistudio/angel_case_checkmate_lose_constructed.mp4"
   },
   "escapes": {
     "point_you": "/assets/aistudio/angel_escape_point_you.mp4",
@@ -205,14 +211,20 @@
     "/assets/aistudio/builtin_idle_8.mp4": 8.1,
     "/assets/aistudio/builtin_seduction_4.mp4": 8.1,
     "/assets/aistudio/builtin_hesitate_hint.mp4": 9.1,
-    "/assets/aistudio/builtin_thank_jan.mp4": 12.1,
+    "/assets/aistudio/builtin_thank_jan.mp4": 10,
     "/assets/aistudio/builtin_promotion.mp4": 6.1,
     "/assets/aistudio/builtin_seduction_5.mp4": 12.1,
     "/assets/aistudio/builtin_dog_run.mp4": 8.9,
     "/assets/aistudio/builtin_seduction_6.mp4": 10.1,
     "/assets/aistudio/builtin_dance_stars.mp4": 10.1,
     "/assets/aistudio/angel_case_ask_promotion_2.mp4": 11.1,
-    "/assets/aistudio/angel_case_warn_mate.mp4": 7.1
+    "/assets/aistudio/angel_case_warn_mate.mp4": 7.1,
+    "/assets/aistudio/angel_case_checkmate_win_2.mp4": 6.1,
+    "/assets/aistudio/angel_case_checkmate_lose.mp4": 7.1,
+    "/assets/aistudio/angel_case_hesitate_hint_2.mp4": 7.1,
+    "/assets/aistudio/angel_case_hesitate_hint_3.mp4": 7.1,
+    "/assets/aistudio/angel_case_checkmate_lose_2.mp4": 7.1,
+    "/assets/aistudio/angel_case_checkmate_lose_constructed.mp4": 7.1
   },
   "videoSizes": {
     "/assets/aistudio/angel_case_angel_modal_off.mp4": 2625151,
@@ -221,8 +233,14 @@
     "/assets/aistudio/angel_case_calc_pure.mp4": 3000486,
     "/assets/aistudio/angel_case_calc_showing.mp4": 703202,
     "/assets/aistudio/angel_case_castled.mp4": 625440,
+    "/assets/aistudio/angel_case_checkmate_lose.mp4": 789485,
+    "/assets/aistudio/angel_case_checkmate_lose_2.mp4": 803140,
+    "/assets/aistudio/angel_case_checkmate_lose_constructed.mp4": 859392,
     "/assets/aistudio/angel_case_checkmate_win.mp4": 908713,
+    "/assets/aistudio/angel_case_checkmate_win_2.mp4": 822680,
     "/assets/aistudio/angel_case_draw.mp4": 975745,
+    "/assets/aistudio/angel_case_hesitate_hint_2.mp4": 927115,
+    "/assets/aistudio/angel_case_hesitate_hint_3.mp4": 1372226,
     "/assets/aistudio/angel_case_intro.mp4": 669879,
     "/assets/aistudio/angel_case_lost_queen.mp4": 866426,
     "/assets/aistudio/angel_case_new_match.mp4": 1822682,
@@ -285,7 +303,7 @@
     "/assets/aistudio/builtin_seduction_4.mp4": 1264946,
     "/assets/aistudio/builtin_seduction_5.mp4": 1724475,
     "/assets/aistudio/builtin_seduction_6.mp4": 1462721,
-    "/assets/aistudio/builtin_thank_jan.mp4": 2060728,
+    "/assets/aistudio/builtin_thank_jan.mp4": 1111465,
     "/assets/aistudio/just_lip_movements_e2adb314.mp4": 568858,
     "/assets/aistudio/just_shaking_head_no_words_591ed115.mp4": 558007,
     "/assets/aistudio/waving_hello_abc4f35b.mp4": 595804
@@ -327,14 +345,50 @@
       "width": 560,
       "height": 752
     },
+    "/assets/aistudio/angel_case_checkmate_lose.mp4": {
+      "size": 789485,
+      "crf": 21,
+      "width": 560,
+      "height": 752
+    },
+    "/assets/aistudio/angel_case_checkmate_lose_2.mp4": {
+      "size": 803140,
+      "crf": 21,
+      "width": 560,
+      "height": 752
+    },
+    "/assets/aistudio/angel_case_checkmate_lose_constructed.mp4": {
+      "size": 859392,
+      "crf": 21,
+      "width": 560,
+      "height": 752
+    },
     "/assets/aistudio/angel_case_checkmate_win.mp4": {
       "size": 908713,
       "crf": 21,
       "width": 560,
       "height": 752
     },
+    "/assets/aistudio/angel_case_checkmate_win_2.mp4": {
+      "size": 822680,
+      "crf": 21,
+      "width": 560,
+      "height": 752
+    },
     "/assets/aistudio/angel_case_draw.mp4": {
       "size": 975745,
+      "crf": 21,
+      "width": 560,
+      "height": 752
+    },
+    "/assets/aistudio/angel_case_hesitate_hint_2.mp4": {
+      "size": 927115,
+      "crf": 21,
+      "width": 560,
+      "height": 752
+    },
+    "/assets/aistudio/angel_case_hesitate_hint_3.mp4": {
+      "size": 1372226,
       "crf": 21,
       "width": 560,
       "height": 752
@@ -712,7 +766,7 @@
       "height": 752
     },
     "/assets/aistudio/builtin_thank_jan.mp4": {
-      "size": 2060728,
+      "size": 1111465,
       "crf": 21,
       "width": 560,
       "height": 752
@@ -760,6 +814,7 @@
   "videoPlayToEnd": {
     "case:seduction": true,
     "case:checkmate_lose": true,
+    "case:checkmate_lose_constructed": true,
     "case:lost_queen": true,
     "case:trial_confirm_1": true,
     "case:trial_confirm_2": true,
@@ -784,12 +839,13 @@
     "special:dance_stars": true
   },
   "seductionAudioUrl": "/assets/aistudio/Chess_Angle_2f568dfd.mp3",
-  "seductionAudioDuration": 195.8,
+  "seductionAudioDuration": 229.2,
   "seductionAudioVariants": {},
   "seductionAudioDurations": {},
   "seductionTriggerMode": "balanced",
   "thankJanAudioUrl": "/voices/female/thank_jan.mp3",
   "thankJanAudioDuration": 8.9,
+  "udoBarkAudioUrl": "/assets/aistudio/udo_bark.mp3",
   "musicTracks": [
     {
       "id": "queen_infinite_reign",
@@ -820,6 +876,16 @@
       "id": "angels_algorythm",
       "title": "Angels Algorythm",
       "url": "/assets/aistudio/angels_algorythm_db8e65b5.mp3"
+    },
+    {
+      "id": "gregorian_enthropy",
+      "title": "Gregorian Enthropy",
+      "url": "/assets/aistudio/gregorian_enthropy_db8337f2.mp3"
+    },
+    {
+      "id": "la_dame_au_damier",
+      "title": "La Dame au Damier",
+      "url": "/assets/aistudio/dame_au_damier_e5564693.mp3"
     }
   ]
 }

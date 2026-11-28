@@ -137,8 +137,14 @@ const PIECE_TIP_DIMENSIONS: Record<
   k: { baseRadius: 0.398, lipHeight: 0.06, headRadius: 0.28, headHeight: 1.38 },
 };
 
+export interface BoardPointerDownResult {
+  action: 'moved' | 'drag-start' | 'preselected' | 'none';
+  wasAlreadySelected?: boolean;
+}
+
 interface SceneCallbacks {
   onSquareClick: (square: string) => boolean | void;
+  onBoardPointerDown?: (square: string) => BoardPointerDownResult;
   canDragPieceAtSquare?: (square: string) => boolean;
   onDragMove?: (from: string, to: string) => boolean;
   onTreeSquareClick?: (square: string) => void;
@@ -160,6 +166,8 @@ const isMobile =
 const _tmpVec = new THREE.Vector3();
 const _rayMouse = new THREE.Vector2();
 const _dogPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -BOARD_TOP_Y);
+const _dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -(BOARD_TOP_Y + 0.34));
+const _dragHit = new THREE.Vector3();
 const _dogRaycaster = new THREE.Raycaster();
 const _dogPos = new THREE.Vector3();
 const _dogTan = new THREE.Vector3();
@@ -168,6 +176,9 @@ const _dogUp = new THREE.Vector3(0, 1, 0);
 const _dogPush = new THREE.Vector3();
 const _dogAxis = new THREE.Vector3();
 const _dogCamForward = new THREE.Vector3();
+const _dogCamRight = new THREE.Vector3();
+const _dogLaunchLeft = new THREE.Vector3();
+const _dogLaunchDepth = new THREE.Vector3();
 const _dogTiltQuat = new THREE.Quaternion();
 const _dogSpinQuat = new THREE.Quaternion();
 const _hamPosA = new THREE.Vector3();
@@ -374,6 +385,7 @@ export class ChessScene3D {
   private wildDogSoundMuted = false;
   private wildDogScale = 1.62;
   private wildDogLaunchLiftY = 2.15;
+  private wildDogLaunchYaw = -Math.PI / 2;
 
   // Special 3D Event: Dark Grey Russian Mini Hamster (black dorsal stripe) &
   // White Mini Hamster (pink nose & pink claws) chasing each other wildly across the board
@@ -398,6 +410,7 @@ export class ChessScene3D {
   // Camera transition & responsive maximum-extent framing state
   private currentPreset: CameraPreset = 'white';
   private userAdjustedCamera = false;
+  private cameraPivotLocked = true;
   private camGoalPos: THREE.Vector3 | null = null;
   private camGoalTarget: THREE.Vector3 | null = null;
   private angelOverlayVisible = true;
@@ -408,7 +421,14 @@ export class ChessScene3D {
   private coordRaycaster = new THREE.Raycaster();
   private pointerDownPos = { x: 0, y: 0 };
   private dragOriginSquare: string | null = null;
-  private boundWindowPointerUp?: () => void;
+  private activeDragPointerId: number | null = null;
+  private dragPieceGroup: THREE.Group | null = null;
+  private dragPieceOrigPos = new THREE.Vector3();
+  private dragMovedEnough = false;
+  private dragWasAlreadySelected = false;
+  private pointerConsumedOnDownId: number | null = null;
+  private boundPointerCancel!: (e: PointerEvent) => void;
+  private boundWindowPointerUp?: (e: PointerEvent) => void;
   private lastCoord8TapMs = 0;
   private hoveredSquare: string | null = null;
   private lastHoverRaycastTime = 0;
@@ -506,6 +526,9 @@ export class ChessScene3D {
     this.controls.enableDamping = !this.isSoftwareGl;
     this.controls.dampingFactor = 0.07;
     this.controls.enablePan = false;
+    this.controls.enableRotate = !this.cameraPivotLocked;
+    this.controls.enableZoom = !this.cameraPivotLocked;
+    this.controls.enabled = !this.cameraPivotLocked;
     this.controls.minDistance = 5.5;
     this.controls.maxDistance = 46.0;
     this.controls.minPolarAngle = 0.12;
@@ -593,15 +616,16 @@ export class ChessScene3D {
       this.renderer.compile(this.scene, this.camera);
     }
 
-    // 6. Listeners (including webglcontextlost & webglcontextrestored)
+    // 6. Listeners (capture-phase pointer listeners intercept piece touches BEFORE OrbitControls!)
     this.boundPointerDown = (e) => this.handlePointerDown(e);
     this.boundPointerUp = (e) => this.handlePointerUp(e);
     this.boundPointerMove = (e) => this.handlePointerMove(e);
+    this.boundPointerCancel = (e) => this.handlePointerCancel(e);
     this.boundPointerLeave = () => {
-      if (this.hoveredSquare) {
+      if (this.hoveredSquare && !this.dragOriginSquare) {
         this.hoveredSquare = null;
         this.hoverRing.visible = false;
-        this.renderer.domElement.style.cursor = 'grab';
+        this.renderer.domElement.style.cursor = this.cameraPivotLocked ? 'default' : 'grab';
         this.requestRender();
       }
     };
@@ -621,10 +645,11 @@ export class ChessScene3D {
     };
 
     const dom = this.renderer.domElement;
-    dom.style.cursor = 'grab';
-    dom.addEventListener('pointerdown', this.boundPointerDown);
-    dom.addEventListener('pointerup', this.boundPointerUp);
-    dom.addEventListener('pointermove', this.boundPointerMove);
+    dom.style.cursor = this.cameraPivotLocked ? 'default' : 'grab';
+    dom.addEventListener('pointerdown', this.boundPointerDown, { capture: true });
+    dom.addEventListener('pointerup', this.boundPointerUp, { capture: true });
+    dom.addEventListener('pointermove', this.boundPointerMove, { capture: true });
+    dom.addEventListener('pointercancel', this.boundPointerCancel, { capture: true });
     dom.addEventListener('pointerleave', this.boundPointerLeave);
     if (this.callbacks.onSecretCoord8DoubleClick) {
       dom.addEventListener('dblclick', this.boundDblClick);
@@ -632,10 +657,12 @@ export class ChessScene3D {
     dom.addEventListener('webglcontextlost', this.boundContextLost);
     dom.addEventListener('webglcontextrestored', this.boundContextRestored);
 
-    this.boundWindowPointerUp = () => {
-      this.dragOriginSquare = null;
-      if (this.controls && !this.controls.enabled) {
-        this.controls.enabled = true;
+    this.boundWindowPointerUp = (e: PointerEvent) => {
+      if (this.pointerConsumedOnDownId === e.pointerId) {
+        this.pointerConsumedOnDownId = null;
+      }
+      if (this.activeDragPointerId !== null && e.pointerId === this.activeDragPointerId) {
+        this.cancelActiveDrag(true);
       }
     };
     window.addEventListener('pointerup', this.boundWindowPointerUp);
@@ -1684,6 +1711,22 @@ export class ChessScene3D {
     this.requestRender();
   }
 
+  public setCameraPivotLocked(locked: boolean): void {
+    this.cameraPivotLocked = locked;
+    if (this.controls) {
+      this.controls.enableRotate = !locked;
+      this.controls.enableZoom = !locked;
+      this.controls.enabled = !locked;
+    }
+    if (this.renderer?.domElement && !this.dragOriginSquare) {
+      this.renderer.domElement.style.cursor = this.hoveredSquare
+        ? 'pointer'
+        : locked
+          ? 'default'
+          : 'grab';
+    }
+  }
+
   public setCameraPreset(preset: CameraPreset, immediate = false): void {
     if (this.webglUnavailable) return;
     this.currentPreset = preset;
@@ -2542,7 +2585,20 @@ export class ChessScene3D {
 
     // 2. Compute exact camera-projected world scale & elevated 3D launch position so 3D Udo
     //    matches the exact pixel size and jump height of Udo leaping out of Chess Angel's arms!
+    this.camera.updateMatrixWorld();
     this.camera.getWorldDirection(_dogCamForward);
+    _dogCamRight.setFromMatrixColumn(this.camera.matrixWorld, 0);
+    _dogCamRight.y = 0;
+    if (_dogCamRight.lengthSq() < 1e-5) {
+      _dogCamRight.set(1, 0, 0);
+    } else {
+      _dogCamRight.normalize();
+    }
+    // Screen-left horizontal axis on the XZ plane so Udo always emerges horizontally from the video
+    _dogLaunchLeft.copy(_dogCamRight).negate();
+    _dogLaunchDepth.crossVectors(_dogUp, _dogLaunchLeft).normalize();
+    this.wildDogLaunchYaw = Math.atan2(_dogLaunchLeft.x, _dogLaunchLeft.z);
+
     const zEyeCenter = Math.max(
       4.5,
       _tmpVec.set(0, BOARD_TOP_Y, 0).sub(this.camera.position).dot(_dogCamForward),
@@ -2602,6 +2658,36 @@ export class ChessScene3D {
     }
     this.wildDog.root.scale.setScalar(this.wildDogScale);
 
+    // Keep wpRight smoothly reachable from startWorld without forcing an abrupt diagonal kink on exit
+    _tmpVec.copy(wpRight).sub(startWorld);
+    const toRightFwd = _tmpVec.dot(_dogLaunchLeft);
+    const toRightDepth = _tmpVec.dot(_dogLaunchDepth);
+    const clampedDepth = THREE.MathUtils.clamp(toRightDepth, -1.15, 1.15);
+    if (clampedDepth !== toRightDepth) {
+      wpRight.addScaledVector(_dogLaunchDepth, clampedDepth - toRightDepth);
+      wpRight.x = THREE.MathUtils.clamp(wpRight.x, -3.3, 3.3);
+      wpRight.z = THREE.MathUtils.clamp(wpRight.z, -2.1, 2.1);
+      wpCenter.z = THREE.MathUtils.clamp(
+        wpCenter.z,
+        Math.max(-2.0, wpRight.z - 0.85),
+        Math.min(2.0, wpRight.z + 0.85),
+      );
+      wpLeft.z = THREE.MathUtils.clamp(
+        wpLeft.z,
+        Math.max(-2.0, wpCenter.z - 0.75),
+        Math.min(2.0, wpCenter.z + 0.75),
+      );
+    }
+
+    // Horizontal lead-out waypoint strictly along screen-left so Udo exits the video horizontally
+    const horizLeadDist = THREE.MathUtils.clamp(
+      toRightFwd > 1.2 ? toRightFwd * 0.46 : 1.55,
+      1.25,
+      2.15,
+    );
+    const launchHoriz = startWorld.clone().addScaledVector(_dogLaunchLeft, horizLeadDist);
+    launchHoriz.y = BOARD_TOP_Y;
+
     // 3. Exit well past the left edge of the viewport until even full-sized Udo is completely out of sight
     const exitClientX = canvasRect.left - Math.max(210, canvasRect.width * 0.18);
     const exitClientY = canvasRect.top + canvasRect.height * 0.56;
@@ -2616,7 +2702,7 @@ export class ChessScene3D {
     leftRim.y = BOARD_TOP_Y;
 
     this.wildDogCurve = new THREE.CatmullRomCurve3(
-      [startWorld, wpRight, wpCenter, wpLeft, leftRim, exitWorld],
+      [startWorld, launchHoriz, wpRight, wpCenter, wpLeft, leftRim, exitWorld],
       false,
       'centripetal',
       0.5,
@@ -2635,11 +2721,20 @@ export class ChessScene3D {
       BOARD_TOP_Y + this.wildDogLaunchLiftY,
       startWorld.z,
     );
-    this.wildDogCurve.getTangent(0.01, _dogTan);
-    this.wildDog.root.rotation.set(0, Math.atan2(_dogTan.x, _dogTan.z), 0);
+    this.wildDog.root.rotation.set(0, this.wildDogLaunchYaw, 0);
+    this.wildDog.update(
+      0,
+      0,
+      this.wildDog.root.position,
+      BOARD_TOP_Y,
+      0,
+      false,
+      this.camera.quaternion,
+      _dogLaunchLeft,
+    );
     this.wildDog.triggerLaunchSparkles(
       this.wildDog.root.position,
-      _dogTan,
+      _dogLaunchLeft,
       this.wildDogScale,
     );
     this.wildDog.root.visible = true;
@@ -2752,18 +2847,25 @@ export class ChessScene3D {
       this.wildDogCurve.getPoint(u, _dogPos);
       this.wildDogCurve.getTangent(u, _dogTan);
 
-      // Smooth descent from Chess Angel's elevated arms onto the chessboard, then solidly grounded across the board
+      // Smooth horizontal-start descent from Chess Angel's elevated arms onto the chessboard
       let jumpArcY = 0;
-      if (u < 0.24) {
-        const leapT = u / 0.24;
-        jumpArcY = this.wildDogLaunchLiftY * Math.pow(1 - leapT, 1.65);
+      if (u < 0.27) {
+        const leapT = u / 0.27;
+        // Zero vertical slope at u = 0 keeps Udo gliding horizontally out of the video before landing softly
+        jumpArcY = this.wildDogLaunchLiftY * 0.5 * (1 + Math.cos(Math.PI * leapT));
       }
       _dogPos.y = BOARD_TOP_Y + jumpArcY;
 
       this.wildDog.root.position.copy(_dogPos);
 
-      // Smoothly steer Udo forward along his velocity tangent without twitchy puppy snaps
-      const targetYaw = Math.atan2(_dogTan.x, _dogTan.z);
+      // Hold Udo horizontally aligned with the video exit at launch, then smoothly steer along the board curve
+      const curveYaw = Math.atan2(_dogTan.x, _dogTan.z);
+      let launchToCurveDelta = curveYaw - this.wildDogLaunchYaw;
+      while (launchToCurveDelta > Math.PI) launchToCurveDelta -= Math.PI * 2;
+      while (launchToCurveDelta < -Math.PI) launchToCurveDelta += Math.PI * 2;
+      const steerBlend = THREE.MathUtils.smoothstep(u, 0.05, 0.2);
+      const targetYaw = this.wildDogLaunchYaw + launchToCurveDelta * steerBlend;
+
       let deltaYaw = targetYaw - this.wildDog.root.rotation.y;
       while (deltaYaw > Math.PI) deltaYaw -= Math.PI * 2;
       while (deltaYaw < -Math.PI) deltaYaw += Math.PI * 2;
@@ -3238,6 +3340,9 @@ export class ChessScene3D {
       return;
     }
     this.lastPiecesBoardKey = boardKey;
+    if (this.dragOriginSquare) {
+      this.cancelActiveDrag(false);
+    }
     if (this.wildDogPhase !== 'idle') {
       this.stopWildDogRun(true);
     }
@@ -3908,7 +4013,12 @@ export class ChessScene3D {
     });
   }
 
-  private pickSquare(clientX: number, clientY: number, preferPiece = false): string | null {
+  private pickSquare(
+    clientX: number,
+    clientY: number,
+    preferPiece = false,
+    excludePieceSquare: string | null = null,
+  ): string | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
     _rayMouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
@@ -3919,8 +4029,10 @@ export class ChessScene3D {
     const floorSq = hits.length > 0 ? ((hits[0].object.userData.square as string) || null) : null;
     const floorDist = hits.length > 0 ? hits[0].distance : Infinity;
 
-    const selSq = !preferPiece ? (this.latestSyncedState?.selectedSquare ?? null) : null;
-    const legalTargets = !preferPiece ? this.latestSyncedState?.legalTargets : undefined;
+    // Always respect an active selection's legal destinations (both empty squares AND captures)
+    // so an intervening tall piece never steals a click/touch aimed at a legal target square!
+    const selSq = this.latestSyncedState?.selectedSquare ?? null;
+    const legalTargets = this.latestSyncedState?.legalTargets;
     let floorIsEmptyLegalTarget = false;
     if (selSq && floorSq && legalTargets) {
       for (let i = 0; i < legalTargets.length; i++) {
@@ -3931,23 +4043,26 @@ export class ChessScene3D {
       }
     }
 
-    // Analytic zero-GC 3D piece-cylinder intersection so clicking any part of a 3D chess figure
+    // Analytic zero-GC 3D piece-cylinder intersection so touching any part of a 3D chess figure
     // (crown, knight head, torso, or base) selects/drags/captures that figure on the 1st try
     // instead of shooting through the figure onto the tile behind it.
-    if (!floorIsEmptyLegalTarget && this.pieceMap.size > 0) {
+    if (this.pieceMap.size > 0) {
       const ro = this.raycaster.ray.origin;
       const rd = this.raycaster.ray.direction;
       const a = rd.x * rd.x + rd.z * rd.z;
       let bestPieceSq: string | null = null;
       let bestPieceT = floorDist + 0.35;
+      let bestLegalCaptureSq: string | null = null;
+      let bestLegalCaptureT = floorDist + 0.45;
 
       for (const [sq, entry] of this.pieceMap.entries()) {
+        if (excludePieceSquare && sq === excludePieceSquare) continue;
         // Never let an already-selected piece's crown block clicking a different square behind it
-        if (selSq && sq === selSq && floorSq && floorSq !== selSq) continue;
+        if (!preferPiece && selSq && sq === selSq && floorSq && floorSq !== selSq) continue;
 
         const dims = PIECE_TIP_DIMENSIONS[entry.type];
-        const radius = dims.baseRadius * 1.04;
-        const topY = BOARD_TOP_Y + dims.headHeight + 0.08;
+        const radius = dims.baseRadius * 1.08;
+        const topY = BOARD_TOP_Y + dims.headHeight + 0.1;
         const cx = entry.group.position.x;
         const cz = entry.group.position.z;
 
@@ -3983,18 +4098,65 @@ export class ChessScene3D {
         }
 
         const tHit = Math.max(0.05, tEnter);
-        if (tHit <= tExit && tHit < bestPieceT) {
-          bestPieceT = tHit;
-          bestPieceSq = sq;
+        if (tHit <= tExit) {
+          let isLegalCapture = false;
+          if (selSq && legalTargets) {
+            for (let i = 0; i < legalTargets.length; i++) {
+              if (legalTargets[i].square === sq && legalTargets[i].isCapture) {
+                isLegalCapture = true;
+                break;
+              }
+            }
+          }
+          if (isLegalCapture && tHit < bestLegalCaptureT) {
+            bestLegalCaptureT = tHit;
+            bestLegalCaptureSq = sq;
+          }
+          if (tHit < bestPieceT) {
+            bestPieceT = tHit;
+            bestPieceSq = sq;
+          }
         }
       }
 
+      if (bestLegalCaptureSq) {
+        return bestLegalCaptureSq;
+      }
+      if (floorIsEmptyLegalTarget) {
+        return floorSq;
+      }
       if (bestPieceSq) {
         return bestPieceSq;
       }
     }
 
     return floorSq;
+  }
+
+  private cancelActiveDrag(restorePiecePosition: boolean): void {
+    const dom = this.renderer?.domElement;
+    if (dom && this.activeDragPointerId !== null) {
+      try {
+        if (dom.hasPointerCapture(this.activeDragPointerId)) {
+          dom.releasePointerCapture(this.activeDragPointerId);
+        }
+      } catch {
+        // Ignore if pointer capture already released by browser
+      }
+    }
+    if (restorePiecePosition && this.dragPieceGroup) {
+      this.dragPieceGroup.position.copy(this.dragPieceOrigPos);
+      this.dragPieceGroup.quaternion.identity();
+      this.requestRender();
+    }
+    this.dragOriginSquare = null;
+    this.activeDragPointerId = null;
+    this.dragPieceGroup = null;
+    this.dragMovedEnough = false;
+    this.dragWasAlreadySelected = false;
+    if (dom) {
+      dom.style.cursor = this.cameraPivotLocked ? 'default' : 'grab';
+    }
   }
 
   private isPointerOnCoord8(clientX: number, clientY: number): boolean {
@@ -4030,57 +4192,192 @@ export class ChessScene3D {
   }
 
   private handlePointerDown(e: PointerEvent): void {
-    if (e.button !== 0) return;
+    // While actively dragging a piece, ignore stray secondary fingers so OrbitControls never hijacks the board
+    if (this.activeDragPointerId !== null) {
+      if (e.pointerId !== this.activeDragPointerId) {
+        e.stopImmediatePropagation();
+      }
+      return;
+    }
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (!e.isPrimary) return;
+
     this.pointerDownPos.x = e.clientX;
     this.pointerDownPos.y = e.clientY;
-    const downSq = this.pickSquare(e.clientX, e.clientY, true);
-    if (downSq && this.callbacks.canDragPieceAtSquare?.(downSq)) {
+    this.pointerConsumedOnDownId = null;
+
+    // Immediately restore upright piece positions if a wild dog / hamster showcase is active
+    // and the user touches the board so raycasting hits exact true piece positions.
+    const initialHitSq = this.pickSquare(e.clientX, e.clientY, true);
+    if (initialHitSq) {
+      if (this.wildDogPhase !== 'idle') {
+        this.stopWildDogRun(true);
+      }
+      if (this.hamsterActive) {
+        this.stopHamsterChase();
+      }
+    }
+
+    const downSq = initialHitSq ? this.pickSquare(e.clientX, e.clientY, true) : null;
+    if (!downSq) {
+      return;
+    }
+
+    // Immediate override path: fires in capture phase BEFORE OrbitControls ever sees pointerdown!
+    if (this.callbacks.onBoardPointerDown) {
+      const res = this.callbacks.onBoardPointerDown(downSq);
+      if (res.action === 'moved' || res.action === 'preselected') {
+        e.stopImmediatePropagation();
+        if (e.pointerType !== 'mouse') {
+          e.preventDefault();
+        }
+        this.pointerConsumedOnDownId = e.pointerId;
+        this.renderer.domElement.style.cursor = 'pointer';
+        return;
+      }
+      if (res.action === 'drag-start') {
+        e.stopImmediatePropagation();
+        if (e.pointerType !== 'mouse') {
+          e.preventDefault();
+        }
+        this.dragOriginSquare = downSq;
+        this.activeDragPointerId = e.pointerId;
+        this.dragMovedEnough = false;
+        this.dragWasAlreadySelected = Boolean(res.wasAlreadySelected);
+
+        const entry = this.pieceMap.get(downSq);
+        if (entry) {
+          this.dragPieceGroup = entry.group;
+          // Cancel any in-flight piece slide animation on this piece so it never fights the player's finger
+          this.animations = this.animations.filter((a) => a.obj !== entry.group);
+          squareToWorld(downSq, this.dragPieceOrigPos);
+          // Immediate tactile micro-lift on touch so the piece feels alive instantly
+          entry.group.position.set(this.dragPieceOrigPos.x, BOARD_TOP_Y + 0.08, this.dragPieceOrigPos.z);
+          entry.group.quaternion.identity();
+          this.requestRender();
+        } else {
+          this.dragPieceGroup = null;
+        }
+
+        try {
+          this.renderer.domElement.setPointerCapture(e.pointerId);
+        } catch {
+          // Ignore if browser rejects synthetic pointer capture
+        }
+        this.renderer.domElement.style.cursor = 'grabbing';
+        return;
+      }
+      return;
+    }
+
+    // Fallback path if onBoardPointerDown is not supplied
+    if (this.callbacks.canDragPieceAtSquare?.(downSq)) {
+      e.stopImmediatePropagation();
+      if (e.pointerType !== 'mouse') {
+        e.preventDefault();
+      }
       this.dragOriginSquare = downSq;
-      if (this.controls) {
-        this.controls.enabled = false;
+      this.activeDragPointerId = e.pointerId;
+      this.dragMovedEnough = false;
+      this.dragWasAlreadySelected = this.latestSyncedState?.selectedSquare === downSq;
+      const entry = this.pieceMap.get(downSq);
+      if (entry) {
+        this.dragPieceGroup = entry.group;
+        this.animations = this.animations.filter((a) => a.obj !== entry.group);
+        squareToWorld(downSq, this.dragPieceOrigPos);
+      }
+      try {
+        this.renderer.domElement.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore
       }
       this.renderer.domElement.style.cursor = 'grabbing';
-    } else {
-      this.dragOriginSquare = null;
+    }
+  }
+
+  private handlePointerCancel(e: PointerEvent): void {
+    if (this.pointerConsumedOnDownId === e.pointerId) {
+      this.pointerConsumedOnDownId = null;
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (this.activeDragPointerId !== null && e.pointerId === this.activeDragPointerId) {
+      e.stopImmediatePropagation();
+      this.cancelActiveDrag(true);
     }
   }
 
   private handlePointerUp(e: PointerEvent): void {
-    if (e.button !== 0) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    if (this.pointerConsumedOnDownId === e.pointerId) {
+      this.pointerConsumedOnDownId = null;
+      e.stopImmediatePropagation();
+      return;
+    }
+
     const dragFrom = this.dragOriginSquare;
-    this.dragOriginSquare = null;
-    if (this.controls && !this.controls.enabled) {
-      this.controls.enabled = true;
+    if (dragFrom && this.activeDragPointerId === e.pointerId) {
+      e.stopImmediatePropagation();
+      const wasMoved = this.dragMovedEnough;
+      const wasAlreadySelected = this.dragWasAlreadySelected;
+      const dragGroup = this.dragPieceGroup;
+      const origPos = this.dragPieceOrigPos.clone();
+
+      // Release pointer capture & clear drag tracking before invoking React callbacks
+      const dom = this.renderer.domElement;
+      try {
+        if (dom.hasPointerCapture(e.pointerId)) {
+          dom.releasePointerCapture(e.pointerId);
+        }
+      } catch {
+        // ignore
+      }
+      this.dragOriginSquare = null;
+      this.activeDragPointerId = null;
+      this.dragPieceGroup = null;
+      this.dragMovedEnough = false;
+      this.dragWasAlreadySelected = false;
+      dom.style.cursor = 'pointer';
+
+      // Exclude the dragged piece itself so raycasting hits the target square/enemy piece underneath!
+      const dropSq = this.pickSquare(e.clientX, e.clientY, false, dragFrom);
+
+      if (wasMoved && dropSq && dropSq !== dragFrom) {
+        const moved = this.callbacks.onDragMove?.(dragFrom, dropSq);
+        if (moved) {
+          // syncPieces will smoothly settle the piece from its lifted drop position onto dropSq
+          this.requestRender();
+          return;
+        }
+        // Dropped on an illegal square: snap piece cleanly back onto its origin square and keep it selected
+        if (dragGroup) {
+          dragGroup.position.copy(origPos);
+          dragGroup.quaternion.identity();
+        }
+        this.requestRender();
+        return;
+      }
+
+      // Tap / release back on origin square: seat piece smoothly back onto the board
+      if (dragGroup) {
+        dragGroup.position.copy(origPos);
+        dragGroup.quaternion.identity();
+      }
+      if (!wasMoved && wasAlreadySelected) {
+        // Tapping an ALREADY-selected piece toggles selection off (unless auto-selected by arrow)
+        this.callbacks.onSquareClick(dragFrom);
+      }
+      this.requestRender();
+      return;
     }
 
     const travel = Math.hypot(
       e.clientX - this.pointerDownPos.x,
       e.clientY - this.pointerDownPos.y,
     );
-
-    if (dragFrom) {
-      const dropSq = this.pickSquare(e.clientX, e.clientY, false);
-      if (dropSq && dropSq !== dragFrom) {
-        const moved = this.callbacks.onDragMove?.(dragFrom, dropSq);
-        if (moved) {
-          this.renderer.domElement.style.cursor = 'pointer';
-          return;
-        }
-        if (travel <= 16) {
-          const handled = this.callbacks.onSquareClick(dropSq);
-          if (handled) return;
-        }
-        // Drag ended on an illegal square: select the dragged piece so its legal destinations light up
-        this.callbacks.onSquareClick(dragFrom);
-        return;
-      }
-      if (dropSq === dragFrom || travel <= 22) {
-        this.callbacks.onSquareClick(dragFrom);
-        return;
-      }
-    }
-
-    if (travel > 14) return;
+    const maxTapTravel = e.pointerType === 'touch' ? 28 : 16;
+    if (travel > maxTapTravel) return;
 
     // Touch/pen double-tap fallback for the developer-only "8" coordinate secret trigger
     if (this.callbacks.onSecretCoord8DoubleClick && e.pointerType !== 'mouse') {
@@ -4118,9 +4415,56 @@ export class ChessScene3D {
   }
 
   private handlePointerMove(e: PointerEvent): void {
-    const isDraggingPiece = Boolean(this.dragOriginSquare);
+    const isDraggingPiece =
+      Boolean(this.dragOriginSquare) && this.activeDragPointerId === e.pointerId;
+
+    if (isDraggingPiece) {
+      e.stopImmediatePropagation();
+      if (e.pointerType !== 'mouse') {
+        e.preventDefault();
+      }
+
+      const travel = Math.hypot(
+        e.clientX - this.pointerDownPos.x,
+        e.clientY - this.pointerDownPos.y,
+      );
+      if (!this.dragMovedEnough && travel > 5) {
+        this.dragMovedEnough = true;
+      }
+
+      if (this.dragMovedEnough && this.dragPieceGroup) {
+        const rect = this.renderer.domElement.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          _rayMouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+          _rayMouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+          this.raycaster.setFromCamera(_rayMouse, this.camera);
+          if (this.raycaster.ray.intersectPlane(_dragPlane, _dragHit)) {
+            const clampedX = THREE.MathUtils.clamp(_dragHit.x, -4.15, 4.15);
+            const clampedZ = THREE.MathUtils.clamp(_dragHit.z, -4.15, 4.15);
+            this.dragPieceGroup.position.set(clampedX, BOARD_TOP_Y + 0.34, clampedZ);
+            this.dragPieceGroup.quaternion.identity();
+          }
+        }
+      }
+
+      const hoverSq = this.pickSquare(e.clientX, e.clientY, false, this.dragOriginSquare);
+      if (hoverSq !== this.hoveredSquare) {
+        this.hoveredSquare = hoverSq;
+        if (hoverSq) {
+          squareToWorld(hoverSq, _tmpVec);
+          this.hoverRing.position.set(_tmpVec.x, BOARD_TOP_Y + 0.021, _tmpVec.z);
+          this.hoverRing.visible = true;
+        } else {
+          this.hoverRing.visible = false;
+        }
+      }
+      this.renderer.domElement.style.cursor = 'grabbing';
+      this.requestRender();
+      return;
+    }
+
     const now = performance.now();
-    const minIntervalMs = isDraggingPiece ? 16 : this.powerSaveMode ? 120 : 40;
+    const minIntervalMs = this.powerSaveMode ? 120 : 40;
     if (now - this.lastHoverRaycastTime < minIntervalMs) return;
     this.lastHoverRaycastTime = now;
 
@@ -4131,10 +4475,10 @@ export class ChessScene3D {
         squareToWorld(sq, _tmpVec);
         this.hoverRing.position.set(_tmpVec.x, BOARD_TOP_Y + 0.021, _tmpVec.z);
         this.hoverRing.visible = true;
-        this.renderer.domElement.style.cursor = isDraggingPiece ? 'grabbing' : 'pointer';
+        this.renderer.domElement.style.cursor = 'pointer';
       } else {
         this.hoverRing.visible = false;
-        this.renderer.domElement.style.cursor = isDraggingPiece ? 'grabbing' : 'grab';
+        this.renderer.domElement.style.cursor = this.cameraPivotLocked ? 'default' : 'grab';
       }
       this.requestRender();
     }
@@ -5014,9 +5358,10 @@ export class ChessScene3D {
     this.calcPureTree = null;
 
     const dom = this.renderer.domElement;
-    dom.removeEventListener('pointerdown', this.boundPointerDown);
-    dom.removeEventListener('pointerup', this.boundPointerUp);
-    dom.removeEventListener('pointermove', this.boundPointerMove);
+    dom.removeEventListener('pointerdown', this.boundPointerDown, { capture: true });
+    dom.removeEventListener('pointerup', this.boundPointerUp, { capture: true });
+    dom.removeEventListener('pointermove', this.boundPointerMove, { capture: true });
+    dom.removeEventListener('pointercancel', this.boundPointerCancel, { capture: true });
     dom.removeEventListener('pointerleave', this.boundPointerLeave);
     dom.removeEventListener('dblclick', this.boundDblClick);
     dom.removeEventListener('webglcontextlost', this.boundContextLost);

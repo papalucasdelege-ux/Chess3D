@@ -784,7 +784,7 @@ async function startServer(): Promise<void> {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader(
       'Permissions-Policy',
-      'camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=(self)',
+      'camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=*',
     );
     const scriptPolicy = IS_PROD
       ? "script-src 'self' 'unsafe-inline'"
@@ -1161,6 +1161,22 @@ async function startServer(): Promise<void> {
     ) {
       return 'Angels Algorythm';
     }
+    if (
+      lower === 'gregorian_enthropy.mp3' ||
+      lower.startsWith('gregorian_enthropy_') ||
+      lower === 'gregorian_entropy.mp3' ||
+      lower.startsWith('gregorian_entropy_')
+    ) {
+      return 'Gregorian Enthropy';
+    }
+    if (
+      lower === 'dame_au_damier.mp3' ||
+      lower.startsWith('dame_au_damier_') ||
+      lower === 'la_dame_au_damier.mp3' ||
+      lower.startsWith('la_dame_au_damier_')
+    ) {
+      return 'La Dame au Damier';
+    }
     if (lower.includes('angle_45923f8a') || /^angle_[0-9a-f]{8}\.mp3$/.test(lower)) {
       return 'Chess Angel';
     }
@@ -1188,7 +1204,22 @@ async function startServer(): Promise<void> {
     ) {
       return 5;
     }
-    return 6;
+    if (
+      lower === 'gregorian_enthropy.mp3' ||
+      lower.startsWith('gregorian_enthropy_') ||
+      lower.startsWith('gregorian_entropy')
+    ) {
+      return 6;
+    }
+    if (
+      lower === 'dame_au_damier.mp3' ||
+      lower.startsWith('dame_au_damier_') ||
+      lower === 'la_dame_au_damier.mp3' ||
+      lower.startsWith('la_dame_au_damier_')
+    ) {
+      return 7;
+    }
+    return 8;
   };
 
   const discoverMusicTracks = (): Array<{ id: string; title: string; url: string }> => {
@@ -1237,6 +1268,24 @@ async function startServer(): Promise<void> {
             l.startsWith('angels_algorithm_')
           );
         };
+        const isGregorianEnthropy = (n: string) => {
+          const l = n.toLowerCase();
+          return (
+            l === 'gregorian_enthropy.mp3' ||
+            l.startsWith('gregorian_enthropy_') ||
+            l === 'gregorian_entropy.mp3' ||
+            l.startsWith('gregorian_entropy_')
+          );
+        };
+        const isLaDameAuDamier = (n: string) => {
+          const l = n.toLowerCase();
+          return (
+            l === 'dame_au_damier.mp3' ||
+            l.startsWith('dame_au_damier_') ||
+            l === 'la_dame_au_damier.mp3' ||
+            l.startsWith('la_dame_au_damier_')
+          );
+        };
         const isLegacyAngle = (n: string) => {
           const l = n.toLowerCase();
           return l === 'angle_45923f8a.mp3' || /^angle_[0-9a-f]{8}\.mp3$/.test(l);
@@ -1249,6 +1298,8 @@ async function startServer(): Promise<void> {
               !isMeditational(e.name) &&
               !isDarkAngel(e.name) &&
               !isAngelsAlgorythm(e.name) &&
+              !isGregorianEnthropy(e.name) &&
+              !isLaDameAuDamier(e.name) &&
               !isLegacyAngle(e.name),
           )
           .sort((a, b) => {
@@ -1274,7 +1325,9 @@ async function startServer(): Promise<void> {
               if (isMeditational(name)) return 3;
               if (isDarkAngel(name)) return 4;
               if (isAngelsAlgorythm(name)) return 5;
-              return 6;
+              if (isGregorianEnthropy(name)) return 6;
+              if (isLaDameAuDamier(name)) return 7;
+              return 8;
             };
             const rankDiff = rank(a.name) - rank(b.name);
             return rankDiff !== 0 ? rankDiff : a.name.localeCompare(b.name);
@@ -1301,11 +1354,15 @@ async function startServer(): Promise<void> {
                     ? 'dark_angel'
                     : isAngelsAlgorythm(entry.name)
                       ? 'angels_algorythm'
-                      : entry.name
-                          .replace(/\.mp3$/i, '')
-                          .toLowerCase()
-                          .replace(/[^a-z0-9]+/g, '_')
-                          .replace(/^_+|_+$/g, '') || 'chess_angel_track';
+                      : isGregorianEnthropy(entry.name)
+                        ? 'gregorian_enthropy'
+                        : isLaDameAuDamier(entry.name)
+                          ? 'la_dame_au_damier'
+                          : entry.name
+                              .replace(/\.mp3$/i, '')
+                              .toLowerCase()
+                              .replace(/[^a-z0-9]+/g, '_')
+                              .replace(/^_+|_+$/g, '') || 'chess_angel_track';
           if (seenIds.has(id)) continue;
           seenUrls.add(url);
           seenIds.add(id);
@@ -1321,7 +1378,11 @@ async function startServer(): Promise<void> {
                     ? 'Dark Angel'
                     : isAngelsAlgorythm(entry.name)
                       ? 'Angels Algorythm'
-                      : formatMusicTrackTitle(entry.name);
+                      : isGregorianEnthropy(entry.name)
+                        ? 'Gregorian Enthropy'
+                        : isLaDameAuDamier(entry.name)
+                          ? 'La Dame au Damier'
+                          : formatMusicTrackTitle(entry.name);
           tracks.push({ id, title, url });
         }
       }
@@ -2330,8 +2391,8 @@ async function startServer(): Promise<void> {
       }
       if (fs.existsSync(udoBarkAssetMp3Path)) {
         result.udoBarkAudioUrl = '/assets/aistudio/udo_bark.mp3';
-      } else if (result.udoBarkAudioUrl === '/assets/aistudio/udo_bark.mp3') {
-        delete result.udoBarkAudioUrl;
+      } else {
+        result.udoBarkAudioUrl = '';
       }
     } catch {
       // ignore
@@ -3488,6 +3549,15 @@ async function startServer(): Promise<void> {
           fs.copyFileSync(tmpAudioOut, udoBarkAssetMp3Path);
         }
 
+        const distAistudioDir = path.join(process.cwd(), 'dist', 'assets', 'aistudio');
+        if (fs.existsSync(distAistudioDir)) {
+          try {
+            fs.copyFileSync(udoBarkAssetMp3Path, path.join(distAistudioDir, 'udo_bark.mp3'));
+          } catch {
+            // ignore
+          }
+        }
+
         const audioUrl = `/assets/aistudio/udo_bark.mp3?v=${Date.now()}`;
         const map = readAngelVideoMap();
         map.udoBarkAudioUrl = '/assets/aistudio/udo_bark.mp3';
@@ -3525,6 +3595,53 @@ async function startServer(): Promise<void> {
     } catch (err) {
       console.error('Failed to delete Udo bark audio:', err);
       res.status(500).json({ error: 'Failed to clear Udo barking audio.' });
+    }
+  });
+
+  app.post('/api/angel-videos/bake-all', (req, res) => {
+    if (!requireStudioDeveloperAuth(req, res)) return;
+    try {
+      const map = readAngelVideoMap();
+      writeAngelVideoMap(map);
+
+      let bakedVideos = 0;
+      let bakedAudio = 0;
+      if (fs.existsSync(aistudioAssetsDir)) {
+        for (const entry of fs.readdirSync(aistudioAssetsDir, { withFileTypes: true })) {
+          if (!entry.isFile()) continue;
+          if (/\.(mp4|webm|mov|m4v)$/i.test(entry.name)) bakedVideos += 1;
+          else if (/\.(mp3|wav|ogg|m4a)$/i.test(entry.name)) bakedAudio += 1;
+        }
+      }
+
+      // Mirror all baked media & config from public/ into dist/ so both dev and built bundles match
+      const distRoot = path.join(process.cwd(), 'dist');
+      if (fs.existsSync(distRoot)) {
+        const distAistudioDir = path.join(distRoot, 'assets', 'aistudio');
+        fs.mkdirSync(distAistudioDir, { recursive: true });
+        if (fs.existsSync(aistudioAssetsDir)) {
+          fs.cpSync(aistudioAssetsDir, distAistudioDir, { recursive: true, force: true });
+        }
+        const pubVoices = path.join(process.cwd(), 'public', 'voices');
+        if (fs.existsSync(pubVoices)) {
+          fs.cpSync(pubVoices, path.join(distRoot, 'voices'), { recursive: true, force: true });
+        }
+        const pubSeduction = path.join(process.cwd(), 'public', 'seduction.mp3');
+        if (fs.existsSync(pubSeduction)) {
+          fs.copyFileSync(pubSeduction, path.join(distRoot, 'seduction.mp3'));
+        }
+      }
+
+      res.json({
+        ok: true,
+        bakedVideos,
+        bakedAudio,
+        bakedAt: Date.now(),
+        map,
+      });
+    } catch (err) {
+      console.error('Failed to bake all Studio videos & audio:', err);
+      res.status(500).json({ error: 'Failed to save & bake all Studio videos.' });
     }
   });
 
@@ -4411,7 +4528,9 @@ async function startServer(): Promise<void> {
         trackKey !== 'queen_infinite_reign' &&
         trackKey !== 'meditational' &&
         trackKey !== 'dark_angel' &&
-        trackKey !== 'angels_algorythm'
+        trackKey !== 'angels_algorythm' &&
+        trackKey !== 'gregorian_enthropy' &&
+        trackKey !== 'la_dame_au_damier'
       ) {
         res.status(400).json({ error: 'Invalid music track slot.' });
         return;
@@ -4433,7 +4552,11 @@ async function startServer(): Promise<void> {
                 ? 'dark_angel_2e69e349.mp3'
                 : trackKey === 'angels_algorythm'
                   ? 'angels_algorythm_db8e65b5.mp3'
-                  : 'Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3';
+                  : trackKey === 'gregorian_enthropy'
+                    ? 'gregorian_enthropy_db8337f2.mp3'
+                    : trackKey === 'la_dame_au_damier'
+                      ? 'dame_au_damier_e5564693.mp3'
+                      : 'Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3';
 
       const tmpIn = path.join(os.tmpdir(), `music_in_${process.pid}_${Date.now()}.bin`);
       const tmpOut = path.join(os.tmpdir(), `music_out_${process.pid}_${Date.now()}.mp3`);

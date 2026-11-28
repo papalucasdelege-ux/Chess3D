@@ -32,7 +32,9 @@ import {
   AlertCircle,
   Leaf,
   Lightbulb,
+  Lock,
   Music,
+  Unlock,
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 import {
@@ -89,6 +91,8 @@ interface ControlDockProps {
   onChangeTimeControl: (tc: TimeControlId) => void;
   cameraPreset: CameraPreset;
   onSelectCameraPreset: (preset: CameraPreset) => void;
+  cameraPivotLocked: boolean;
+  onToggleCameraPivotLocked: () => void;
   soundEnabled: boolean;
   onToggleSound: () => void;
   musicEnabled: boolean;
@@ -495,6 +499,29 @@ export function ControlDock(props: ControlDockProps) {
               }`}
             >
               Coords: {props.showCoordinates ? 'On' : 'Off'}
+            </button>
+
+            <button
+              type="button"
+              onClick={props.onToggleCameraPivotLocked}
+              aria-pressed={!props.cameraPivotLocked}
+              title={
+                props.cameraPivotLocked
+                  ? 'Camera pivoting is blocked — click to unlock free 3D camera rotation & zoom'
+                  : 'Camera pivoting is unlocked — click to block camera rotation & zoom'
+              }
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded border transition-colors whitespace-nowrap cursor-pointer focus-visible:outline-2 focus-visible:outline-[#e3be78] ${
+                props.cameraPivotLocked
+                  ? 'bg-[#1f2634] border-[#c89d54]/50 text-[#f3efe4]'
+                  : 'bg-[#162922] border-[#34d399]/60 text-[#a7f3d0]'
+              }`}
+            >
+              {props.cameraPivotLocked ? (
+                <Lock className="w-3.5 h-3.5 text-[#c89d54]" />
+              ) : (
+                <Unlock className="w-3.5 h-3.5 text-[#34d399]" />
+              )}
+              Camera Pivot: {props.cameraPivotLocked ? 'Blocked' : 'Free'}
             </button>
 
             <div

@@ -3611,6 +3611,14 @@ interface OpponentSpeechBannerProps {
   linesEnabled?: boolean;
   onSwitchOffThinkingLines?: () => void;
   onSwitchOnThinkingLines?: () => void;
+  thinkingLineSequences?: ReadonlyArray<{
+    index: number;
+    firstMoveSan: string;
+    pvSan: string[];
+    evalLabel: string;
+  }>;
+  selectedThinkingLineSeqIdx?: number | null;
+  onSelectThinkingLineSeq?: (index: number | null) => void;
   proposeThreeMoves?: boolean;
   onPlayThreeMoves?: () => void;
   onAnimateTopThreeFromTree?: () => void;
@@ -3673,6 +3681,9 @@ export function OpponentSpeechBanner({
   linesEnabled = true,
   onSwitchOffThinkingLines,
   onSwitchOnThinkingLines,
+  thinkingLineSequences = [],
+  selectedThinkingLineSeqIdx = null,
+  onSelectThinkingLineSeq,
   proposeThreeMoves = true,
   onPlayThreeMoves,
   onAnimateTopThreeFromTree,
@@ -3847,85 +3858,186 @@ export function OpponentSpeechBanner({
     const showThreeMovesBtn =
       Boolean(handleThreeMovesClick) &&
       (forceAllowThreeMoves || proposeThreeMoves || isThreeMovesPlaying);
+    const linesAreOn = Boolean(linesEnabled || thinkingLinesProjected);
+    const showSequenceRadios =
+      linesAreOn &&
+      Boolean(onSelectThinkingLineSeq) &&
+      thinkingLineSequences.length > 0;
+    const activeSeq =
+      showSequenceRadios &&
+      selectedThinkingLineSeqIdx !== null &&
+      selectedThinkingLineSeqIdx >= 0 &&
+      selectedThinkingLineSeqIdx < thinkingLineSequences.length
+        ? thinkingLineSequences[selectedThinkingLineSeqIdx]
+        : null;
 
     return (
-      <div className={`flex flex-wrap items-center ${isRoomy ? 'gap-2' : 'gap-1'}`}>
-        <button
-          type="button"
-          onClick={onExportTreeJpg}
-          aria-pressed={frontalTreeViewOpen}
-          title={
-            frontalTreeViewOpen
-              ? 'Close thinking lines view and return to 3D board'
-              : 'Show frontal top-view thinking lines on pure black'
-          }
-          className={`inline-flex items-center ${padClass} border font-semibold transition-colors cursor-pointer text-left leading-tight ${
-            frontalTreeViewOpen
-              ? 'bg-[#241b0c] hover:bg-[#312510] border-[#f3cf83]/85 text-[#fde68a]'
-              : 'bg-black hover:bg-[#141a25] border-[#d6ae63]/55 text-[#f3cf83]'
-          }`}
-        >
-          <Maximize2 className={`${footerBtnIconClass} text-[#f3cf83] shrink-0`} />
-          <span>Thinking Lines</span>
-        </button>
-
-        {showThreeMovesBtn && handleThreeMovesClick && (
+      <div className="flex flex-col gap-1 min-w-0">
+        <div className={`flex flex-wrap items-center ${isRoomy ? 'gap-2' : 'gap-1'}`}>
           <button
             type="button"
-            onClick={handleThreeMovesClick}
-            aria-pressed={isThreeMovesPlaying}
+            onClick={onExportTreeJpg}
+            aria-pressed={frontalTreeViewOpen}
             title={
-              isThreeMovesPlaying
-                ? 'Stop 3D three-moves preview'
-                : 'Watch Chess Angel play out the three candidate moves slowly on the 3D board'
+              frontalTreeViewOpen
+                ? 'Close thinking lines view and return to 3D board'
+                : 'Show frontal top-view thinking lines on pure black'
             }
             className={`inline-flex items-center ${padClass} border font-semibold transition-colors cursor-pointer text-left leading-tight ${
-              isThreeMovesPlaying
-                ? 'bg-[#122232] hover:bg-[#182d42] border-[#38bdf8]/80 text-[#bae6fd]'
-                : 'bg-black hover:bg-[#141a25] border-[#38bdf8]/50 text-[#bae6fd]'
+              frontalTreeViewOpen
+                ? 'bg-[#241b0c] hover:bg-[#312510] border-[#f3cf83]/85 text-[#fde68a]'
+                : 'bg-black hover:bg-[#141a25] border-[#d6ae63]/55 text-[#f3cf83]'
             }`}
           >
-            <Eye className={`${footerBtnIconClass} text-[#7dd3fc] shrink-0`} />
-            <span>Three Moves</span>
+            <Maximize2 className={`${footerBtnIconClass} text-[#f3cf83] shrink-0`} />
+            <span>Thinking Lines</span>
           </button>
-        )}
 
-        {linesEnabled || thinkingLinesProjected ? (
-          onSwitchOffThinkingLines && (
+          {showThreeMovesBtn && handleThreeMovesClick && (
             <button
               type="button"
-              onClick={onSwitchOffThinkingLines}
-              title="Switch off all thinking lines and arrows projected onto the board"
-              className={`inline-flex items-center ${padClass} bg-[#241016] hover:bg-[#341620] border border-[#fb7185]/75 font-semibold text-[#fecdd3] transition-colors cursor-pointer text-left leading-tight`}
+              onClick={handleThreeMovesClick}
+              aria-pressed={isThreeMovesPlaying}
+              title={
+                isThreeMovesPlaying
+                  ? 'Stop 3D three-moves preview'
+                  : 'Watch Chess Angel play out the three candidate moves slowly on the 3D board'
+              }
+              className={`inline-flex items-center ${padClass} border font-semibold transition-colors cursor-pointer text-left leading-tight ${
+                isThreeMovesPlaying
+                  ? 'bg-[#122232] hover:bg-[#182d42] border-[#38bdf8]/80 text-[#bae6fd]'
+                  : 'bg-black hover:bg-[#141a25] border-[#38bdf8]/50 text-[#bae6fd]'
+              }`}
             >
-              <EyeOff className={`${footerBtnIconClass} text-[#fda4af] shrink-0`} />
-              <span>Lines Off</span>
+              <Eye className={`${footerBtnIconClass} text-[#7dd3fc] shrink-0`} />
+              <span>Three Moves</span>
             </button>
-          )
-        ) : (
-          onSwitchOnThinkingLines && (
+          )}
+
+          {linesAreOn ? (
+            onSwitchOffThinkingLines && (
+              <button
+                type="button"
+                onClick={onSwitchOffThinkingLines}
+                title="Switch off all thinking lines and arrows projected onto the board"
+                className={`inline-flex items-center ${padClass} bg-[#241016] hover:bg-[#341620] border border-[#fb7185]/75 font-semibold text-[#fecdd3] transition-colors cursor-pointer text-left leading-tight`}
+              >
+                <EyeOff className={`${footerBtnIconClass} text-[#fda4af] shrink-0`} />
+                <span>Lines Off</span>
+              </button>
+            )
+          ) : (
+            onSwitchOnThinkingLines && (
+              <button
+                type="button"
+                onClick={onSwitchOnThinkingLines}
+                title="Switch on thinking lines projected onto the 3D board"
+                className={`inline-flex items-center ${padClass} bg-[#0d2218] hover:bg-[#133123] border border-[#34d399]/75 font-semibold text-[#a7f3d0] transition-colors cursor-pointer text-left leading-tight`}
+              >
+                <Eye className={`${footerBtnIconClass} text-[#6ee7b7] shrink-0`} />
+                <span>Lines On</span>
+              </button>
+            )
+          )}
+
+          {inTacticalTraining && onExitTacticalTraining && (
             <button
               type="button"
-              onClick={onSwitchOnThinkingLines}
-              title="Switch on thinking lines projected onto the 3D board"
-              className={`inline-flex items-center ${padClass} bg-[#0d2218] hover:bg-[#133123] border border-[#34d399]/75 font-semibold text-[#a7f3d0] transition-colors cursor-pointer text-left leading-tight`}
+              onClick={onExitTacticalTraining}
+              title="Exit Tactical Training and return to casual play"
+              className={`inline-flex items-center ${padClass} bg-[#241016] hover:bg-[#341620] border border-[#fb7185]/80 font-semibold text-[#fecdd3] transition-colors cursor-pointer text-left leading-tight`}
             >
-              <Eye className={`${footerBtnIconClass} text-[#6ee7b7] shrink-0`} />
-              <span>Line On</span>
+              <LogOut className={`${footerBtnIconClass} text-[#fda4af] shrink-0`} />
+              <span>{isRoomy ? 'Exit Training' : 'Exit'}</span>
             </button>
-          )
-        )}
+          )}
+        </div>
 
-        {inTacticalTraining && onExitTacticalTraining && (
-          <button
-            type="button"
-            onClick={onExitTacticalTraining}
-            title="Exit Tactical Training and return to casual play"
-            className={`inline-flex items-center ${padClass} bg-[#241016] hover:bg-[#341620] border border-[#fb7185]/80 font-semibold text-[#fecdd3] transition-colors cursor-pointer text-left leading-tight`}
-          >
-            <LogOut className={`${footerBtnIconClass} text-[#fda4af] shrink-0`} />
-            <span>{isRoomy ? 'Exit Training' : 'Exit'}</span>
-          </button>
+        {showSequenceRadios && onSelectThinkingLineSeq && (
+          <div className="flex flex-col gap-0.5 pt-0.5 min-w-0">
+            <div
+              role="radiogroup"
+              aria-label="Thinking line follow-up sequences"
+              className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0"
+            >
+              <span className="text-[9px] uppercase tracking-wider text-[#9aa3b2] select-none shrink-0">
+                Seq:
+              </span>
+              <label
+                title="Show all thinking lines together"
+                className={`inline-flex items-center gap-1 cursor-pointer select-none text-[10px] leading-none transition-colors ${
+                  selectedThinkingLineSeqIdx === null
+                    ? 'text-[#f3cf83] font-semibold'
+                    : 'text-[#aeb7c6] hover:text-white'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="thinking-line-sequence"
+                  checked={selectedThinkingLineSeqIdx === null}
+                  onChange={() => onSelectThinkingLineSeq(null)}
+                  className="sr-only"
+                />
+                <span
+                  aria-hidden="true"
+                  className={`w-2.5 h-2.5 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
+                    selectedThinkingLineSeqIdx === null
+                      ? 'border-[#f3cf83] bg-[#2a200e]'
+                      : 'border-white/35 bg-black'
+                  }`}
+                >
+                  {selectedThinkingLineSeqIdx === null && (
+                    <span className="w-1 h-1 rounded-full bg-[#f3cf83]" />
+                  )}
+                </span>
+                <span>All</span>
+              </label>
+
+              {thinkingLineSequences.map((seq, idx) => {
+                const isChecked = selectedThinkingLineSeqIdx === idx;
+                return (
+                  <label
+                    key={`${seq.firstMoveSan}-${idx}`}
+                    title={`Sequence #${idx + 1}: ${seq.pvSan.join(' → ')} (${seq.evalLabel})`}
+                    className={`inline-flex items-center gap-1 cursor-pointer select-none text-[10px] leading-none font-mono-tabular transition-colors ${
+                      isChecked
+                        ? 'text-[#7dd3fc] font-semibold'
+                        : 'text-[#aeb7c6] hover:text-white'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="thinking-line-sequence"
+                      checked={isChecked}
+                      onChange={() => onSelectThinkingLineSeq(idx)}
+                      className="sr-only"
+                    />
+                    <span
+                      aria-hidden="true"
+                      className={`w-2.5 h-2.5 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
+                        isChecked
+                          ? 'border-[#7dd3fc] bg-[#0e2230]'
+                          : 'border-white/35 bg-black'
+                      }`}
+                    >
+                      {isChecked && (
+                        <span className="w-1 h-1 rounded-full bg-[#7dd3fc]" />
+                      )}
+                    </span>
+                    <span>{idx + 1}</span>
+                  </label>
+                );
+              })}
+            </div>
+
+            {activeSeq && (
+              <div className="text-[9.5px] leading-tight font-mono-tabular text-[#d9e5f5] break-words whitespace-normal">
+                <span className="text-[#f3cf83] font-semibold">#{activeSeq.index + 1}</span>{' '}
+                {activeSeq.pvSan.join(' → ')}{' '}
+                <span className="text-[#7dd3fc]">({activeSeq.evalLabel})</span>
+              </div>
+            )}
+          </div>
         )}
       </div>
     );
@@ -4557,18 +4669,20 @@ export function OpponentSpeechBanner({
           </div>
         )}
 
-        {message.clipId.startsWith('clock_timeout_') && onNewMatch && (
-          <div className={`${isRoomy ? 'mt-2 gap-1.5' : 'mt-1 gap-1'} flex flex-wrap items-center`}>
-            <button
-              type="button"
-              onClick={onNewMatch}
-              className={primaryActionBtnClass}
-            >
-              <RotateCcw className={iconSmClass} />
-              <span>New Match</span>
-            </button>
-          </div>
-        )}
+        {(message.clipId.startsWith('clock_timeout_') ||
+          message.clipId.startsWith('checkmate_lose_constructed_')) &&
+          onNewMatch && (
+            <div className={`${isRoomy ? 'mt-2 gap-1.5' : 'mt-1 gap-1'} flex flex-wrap items-center`}>
+              <button
+                type="button"
+                onClick={onNewMatch}
+                className={primaryActionBtnClass}
+              >
+                <RotateCcw className={iconSmClass} />
+                <span>New Match</span>
+              </button>
+            </div>
+          )}
 
         <div className={sectionDividerClass}>
           {renderThinkingAndThreeMoves(false)}

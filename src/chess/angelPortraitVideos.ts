@@ -141,16 +141,56 @@ export type CaseAlternativeSlotKey = `${CommentaryCaseId}_${number}`;
 export type AnyCaseSlotKey = CommentaryCaseId | CaseAlternativeSlotKey;
 
 /**
- * Sayings that expose a Primary (#1) + 2nd Alternative (#2) .mp4 slot in Video Studio,
+ * Sayings that expose Primary (#1) + Alternative (#2..#N) .mp4 slots in Video Studio,
  * alternating automatically each time the saying triggers during gameplay.
  */
 export const MULTI_SLOT_CASE_IDS: ReadonlySet<CommentaryCaseId> = new Set<CommentaryCaseId>([
+  'hesitate_hint',
   'warn_fork_2step',
   'warn_double',
   'undo_done',
   'ask_promotion',
   'capture_minor',
+  'checkmate_win',
+  'checkmate_lose',
 ]);
+
+/**
+ * Multi-slot sayings that support unlimited dynamically added options (`#1`, `#2`, `#3`, ... + Add Option)
+ * in Video Studio.
+ */
+export const DYNAMIC_MULTI_SLOT_CASE_IDS: ReadonlySet<CommentaryCaseId> = new Set<CommentaryCaseId>([
+  'seduction',
+  'hesitate_hint',
+]);
+
+export function isCaseDynamicMultiSlot(caseId: CommentaryCaseId): boolean {
+  return DYNAMIC_MULTI_SLOT_CASE_IDS.has(caseId);
+}
+
+export function parseCaseSlotNumber(caseId: CommentaryCaseId, key: string): number {
+  if (key === caseId) return 1;
+  const prefix = `${caseId}_`;
+  if (key.startsWith(prefix)) {
+    const tail = key.slice(prefix.length);
+    if (/^\d+$/.test(tail)) {
+      const n = parseInt(tail, 10);
+      if (Number.isFinite(n) && n >= 2) return n;
+    }
+  }
+  return 0;
+}
+
+export function getCaseSlotKey(caseId: CommentaryCaseId, slotNum: number): AnyCaseSlotKey {
+  return slotNum <= 1 ? caseId : (`${caseId}_${slotNum}` as AnyCaseSlotKey);
+}
+
+/**
+ * Multi-slot sayings whose first trigger picks randomly among attached slots (#1 / #2),
+ * and whose subsequent triggers (including across matches) strictly alternate.
+ */
+const RANDOM_FIRST_THEN_ALTERNATE_CASE_IDS: ReadonlySet<CommentaryCaseId> =
+  new Set<CommentaryCaseId>(['checkmate_win', 'checkmate_lose']);
 
 export const DEFAULT_VIDEO_MAX_PLAYS: Readonly<Record<string, number>> = {
   'case:tree_browse': 6,
@@ -161,6 +201,8 @@ export const DEFAULT_VIDEO_MAX_PLAYS: Readonly<Record<string, number>> = {
 
 export const DEFAULT_VIDEO_PLAY_TO_END: Readonly<Record<string, boolean>> = {
   'case:seduction': true,
+  'case:checkmate_lose': true,
+  'case:checkmate_lose_constructed': true,
   'case:angel_modal_on': true,
   'case:angel_modal_off': true,
   'case:thank_jan': true,
@@ -283,6 +325,9 @@ export const VOICE_CLIP_DURATION_SEC: Record<VoiceClipId, number> = {
   checkmate_lose_v1: 4.8,
   checkmate_lose_v2: 5.5,
   checkmate_lose_v3: 4.7,
+  checkmate_lose_constructed_v1: 5.4,
+  checkmate_lose_constructed_v2: 5.4,
+  checkmate_lose_constructed_v3: 5.4,
   checkmate_win_v1: 5.0,
   checkmate_win_v2: 4.5,
   checkmate_win_v3: 4.0,
@@ -443,6 +488,9 @@ export const ACOUSTIC_CLIP_CUE_WORDS: Partial<
   checkmate_lose_v1: { point_you: 1.63 },
   checkmate_lose_v2: { point_you: 2.34, point_me: 4.59 },
   checkmate_lose_v3: { point_you: 1.95 },
+  checkmate_lose_constructed_v1: { push_button: 3.9 },
+  checkmate_lose_constructed_v2: { push_button: 3.9 },
+  checkmate_lose_constructed_v3: { push_button: 3.9 },
   check_knight_v1: { point_you: 2.29 },
   check_knight_v2: { point_me: 0.31, point_you: 0.87 },
   check_general_v3: { point_me: 0.3 },
@@ -568,6 +616,8 @@ export const ANGEL_CASE_VIDEO_MAP: Partial<Record<CommentaryCaseId, string>> = {
   calc_pure: '/assets/aistudio/angel_case_calc_pure.mp4',
   calc_showing: '/assets/aistudio/angel_case_calc_showing.mp4',
   checkmate_win: '/assets/aistudio/angel_case_checkmate_win.mp4',
+  checkmate_lose: '/assets/aistudio/angel_case_checkmate_lose.mp4',
+  checkmate_lose_constructed: '/assets/aistudio/angel_case_checkmate_lose_constructed.mp4',
   draw: '/assets/aistudio/angel_case_draw.mp4',
   lost_queen: '/assets/aistudio/angel_case_lost_queen.mp4',
   new_match: '/assets/aistudio/angel_case_new_match.mp4',
@@ -614,6 +664,10 @@ export const ANGEL_LOCKED_IDLE_VARIANTS: Readonly<Record<string, string>> = {
 
 export const ANGEL_LOCKED_CASES: Readonly<Partial<Record<AnyCaseSlotKey, string>>> = {
   ...ANGEL_CASE_VIDEO_MAP,
+  checkmate_win_2: '/assets/aistudio/angel_case_checkmate_win_2.mp4',
+  checkmate_lose_2: '/assets/aistudio/angel_case_checkmate_lose_2.mp4',
+  hesitate_hint_2: '/assets/aistudio/angel_case_hesitate_hint_2.mp4',
+  hesitate_hint_3: '/assets/aistudio/angel_case_hesitate_hint_3.mp4',
   seduction_2: '/assets/aistudio/angel_case_seduction_2.mp4',
   seduction_3: '/assets/aistudio/angel_case_seduction_3.mp4',
   seduction_4: '/assets/aistudio/builtin_seduction_4.mp4',
@@ -691,6 +745,7 @@ const CASE_TO_GROUP: Record<CommentaryCaseId, AngelExpressionGroup> = {
   player_check: 'impressed',
   lost_queen: 'impressed',
   checkmate_lose: 'impressed',
+  checkmate_lose_constructed: 'impressed',
 
   // 8. Game Over — Victory or Peaceful Draw
   checkmate_win: 'ending',
@@ -724,6 +779,12 @@ export interface AngelStudioCaseSpec {
   talkSec: number;
   v2Sec: number;
   v3Sec: number;
+  extraVariants?: Array<{
+    ordinal: string;
+    clipId: VoiceClipId;
+    text: string;
+    sec: number;
+  }>;
 }
 
 export interface AngelStudioGroupSpec {
@@ -739,6 +800,29 @@ function makeCaseItem(caseId: CommentaryCaseId): AngelStudioCaseSpec {
   const v1Id = `${caseId}_v1` as VoiceClipId;
   const v2Id = `${caseId}_v2` as VoiceClipId;
   const v3Id = `${caseId}_v3` as VoiceClipId;
+  const extraVariants: Array<{
+    ordinal: string;
+    clipId: VoiceClipId;
+    text: string;
+    sec: number;
+  }> = [];
+  const extraDefs: ReadonlyArray<readonly [string, string]> = [
+    ['4th', 'v4'],
+    ['5th', 'v5'],
+    ['6th', 'v6'],
+  ];
+  for (const [ordinal, suffix] of extraDefs) {
+    const clipKey = `${caseId}_${suffix}` as VoiceClipId;
+    const text = CLIP_TEXT[clipKey];
+    if (text) {
+      extraVariants.push({
+        ordinal,
+        clipId: clipKey,
+        text,
+        sec: VOICE_CLIP_DURATION_SEC[clipKey] ?? 3.0,
+      });
+    }
+  }
   return {
     caseId,
     sampleClipId: v1Id,
@@ -750,6 +834,7 @@ function makeCaseItem(caseId: CommentaryCaseId): AngelStudioCaseSpec {
     talkSec: VOICE_CLIP_DURATION_SEC[v1Id] ?? 5.0,
     v2Sec: VOICE_CLIP_DURATION_SEC[v2Id] ?? 4.0,
     v3Sec: VOICE_CLIP_DURATION_SEC[v3Id] ?? 3.5,
+    ...(extraVariants.length > 0 ? { extraVariants } : {}),
   };
 }
 
@@ -827,6 +912,7 @@ export const ANGEL_VIDEO_STUDIO_GROUPS: AngelStudioGroupSpec[] = [
     'player_check',
     'lost_queen',
     'checkmate_lose',
+    'checkmate_lose_constructed',
   ]),
   makeGroupSpec('ending', 8, 'Game Over — Victory or Peaceful Draw', [
     'checkmate_win',
@@ -1141,6 +1227,7 @@ let runtimeOverrides: AngelVideoMapPayload = {
   videoPlayToEnd: {
     'case:seduction': true,
     'case:checkmate_lose': true,
+    'case:checkmate_lose_constructed': true,
     'case:lost_queen': true,
     'case:trial_confirm_1': true,
     'case:trial_confirm_2': true,
@@ -1189,6 +1276,12 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/angel_case_calc_showing.mp4': 5.1,
     '/assets/aistudio/angel_case_castled.mp4': 5.1,
     '/assets/aistudio/angel_case_checkmate_win.mp4': 7.1,
+    '/assets/aistudio/angel_case_checkmate_win_2.mp4': 6.1,
+    '/assets/aistudio/angel_case_checkmate_lose.mp4': 7.1,
+    '/assets/aistudio/angel_case_checkmate_lose_2.mp4': 7.1,
+    '/assets/aistudio/angel_case_checkmate_lose_constructed.mp4': 7.1,
+    '/assets/aistudio/angel_case_hesitate_hint_2.mp4': 7.1,
+    '/assets/aistudio/angel_case_hesitate_hint_3.mp4': 7.1,
     '/assets/aistudio/angel_case_draw.mp4': 7.1,
     '/assets/aistudio/angel_case_intro.mp4': 5.1,
     '/assets/aistudio/angel_case_lost_queen.mp4': 8.1,
@@ -1241,7 +1334,7 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/builtin_calc_offer.mp4': 9.1,
     '/assets/aistudio/builtin_opening.mp4': 10.1,
     '/assets/aistudio/builtin_resign.mp4': 8.1,
-    '/assets/aistudio/builtin_thank_jan.mp4': 12.1,
+    '/assets/aistudio/builtin_thank_jan.mp4': 10.0,
     '/assets/aistudio/builtin_save_game.mp4': 6.9,
     '/assets/aistudio/builtin_load_game.mp4': 6.9,
     '/assets/aistudio/builtin_level_beginner.mp4': 6.6,
@@ -1273,7 +1366,7 @@ let runtimeOverrides: AngelVideoMapPayload = {
     '/assets/aistudio/builtin_escape_point_me_3.mp4': 1.6,
   },
   seductionAudioUrl: ANGEL_SEDUCTION_AUDIO_SRC,
-  seductionAudioDuration: 217.6,
+  seductionAudioDuration: 229.2,
   seductionAudioVariants: {},
   seductionAudioDurations: {},
   seductionTriggerMode: 'balanced',
@@ -1741,11 +1834,14 @@ export function recordVideoSlotPlayInGame(slotId: string): void {
 
 export function resetGameVideoPlayCounts(): void {
   gameSlotPlayCounts.clear();
+  lastCaseTriggerKey.hesitate_hint = undefined;
   lastCaseTriggerKey.warn_fork_2step = undefined;
   lastCaseTriggerKey.warn_double = undefined;
   lastCaseTriggerKey.undo_done = undefined;
   lastCaseTriggerKey.ask_promotion = undefined;
   lastCaseTriggerKey.capture_minor = undefined;
+  lastCaseTriggerKey.checkmate_win = undefined;
+  lastCaseTriggerKey.checkmate_lose = undefined;
   for (const g of Object.keys(lastGroupTriggerKey) as AngelExpressionGroup[]) {
     delete lastGroupTriggerKey[g];
   }
@@ -2040,14 +2136,13 @@ export function isEffectiveCasePlayToEnd(
     return true;
   }
 
-  const [slot1, slot2] = getCaseSlotKeys(caseId);
-  if (map.cases?.[slot1] && isVideoSlotPlayToEnd(`case:${slot1}`, map)) return true;
-  if (map.cases?.[slot2] && isVideoSlotPlayToEnd(`case:${slot2}`, map)) return true;
+  const caseEntries = getCaseSlotEntries(caseId, map);
+  for (const entry of caseEntries) {
+    if (isVideoSlotPlayToEnd(`case:${entry.key}`, map)) return true;
+  }
 
   const hasCustomOrBuiltInCase =
-    Boolean(map.cases?.[slot1]) ||
-    Boolean(map.cases?.[slot2]) ||
-    Boolean(ANGEL_CASE_VIDEO_MAP[caseId]);
+    caseEntries.length > 0 || Boolean(ANGEL_CASE_VIDEO_MAP[caseId]);
   const group = CASE_TO_GROUP[caseId];
   if (!hasCustomOrBuiltInCase && group) {
     if (isVideoSlotPlayToEnd(`group:${group}`, map)) return true;
@@ -3670,20 +3765,14 @@ export function getCaseSlotKeys(
   return [caseId, `${caseId}_2`];
 }
 
-export function caseHasAlternativeSlotUI(
+export function getCaseSlotEntries(
   caseId: CommentaryCaseId,
-  map: AngelVideoMapPayload = runtimeOverrides,
-): boolean {
-  return MULTI_SLOT_CASE_IDS.has(caseId) || Boolean(map.cases[`${caseId}_2`]);
-}
-
-export function getSeductionCaseEntries(
   map: AngelVideoMapPayload = runtimeOverrides,
 ): Array<{ key: AnyCaseSlotKey; num: number; url: string }> {
   const found: Array<{ key: AnyCaseSlotKey; num: number; url: string }> = [];
   for (const [k, u] of Object.entries(map.cases || {})) {
     if (!u) continue;
-    const num = parseSeductionSlotNumber(k);
+    const num = parseCaseSlotNumber(caseId, k);
     if (num >= 1) {
       found.push({ key: k as AnyCaseSlotKey, num, url: u });
     }
@@ -3692,35 +3781,41 @@ export function getSeductionCaseEntries(
   return found;
 }
 
+export function caseHasAlternativeSlotUI(
+  caseId: CommentaryCaseId,
+  map: AngelVideoMapPayload = runtimeOverrides,
+): boolean {
+  return (
+    MULTI_SLOT_CASE_IDS.has(caseId) ||
+    DYNAMIC_MULTI_SLOT_CASE_IDS.has(caseId) ||
+    getCaseSlotEntries(caseId, map).some((e) => e.num >= 2)
+  );
+}
+
+export function getSeductionCaseEntries(
+  map: AngelVideoMapPayload = runtimeOverrides,
+): Array<{ key: AnyCaseSlotKey; num: number; url: string }> {
+  return getCaseSlotEntries('seduction', map);
+}
+
 /**
- * Returns the active custom .mp4 pool attached to `caseId` (`#1`, `#2`, and `#1..#N` for `seduction`).
+ * Returns the active custom .mp4 pool attached to `caseId` (`#1`, `#2`, ..., `#N`).
  */
 export function getCaseVideoPool(
   caseId: CommentaryCaseId,
   map: AngelVideoMapPayload = runtimeOverrides,
 ): string[] {
-  if (caseId === 'seduction') {
-    const pool: string[] = [];
-    for (const item of getSeductionCaseEntries(map)) {
-      if (!pool.includes(item.url)) {
-        pool.push(item.url);
-      }
-    }
-    return pool;
-  }
-  const [slot1, slot2] = getCaseSlotKeys(caseId);
   const pool: string[] = [];
-  for (const slotKey of [slot1, slot2] as const) {
-    const u = map.cases[slotKey];
-    if (u && !pool.includes(u)) {
-      pool.push(u);
+  for (const item of getCaseSlotEntries(caseId, map)) {
+    if (!pool.includes(item.url)) {
+      pool.push(item.url);
     }
   }
   return pool;
 }
 
 /**
- * Primes a specific case video slot URL (`#1`, `#2`, or `seduction #N`) so clicking `Test` or uploading
+ * Primes a specific case video slot URL (`#1`, `#2`, ..., `#N`) so clicking `Test` or uploading
  * an alternative slot in Video Studio previews that exact video immediately.
  */
 export function primeNextCaseSlotPreview(
@@ -3753,33 +3848,13 @@ function pickCaseVideoFromPool(
 ): string | null {
   const entries: Array<{ key: string; slotId: string; url: string; isSecondary: boolean }> = [];
 
-  if (caseId === 'seduction') {
-    for (const s of getSeductionCaseEntries(map)) {
-      if (!entries.some((e) => e.url === s.url)) {
-        entries.push({
-          key: s.key,
-          slotId: `case:${s.key}`,
-          url: s.url,
-          isSecondary: s.num >= 2,
-        });
-      }
-    }
-  } else {
-    const [slot1, slot2] = getCaseSlotKeys(caseId);
-    if (map.cases[slot1]) {
+  for (const entry of getCaseSlotEntries(caseId, map)) {
+    if (!entries.some((e) => e.url === entry.url)) {
       entries.push({
-        key: slot1,
-        slotId: `case:${slot1}`,
-        url: map.cases[slot1]!,
-        isSecondary: false,
-      });
-    }
-    if (map.cases[slot2] && !entries.some((e) => e.url === map.cases[slot2])) {
-      entries.push({
-        key: slot2,
-        slotId: `case:${slot2}`,
-        url: map.cases[slot2]!,
-        isSecondary: true,
+        key: entry.key,
+        slotId: `case:${entry.key}`,
+        url: entry.url,
+        isSecondary: entry.num >= 2,
       });
     }
   }
@@ -3844,7 +3919,13 @@ function pickCaseVideoFromPool(
     return only.url;
   }
 
-  const cursor = caseRotationCursor[caseId] ?? 0;
+  let cursor = caseRotationCursor[caseId];
+  if (cursor === undefined) {
+    cursor =
+      RANDOM_FIRST_THEN_ALTERNATE_CASE_IDS.has(caseId) && allowed.length > 1
+        ? Math.floor(Math.random() * allowed.length)
+        : 0;
+  }
   const idx = cursor % allowed.length;
   const chosen = allowed[idx];
   caseRotationCursor[caseId] = (idx + 1) % allowed.length;
@@ -3995,6 +4076,97 @@ export function startAngelMediaBackgroundPrewarmer(): void {
   backgroundPrewarmerStarted = true;
   // Intentionally do not flood 65MB of .mp4 fetches on page load so active <video> streams
   // always have full bandwidth across Android, Windows Chrome, macOS, iOS, and Linux.
+}
+
+const STUDIO_UNBAKED_COUNT_STORAGE_KEY = 'chess_angel_studio_unbaked_count_v1';
+const studioUnbakedListeners = new Set<() => void>();
+let studioUnbakedCount = (() => {
+  if (typeof window === 'undefined') return 0;
+  try {
+    const raw = window.sessionStorage.getItem(STUDIO_UNBAKED_COUNT_STORAGE_KEY);
+    const n = raw ? Number(raw) : 0;
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  } catch {
+    return 0;
+  }
+})();
+
+function persistStudioUnbakedCount(count: number): void {
+  studioUnbakedCount = Math.max(0, Math.floor(count));
+  if (typeof window !== 'undefined') {
+    try {
+      if (studioUnbakedCount > 0) {
+        window.sessionStorage.setItem(STUDIO_UNBAKED_COUNT_STORAGE_KEY, String(studioUnbakedCount));
+      } else {
+        window.sessionStorage.removeItem(STUDIO_UNBAKED_COUNT_STORAGE_KEY);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }
+  studioUnbakedListeners.forEach((cb) => {
+    try {
+      cb();
+    } catch {
+      // ignore
+    }
+  });
+}
+
+export function getStudioUnbakedCount(): number {
+  return studioUnbakedCount;
+}
+
+export function markStudioChangeUnbaked(): void {
+  persistStudioUnbakedCount(studioUnbakedCount + 1);
+}
+
+export function clearStudioUnbakedChanges(): void {
+  persistStudioUnbakedCount(0);
+}
+
+export function subscribeStudioUnbaked(listener: () => void): () => void {
+  studioUnbakedListeners.add(listener);
+  return () => {
+    studioUnbakedListeners.delete(listener);
+  };
+}
+
+export interface BakeAllAngelStudioResult {
+  ok: boolean;
+  bakedVideos: number;
+  bakedAudio: number;
+  bakedAt: number;
+}
+
+export async function bakeAllAngelStudioAssets(): Promise<BakeAllAngelStudioResult> {
+  const res = await fetch('/api/angel-videos/bake-all', {
+    method: 'POST',
+    headers: buildStudioAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ bakeAll: true }),
+  });
+  handleUnauthorizedStudioResponse(res);
+  if (!res.ok) {
+    throw new Error('Failed to save & bake all Studio videos');
+  }
+  const payload = (await res.json()) as {
+    ok: boolean;
+    bakedVideos: number;
+    bakedAudio: number;
+    bakedAt: number;
+    map?: Partial<AngelVideoMapPayload>;
+  };
+  if (payload.map) {
+    runtimeOverrides = normalizeMapPayload(payload.map);
+    notifyListeners();
+  }
+  clearStudioUnbakedChanges();
+  return {
+    ok: Boolean(payload.ok),
+    bakedVideos: payload.bakedVideos || 0,
+    bakedAudio: payload.bakedAudio || 0,
+    bakedAt: payload.bakedAt || Date.now(),
+  };
 }
 
 

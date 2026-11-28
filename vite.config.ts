@@ -362,6 +362,24 @@ export default defineConfig(() => {
                 l.includes('angels_algorithm')
               );
             };
+            const isGregorianEnthropyTrack = (n: string) => {
+              const l = n.toLowerCase();
+              return (
+                l === 'gregorian_enthropy.mp3' ||
+                l.startsWith('gregorian_enthropy_') ||
+                l === 'gregorian_entropy.mp3' ||
+                l.startsWith('gregorian_entropy_')
+              );
+            };
+            const isLaDameAuDamierTrack = (n: string) => {
+              const l = n.toLowerCase();
+              return (
+                l === 'dame_au_damier.mp3' ||
+                l.startsWith('dame_au_damier_') ||
+                l === 'la_dame_au_damier.mp3' ||
+                l.startsWith('la_dame_au_damier_')
+              );
+            };
             const isLegacyAngleFile = (n: string) => {
               const l = n.toLowerCase();
               return l === 'angle_45923f8a.mp3' || /^angle_[0-9a-f]{8}\.mp3$/.test(l);
@@ -374,6 +392,8 @@ export default defineConfig(() => {
                   !isMeditationalTrack(e.name) &&
                   !isDarkAngelTrack(e.name) &&
                   !isAngelsAlgorythmTrack(e.name) &&
+                  !isGregorianEnthropyTrack(e.name) &&
+                  !isLaDameAuDamierTrack(e.name) &&
                   !isLegacyAngleFile(e.name),
               )
               .sort((a, b) => {
@@ -402,7 +422,9 @@ export default defineConfig(() => {
                   if (isMeditationalTrack(name)) return 3;
                   if (isDarkAngelTrack(name)) return 4;
                   if (isAngelsAlgorythmTrack(name)) return 5;
-                  return 6;
+                  if (isGregorianEnthropyTrack(name)) return 6;
+                  if (isLaDameAuDamierTrack(name)) return 7;
+                  return 8;
                 };
                 return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
               });
@@ -427,14 +449,18 @@ export default defineConfig(() => {
                         ? 'Dark Angel'
                         : isAngelsAlgorythmTrack(mp3.name)
                           ? 'Angels Algorythm'
-                          : mp3.name
-                              .replace(/\.mp3$/i, '')
-                              .replace(/_[0-9a-f]{8}$/i, '')
-                              .replace(/[_-]+/g, ' ')
-                              .replace(/\s+/g, ' ')
-                              .trim()
-                              .replace(/\b\w/g, (c) => c.toUpperCase())
-                              .slice(0, 48) || 'Chess Angel Track';
+                          : isGregorianEnthropyTrack(mp3.name)
+                            ? 'Gregorian Enthropy'
+                            : isLaDameAuDamierTrack(mp3.name)
+                              ? 'La Dame au Damier'
+                              : mp3.name
+                                  .replace(/\.mp3$/i, '')
+                                  .replace(/_[0-9a-f]{8}$/i, '')
+                                  .replace(/[_-]+/g, ' ')
+                                  .replace(/\s+/g, ' ')
+                                  .trim()
+                                  .replace(/\b\w/g, (c) => c.toUpperCase())
+                                  .slice(0, 48) || 'Chess Angel Track';
               const id = isQueenTrack(mp3.name)
                 ? 'queen_infinite_reign'
                 : isRapTrack(mp3.name)
@@ -447,11 +473,15 @@ export default defineConfig(() => {
                         ? 'dark_angel'
                         : isAngelsAlgorythmTrack(mp3.name)
                           ? 'angels_algorythm'
-                          : mp3.name
-                              .replace(/\.mp3$/i, '')
-                              .toLowerCase()
-                              .replace(/[^a-z0-9]+/g, '_')
-                              .replace(/^_+|_+$/g, '') || 'chess_angel_track';
+                          : isGregorianEnthropyTrack(mp3.name)
+                            ? 'gregorian_enthropy'
+                            : isLaDameAuDamierTrack(mp3.name)
+                              ? 'la_dame_au_damier'
+                              : mp3.name
+                                  .replace(/\.mp3$/i, '')
+                                  .toLowerCase()
+                                  .replace(/[^a-z0-9]+/g, '_')
+                                  .replace(/^_+|_+$/g, '') || 'chess_angel_track';
               if (seenMusicIds.has(id)) continue;
               seenMusicIds.add(id);
               discoveredMusicTracks.push({
@@ -545,7 +575,18 @@ export default defineConfig(() => {
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      // When watching is enabled, ignore Studio media & session writes so uploading/baking never reloads the preview.
+      watch:
+        process.env.DISABLE_HMR === 'true'
+          ? null
+          : {
+              ignored: [
+                '**/public/assets/aistudio/**',
+                '**/public/voices/**',
+                '**/dist/**',
+                '**/.studio-sessions.json',
+              ],
+            },
     },
   };
 });

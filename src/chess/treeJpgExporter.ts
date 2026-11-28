@@ -102,6 +102,128 @@ export function buildTopThreeEdges(topLines: EngineLine[]): SearchTreeEdge[] {
   return edges;
 }
 
+const FOLLOWUP_PIECE_VALUE: Record<string, number> = {
+  p: 100,
+  n: 320,
+  b: 330,
+  r: 500,
+  q: 900,
+  k: 20000,
+};
+
+function scoreQuickFollowUpMove(mv: {
+  captured?: string;
+  piece: string;
+  san: string;
+  to: string;
+  promotion?: string;
+}): number {
+  let score = 0;
+  if (mv.san.includes('#')) score += 100000;
+  if (mv.captured) {
+    score +=
+      (FOLLOWUP_PIECE_VALUE[mv.captured] ?? 100) * 10 -
+      (FOLLOWUP_PIECE_VALUE[mv.piece] ?? 100);
+  }
+  if (mv.promotion) score += 800;
+  if (mv.san.includes('+')) score += 140;
+  const fileIdx = mv.to.charCodeAt(0) - 97;
+  const rankIdx = Number(mv.to[1]) - 1;
+  const centerDist = Math.abs(fileIdx - 3.5) + Math.abs(rankIdx - 3.5);
+  score += Math.round((7 - centerDist) * 12);
+  return score;
+}
+
+/**
+ * Resolves a single candidate thinking line into a guaranteed legal, multi-ply
+ * follow-up sequence (extending short TT PVs up to `minPlies` when legal moves exist)
+ * with per-ply color-coded SearchTreeEdge entries (ply 0 = gold, 1 = cyan, 2 = violet, 3+ = coral).
+ */
+export function resolveLineFollowUpSequence(
+  line: EngineLine,
+  rootFen?: string,
+  maxPlies = 5,
+  minPlies = 4,
+): {
+  pvUci: string[];
+  pvSan: string[];
+  edges: SearchTreeEdge[];
+} {
+  const rawUci =
+    line.pvUci && line.pvUci.length > 0
+      ? line.pvUci.slice(0, maxPlies)
+      : line.bestMoveUci && line.bestMoveUci.length >= 4
+        ? [line.bestMoveUci]
+        : [];
+
+  const pvUci: string[] = [];
+  const pvSan: string[] = [];
+
+  if (rootFen) {
+    try {
+      const sim = new Chess(rootFen);
+      for (const uci of rawUci) {
+        if (uci.length < 4) break;
+        const mv = sim.move({
+          from: uci.slice(0, 2),
+          to: uci.slice(2, 4),
+          promotion: (uci.slice(4, 5) || undefined) as 'q' | 'r' | 'b' | 'n' | undefined,
+        });
+        if (!mv) break;
+        pvUci.push(`${mv.from}${mv.to}${mv.promotion || ''}`);
+        pvSan.push(mv.san);
+      }
+
+      // If the engine's transposition table cut the branch short, extend cleanly with strong legal replies
+      while (pvUci.length > 0 && pvUci.length < minPlies) {
+        const legal = sim.moves({ verbose: true });
+        if (legal.length === 0) break;
+        let bestMove = legal[0];
+        let bestScore = scoreQuickFollowUpMove(bestMove);
+        for (let i = 1; i < legal.length; i++) {
+          const s = scoreQuickFollowUpMove(legal[i]);
+          if (s > bestScore) {
+            bestScore = s;
+            bestMove = legal[i];
+          }
+        }
+        const applied = sim.move({
+          from: bestMove.from,
+          to: bestMove.to,
+          promotion: bestMove.promotion,
+        });
+        if (!applied) break;
+        pvUci.push(`${applied.from}${applied.to}${applied.promotion || ''}`);
+        pvSan.push(applied.san);
+      }
+    } catch {
+      // Fallback below if rootFen is invalid
+    }
+  }
+
+  if (pvUci.length === 0) {
+    for (let i = 0; i < rawUci.length; i++) {
+      const uci = rawUci[i];
+      if (uci.length < 4) continue;
+      pvUci.push(uci);
+      pvSan.push(line.pvSan?.[i] || uci);
+    }
+  }
+
+  const edges: SearchTreeEdge[] = [];
+  pvUci.forEach((uci, plyIdx) => {
+    if (uci.length < 4) return;
+    edges.push({
+      from: uci.slice(0, 2),
+      to: uci.slice(2, 4),
+      ply: Math.min(3, plyIdx),
+      chosen: false,
+    });
+  });
+
+  return { pvUci, pvSan, edges };
+}
+
 export interface SchematicSegment {
   x0: number;
   z0: number;

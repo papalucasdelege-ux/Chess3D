@@ -30,12 +30,11 @@ const SILENT_WAKE_MP4_BASE64 =
   'AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAMPbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAA+gAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAjl0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAA+gAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAABAAAAAQAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAPoAAAAAAABAAAAAAGxbWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAABAAAAAQABVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABXG1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAARxzdGJsAAAAuHN0c2QAAAAAAAAAAQAAAKhhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAABAAEABIAAAASAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGP//AAAALmF2Y0MBQsAe/+EAFmdCwB7ZHsBEAAADAAQAAAMACDxYuSABAAVoy4DksgAAABBwYXNwAAAAAQAAAAEAAAAUYnRydAAAAAAAABQYAAAUGAAAABhzdHRzAAAAAAAAAAEAAAABAABAAAAAABxzdHNjAAAAAAAAAAEAAAABAAAAAQAAAAEAAAAUc3RzegAAAAAAAAKDAAAAAQAAABRzdGNvAAAAAAAAAAEAAAM/AAAAYnVkdGEAAABabWV0YQAAAAAAAAAhaGRscgAAAAAAAAAAbWRpcmFwcGwAAAAAAAAAAAAAAAAtaWxzdAAAACWpdG9vAAAAHWRhdGEAAAABAAAAAExhdmY1OC43Ni4xMDAAAAAIZnJlZQAAAottZGF0AAACcAYF//9s3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2MyByMzA2MCA1ZGI2YWE2IC0gSC4yNjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyMSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlvbnM6IGNhYmFjPTAgcmVmPTMgZGVibG9jaz0xOjA6MCBhbmFseXNlPTB4MToweDExMSBtZT1oZXggc3VibWU9NyBwc3k9MSBwc3lfcmQ9MS4wMDowLjAwIG1peGVkX3JlZj0xIG1lX3JhbmdlPTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MSA4eDhkY3Q9MCBjcW09MCBkZWFkem9uZT0yMSwxMSBmYXN0X3Bza2lwPTEgY2hyb21hX3FwX29mZnNldD0tMiB0aHJlYWRzPTEgbG9va2FoZWFkX3RocmVhZHM9MSBzbGljZWRfdGhyZWFkcz0wIG5yPTAgZGVjaW1hdGU9MSBpbnRlcmxhY2VkPTAgYmx1cmF5X2NvbXBhdD0wIGNvbnN0cmFpbmVkX2ludHJhPTAgYmZyYW1lcz0wIHdlaWdodHA9MCBrZXlpbnQ9MjUwIGtleWludF9taW49MSBzY2VuZWN1dD00MCBpbnRyYV9yZWZyZXNoPTAgcmNfbG9va2FoZWFkPTQwIHJjPWNyZiBtYnRyZWU9MSBjcmY9NDAuMCBxY29tcD0wLjYwIHFwbWluPTAgcXBtYXg9NjkgcXBzdGVwPTQgaXBfcmF0aW89MS40MCBhcT0xOjEuMDAAgAAAAAtliIQFfJigACTXgA==';
 
 /**
- * After 5 minutes (300,000 ms) of zero pointer/touch/keyboard/game movement,
- * allow both the OS display/system and Chess Angel's idle animation to sleep.
- * While active (< 5 minutes since last movement), keep-awake stays continuously locked
- * across Windows, macOS, Linux, Android, iOS/iPadOS, and ChromeOS.
+ * Cross-OS always-awake policy: never allow the OS display, browser tab, or Chess Angel's
+ * idle animations to fall asleep while the application is open and visible on ANY OS
+ * (Windows, macOS, Linux, Android, iOS/iPadOS, ChromeOS).
  */
-export const INACTIVITY_SLEEP_MS = 5 * 60 * 1000;
+export const INACTIVITY_SLEEP_MS = Number.POSITIVE_INFINITY;
 
 let installed = false;
 let sentinel: WakeLockSentinelLike | null = null;
@@ -55,7 +54,7 @@ export function getMsSinceLastUserActivity(): number {
 }
 
 export function isUserInactiveForSleep(): boolean {
-  return getMsSinceLastUserActivity() >= INACTIVITY_SLEEP_MS;
+  return false;
 }
 
 export function subscribeActivityWake(listener: () => void): () => void {
@@ -70,7 +69,7 @@ function isAppVisible(): boolean {
 }
 
 function canStayAwakeNow(): boolean {
-  return isAppVisible() && !isUserInactiveForSleep();
+  return isAppVisible();
 }
 
 function getFallbackBlobUrl(): string | null {
@@ -145,6 +144,16 @@ function startFallbackVideoIfNeeded(): void {
     vid.style.pointerEvents = 'none';
     vid.style.zIndex = '-1';
     vid.src = url;
+    // Immediately self-heal if iOS/WebKit or an OS notification pauses the silent fallback video while visible
+    vid.addEventListener('pause', () => {
+      if (canStayAwakeNow() && hasUserActivated && (!sentinel || sentinel.released)) {
+        window.setTimeout(() => {
+          if (fallbackVideoEl === vid && vid.paused && canStayAwakeNow() && (!sentinel || sentinel.released)) {
+            void vid.play().catch(() => {});
+          }
+        }, 250);
+      }
+    });
     document.body.appendChild(vid);
     fallbackVideoEl = vid;
   } else if (!fallbackVideoEl.isConnected) {
@@ -316,6 +325,7 @@ export function installGlobalKeepAwake(): void {
   }
 
   document.addEventListener('visibilitychange', refreshAllKeepAwake);
+  document.addEventListener('resume', refreshAllKeepAwake);
   window.addEventListener('focus', () => {
     markUserActivity(false);
     refreshAllKeepAwake();
@@ -323,8 +333,8 @@ export function installGlobalKeepAwake(): void {
   window.addEventListener('pageshow', refreshAllKeepAwake);
   document.addEventListener('fullscreenchange', refreshAllKeepAwake);
 
-  // Periodic 15s watchdog enforces keep-awake while active and releases cleanly after 5 minutes of no movement
+  // Periodic 12s watchdog enforces continuous keep-awake across every OS while the app is visible
   window.setInterval(() => {
     refreshAllKeepAwake();
-  }, 15_000);
+  }, 12_000);
 }
