@@ -253,7 +253,7 @@ class ChessSoundEngine {
   private lastMoveIdx = -1;
   private lastCaptureIdx = -1;
   private lastCheckIdx = -1;
-  private udoBarkAudioUrl: string | null = null;
+  private udoBarkAudioUrl: string | null = '/assets/aistudio/udo_bark.mp3';
   private udoBarkRawBytes: ArrayBuffer | null = null;
   private udoBarkDecodedBuffer: AudioBuffer | null = null;
   private udoBarkFetchPromise: Promise<ArrayBuffer | null> | null = null;

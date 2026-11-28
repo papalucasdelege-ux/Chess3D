@@ -2262,13 +2262,14 @@ async function startServer(): Promise<void> {
 
     // Discover seduction audio duration & canonical URL (prefer uploaded MP3 in /assets/aistudio/)
     try {
-      const uploadedSeductionUrl =
-        '/assets/aistudio/Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3';
-      const uploadedSeductionPath = path.join(
-        aistudioAssetsDir,
-        'Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3',
-      );
-      if (!result.seductionAudioUrl) {
+      const uploadedSeductionUrl = '/assets/aistudio/Chess_Angle_2f568dfd.mp3';
+      const uploadedSeductionPath = path.join(aistudioAssetsDir, 'Chess_Angle_2f568dfd.mp3');
+      if (
+        !result.seductionAudioUrl ||
+        result.seductionAudioUrl.includes(
+          'Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b',
+        )
+      ) {
         result.seductionAudioUrl = fs.existsSync(uploadedSeductionPath)
           ? uploadedSeductionUrl
           : '/voices/female/seduction.mp3';
@@ -2688,9 +2689,58 @@ async function startServer(): Promise<void> {
   const STUDIO_LOGIN_WINDOW_MS = 5 * 60 * 1000;
   const STUDIO_LOGIN_MAX_ATTEMPTS = 8;
 
-  const studioSessions = new Map<string, number>(); // token -> expiresAtMs
   const studioLoginAttempts = new Map<string, number[]>(); // ip -> timestamps
   const STUDIO_AUTH_HASH_FILE = path.resolve(__dirname, '.studio-auth-hash.json');
+  const STUDIO_SESSIONS_FILE = path.resolve(__dirname, '.studio-sessions.json');
+
+  const loadPersistedStudioSessions = (): Map<string, number> => {
+    const map = new Map<string, number>();
+    if (IS_PROD) return map;
+    try {
+      if (!fs.existsSync(STUDIO_SESSIONS_FILE)) return map;
+      const parsed = JSON.parse(fs.readFileSync(STUDIO_SESSIONS_FILE, 'utf8')) as Record<
+        string,
+        unknown
+      >;
+      const now = Date.now();
+      if (parsed && typeof parsed === 'object') {
+        for (const [tok, exp] of Object.entries(parsed)) {
+          if (
+            typeof tok === 'string' &&
+            tok.length >= 32 &&
+            tok.length <= 128 &&
+            typeof exp === 'number' &&
+            Number.isFinite(exp) &&
+            exp > now
+          ) {
+            map.set(tok, exp);
+          }
+        }
+      }
+    } catch {
+      // Ignore unreadable/corrupt dev sessions file
+    }
+    return map;
+  };
+
+  const persistStudioSessions = (sessions: Map<string, number>): void => {
+    if (IS_PROD) return;
+    try {
+      const now = Date.now();
+      const obj: Record<string, number> = {};
+      for (const [tok, exp] of sessions.entries()) {
+        if (exp > now) obj[tok] = exp;
+      }
+      fs.writeFileSync(STUDIO_SESSIONS_FILE, JSON.stringify(obj, null, 2), {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+    } catch {
+      // Ignore read-only filesystem
+    }
+  };
+
+  const studioSessions = loadPersistedStudioSessions(); // token -> expiresAtMs
 
   const loadPersistedStudioPasswordRecord = (): { saltHex: string; hashHex: string } | null => {
     if (IS_PROD) return null;
@@ -2754,6 +2804,7 @@ async function startServer(): Promise<void> {
     }
     const token = crypto.randomBytes(32).toString('hex');
     studioSessions.set(token, now + STUDIO_SESSION_TTL_MS);
+    persistStudioSessions(studioSessions);
     return token;
   };
 
@@ -2932,6 +2983,7 @@ async function startServer(): Promise<void> {
     const token = extractStudioBearerToken(req);
     if (token) {
       studioSessions.delete(token);
+      persistStudioSessions(studioSessions);
     }
     res.json({ ok: true });
   });

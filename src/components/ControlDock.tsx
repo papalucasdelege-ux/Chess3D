@@ -93,6 +93,7 @@ interface ControlDockProps {
   onToggleSound: () => void;
   musicEnabled: boolean;
   onToggleMusic: () => void;
+  onTurnMusicOff?: () => void;
   musicTracks: readonly { id: string; title: string }[];
   activeMusicTrackIndex: number;
   unavailableMusicIndices?: readonly number[];
@@ -515,7 +516,11 @@ export function ControlDock(props: ControlDockProps) {
                 role="radio"
                 aria-checked={!props.musicEnabled}
                 onClick={() => {
-                  if (props.musicEnabled) props.onToggleMusic();
+                  if (props.onTurnMusicOff) {
+                    props.onTurnMusicOff();
+                  } else if (props.musicEnabled) {
+                    props.onToggleMusic();
+                  }
                 }}
                 title="Turn background music off"
                 className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${

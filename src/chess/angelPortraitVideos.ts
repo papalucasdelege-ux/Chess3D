@@ -599,8 +599,8 @@ export const ANGEL_CASE_VIDEO_MAP: Partial<Record<CommentaryCaseId, string>> = {
   thank_jan: '/assets/aistudio/builtin_thank_jan.mp4',
 };
 
-export const ANGEL_SEDUCTION_AUDIO_SRC =
-  '/assets/aistudio/Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3';
+export const ANGEL_SEDUCTION_AUDIO_SRC = '/assets/aistudio/Chess_Angle_2f568dfd.mp3';
+export const ANGEL_UDO_BARK_AUDIO_SRC = '/assets/aistudio/udo_bark.mp3';
 
 export const ANGEL_LOCKED_IDLE_VARIANTS: Readonly<Record<string, string>> = {
   idle_2: '/assets/aistudio/angel_idle_idle_2.mp4',
@@ -1279,6 +1279,7 @@ let runtimeOverrides: AngelVideoMapPayload = {
   seductionTriggerMode: 'balanced',
   thankJanAudioUrl: '/voices/female/thank_jan.mp3',
   thankJanAudioDuration: 8.9,
+  udoBarkAudioUrl: ANGEL_UDO_BARK_AUDIO_SRC,
   musicTracks: DEFAULT_MUSIC_TRACKS.map((t) => ({ ...t })),
 };
 
@@ -1458,11 +1459,13 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
     lipSync.cases.thank_jan = 'off';
   }
 
-  const seductionAudioUrl = withAssetBuildVersion(
-    typeof data?.seductionAudioUrl === 'string' && data.seductionAudioUrl.length > 0
+  const rawSeductionAudioUrl =
+    typeof data?.seductionAudioUrl === 'string' &&
+    data.seductionAudioUrl.length > 0 &&
+    !data.seductionAudioUrl.includes('Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b')
       ? data.seductionAudioUrl
-      : runtimeOverrides.seductionAudioUrl || ANGEL_SEDUCTION_AUDIO_SRC,
-  );
+      : runtimeOverrides.seductionAudioUrl || ANGEL_SEDUCTION_AUDIO_SRC;
+  const seductionAudioUrl = withAssetBuildVersion(rawSeductionAudioUrl);
   const seductionAudioDuration =
     typeof data?.seductionAudioDuration === 'number' &&
     Number.isFinite(data.seductionAudioDuration) &&
@@ -1511,7 +1514,9 @@ function normalizeMapPayload(data?: Partial<AngelVideoMapPayload>): AngelVideoMa
       ? withAssetBuildVersion(data.udoBarkAudioUrl)
       : data && 'udoBarkAudioUrl' in data && !data.udoBarkAudioUrl
         ? undefined
-        : runtimeOverrides.udoBarkAudioUrl;
+        : runtimeOverrides.udoBarkAudioUrl
+          ? withAssetBuildVersion(runtimeOverrides.udoBarkAudioUrl)
+          : withAssetBuildVersion(ANGEL_UDO_BARK_AUDIO_SRC);
   soundEngine.setUdoBarkAudioUrl(udoBarkAudioUrl || null);
 
   const rawMusicTracks: MusicTrack[] = Array.isArray(data?.musicTracks)

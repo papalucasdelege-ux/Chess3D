@@ -417,7 +417,8 @@ interface BranchSegment {
   p1: THREE.Vector3;
   t0: number;
   t1: number;
-  width: number;
+  width0: number;
+  width1: number;
   rgb: readonly [number, number, number];
 }
 
@@ -503,10 +504,10 @@ const RIBBON_FRAG = /* glsl */ `
     float reveal = 1.0 - smoothstep(uProgress - 0.018, uProgress + 0.004, vTime);
     if (reveal <= 0.004) discard;
 
-    // Crisp hairline PCB core + tight controlled neon bloom (never muddy even at extreme density!)
+    // Crisp hairline PCB core + tight controlled neon bloom matching the fine video traces
     float d = abs(vUv.y * 2.0 - 1.0);
-    float core = exp(-d * d * 42.0);
-    float glow = exp(-d * d * 6.8) * 0.46;
+    float core = exp(-d * d * 30.0);
+    float glow = exp(-d * d * 7.2) * 0.36;
 
     // Luminous hot growing-tip spark right where each branch is actively extending
     float tipDist = abs(vTime - uProgress);
@@ -515,8 +516,8 @@ const RIBBON_FRAG = /* glsl */ `
     // Subtle outward-flowing neon circuit current wave
     float wave = 0.88 + 0.12 * sin(vTime * 52.0 - uClock * 6.2);
 
-    vec3 col = vColor * (core * 1.28 + glow) * wave + vec3(1.0, 0.98, 0.94) * (core * 0.34 + tipFlare * 1.25);
-    float alpha = (core * 0.95 + glow * 0.62 + tipFlare * 0.82) * reveal * uOpacity;
+    vec3 col = vColor * (core * 1.34 + glow) * wave + vec3(1.0, 0.98, 0.94) * (core * 0.36 + tipFlare * 1.15);
+    float alpha = (core * 0.96 + glow * 0.54 + tipFlare * 0.78) * reveal * uOpacity;
 
     gl_FragColor = vec4(col * alpha, alpha);
   }
@@ -860,6 +861,12 @@ export class OpeningFlowchart3D {
       : 0.72;
     const maxReachWorld = worldSpanX * Math.max(0.54, leftEdgeFrac * 0.95);
     const unitScale = THREE.MathUtils.clamp(worldSpanY / 11.2, 0.55, 1.38);
+    const canvasH = canvasRect && canvasRect.height > 10 ? canvasRect.height : 800;
+    const portraitHeightRatio = THREE.MathUtils.clamp(
+      pH / Math.max(240, canvasH) / 0.36,
+      0.72,
+      1.08,
+    );
 
     const segments: BranchSegment[] = [];
     const minWorldY = boardTopY + 0.32;
@@ -878,6 +885,7 @@ export class OpeningFlowchart3D {
       recordPulsePath: boolean,
       addCornerNodes: boolean,
       addTipNode: boolean,
+      entryWidthScale = 1.0,
     ) => {
       if (pts.length < 2) return;
       let totalLen = 0;
@@ -888,24 +896,33 @@ export class OpeningFlowchart3D {
       }
       if (totalLen < 1e-4) return;
 
+      const evalWidthAt = (s: number): number => {
+        if (entryWidthScale === 1.0) return width;
+        const ramp = THREE.MathUtils.smoothstep(s, 0.0, 0.38);
+        return width * THREE.MathUtils.lerp(entryWidthScale, 1.0, ramp);
+      };
+
       for (let i = 1; i < pts.length; i++) {
         const s0 = cumLen[i - 1] / totalLen;
         const s1 = cumLen[i] / totalLen;
         const segT0 = THREE.MathUtils.lerp(tStart, tEnd, s0);
         const segT1 = THREE.MathUtils.lerp(tStart, tEnd, s1);
+        const w0 = evalWidthAt(s0);
+        const w1 = evalWidthAt(s1);
         segments.push({
           p0: pts[i - 1],
           p1: pts[i],
           t0: segT0,
           t1: segT1,
-          width,
+          width0: w0,
+          width1: w1,
           rgb,
         });
         if (addCornerNodes && i < pts.length - 1) {
           this.nodes.push({
             pos: pts[i].clone(),
             appearAt: segT1,
-            scale: width * 2.4,
+            scale: w1 * 2.05,
             rgb,
             phase: rand() * Math.PI * 2,
           });
@@ -913,10 +930,11 @@ export class OpeningFlowchart3D {
       }
 
       if (addTipNode) {
+        const wTip = evalWidthAt(1.0);
         this.nodes.push({
           pos: pts[pts.length - 1].clone(),
           appearAt: tEnd,
-          scale: width * 2.8,
+          scale: wTip * 2.35,
           rgb,
           phase: rand() * Math.PI * 2,
         });
@@ -946,6 +964,7 @@ export class OpeningFlowchart3D {
         : density < 1.0
           ? Math.min(1.16, 1 / Math.pow(density, 0.12))
           : 1.0;
+    const traceScale = unitScale * widthDensityFactor * portraitHeightRatio;
 
     /**
      * Spawns a dense orthogonal tournament-comb bracket cluster — the exact signature visual motif
@@ -980,12 +999,12 @@ export class OpeningFlowchart3D {
       const spineCenterOffset = verticalBias * totalH * 0.35;
       const feedLen = (0.14 + rand() * 0.14) * unitScale * scaleFactor;
       const prongLen = (0.16 + rand() * 0.12) * unitScale * scaleFactor;
-      const lineW = 0.0145 * unitScale * Math.max(0.78, scaleFactor) * widthDensityFactor;
+      const lineW = 0.0094 * traceScale * Math.max(0.78, scaleFactor);
 
       const spineMid = origin.clone().addScaledVector(dirLeft, feedLen);
       clampAboveBoard(spineMid);
       const tFeedEnd = Math.min(0.96, tStart + 0.045);
-      addPolyline([origin.clone(), spineMid], tStart, tFeedEnd, lineW * 1.15, rgb, false, true, false);
+      addPolyline([origin.clone(), spineMid], tStart, tFeedEnd, lineW * 1.12, rgb, false, true, false);
 
       // Top and bottom of vertical comb spine
       const spineTop = spineMid
@@ -1079,7 +1098,7 @@ export class OpeningFlowchart3D {
     };
 
     // Build multi-lane border-exit highways + parallel sibling lanes + dense comb clusters scaled by density!
-    const lanePitchPx = Math.max(2.6, pH * 0.0095);
+    const lanePitchPx = Math.max(2.0, pH * 0.0076);
     const highwayKeepStride = density < 0.38 ? 3 : density < 0.62 ? 2 : 1;
 
     for (let hIdx = 0; hIdx < BORDER_HIGHWAYS.length; hIdx++) {
@@ -1110,7 +1129,7 @@ export class OpeningFlowchart3D {
         const col = FLOWCHART_COLORS[colKey].rgb;
         const laneOffset = (laneIdx - (laneCount - 1) * 0.5) * lanePitchPx * laneSpacingScale;
         const laneWorldOffset =
-          (laneIdx - (laneCount - 1) * 0.5) * 0.042 * unitScale * laneSpacingScale;
+          (laneIdx - (laneCount - 1) * 0.5) * 0.032 * unitScale * laneSpacingScale;
 
         // Overlap 1.5px inside the portrait frame so there is ZERO gap at the video boundary!
         const clientX =
@@ -1125,12 +1144,12 @@ export class OpeningFlowchart3D {
         const anchor = projectScreenToWorld(clientX, clientY, baseEyeDepth);
         const t0 = hw.startOffset + laneIdx * 0.012;
 
-        // Crisp subtle entry dot right on the portrait border
+        // Crisp subtle entry dot right on the portrait border matching the video's fine trace gauge
         if (laneIdx === 0) {
           this.nodes.push({
             pos: anchor.clone(),
             appearAt: t0,
-            scale: 0.068 * unitScale,
+            scale: 0.036 * traceScale,
             rgb: col,
             phase: rand() * Math.PI * 2,
           });
@@ -1194,8 +1213,8 @@ export class OpeningFlowchart3D {
         }
 
         const tTrunkEnd = THREE.MathUtils.clamp(t0 + 0.42 + rand() * 0.14, 0.36, 0.68);
-        const trunkWidth = (laneIdx === 0 ? 0.024 : 0.0185) * unitScale * widthDensityFactor;
-        addPolyline(trunkPts, t0, tTrunkEnd, trunkWidth, col, laneIdx === 0, true, false);
+        const trunkWidth = (laneIdx === 0 ? 0.0142 : 0.011) * traceScale;
+        addPolyline(trunkPts, t0, tTrunkEnd, trunkWidth, col, laneIdx === 0, true, false, 0.78);
 
         // Attach a dense comb-bracket + micro-typography list right at the tip of every lane!
         addCombBracketCluster(
@@ -1239,7 +1258,7 @@ export class OpeningFlowchart3D {
             .addScaledVector(dirDepth, spurDepth * 0.5);
           clampAboveBoard(pEnd);
 
-          const spurW = 0.017 * unitScale * widthDensityFactor;
+          const spurW = 0.0105 * traceScale;
           addPolyline([spurOrigin, pKnee, pEnd], tSpurStart, tSpurEnd, spurW, col, laneIdx === 0 && sIdx === 0, true, false);
 
           // Spawn a crisp comb-bracket + micro-text column at the spur's end!
@@ -1270,7 +1289,7 @@ export class OpeningFlowchart3D {
               [tapPt, dropPt, tailPt],
               tTieStart,
               tTieEnd,
-              0.013 * unitScale * widthDensityFactor,
+              0.0082 * traceScale,
               col,
               false,
               false,
@@ -1300,25 +1319,26 @@ export class OpeningFlowchart3D {
       else segDir.normalize();
 
       // Tiny longitudinal overlap so 45° & 90° PCB corners fuse cleanly with zero hairline miter gap
-      const pad = seg.width * 0.48;
-      const p0x = seg.p0.x - segDir.x * pad;
-      const p0y = seg.p0.y - segDir.y * pad;
-      const p0z = seg.p0.z - segDir.z * pad;
-      const p1x = seg.p1.x + segDir.x * pad;
-      const p1y = seg.p1.y + segDir.y * pad;
-      const p1z = seg.p1.z + segDir.z * pad;
+      const pad0 = seg.width0 * 0.46;
+      const pad1 = seg.width1 * 0.46;
+      const p0x = seg.p0.x - segDir.x * pad0;
+      const p0y = seg.p0.y - segDir.y * pad0;
+      const p0z = seg.p0.z - segDir.z * pad0;
+      const p1x = seg.p1.x + segDir.x * pad1;
+      const p1y = seg.p1.y + segDir.y * pad1;
+      const p1z = seg.p1.z + segDir.z * pad1;
 
       const vBase = i * 4;
-      const verts: ReadonlyArray<[number, number, number, number, number, number, number]> = [
-        [p0x, p0y, p0z, -1, seg.t0, 0, 0],
-        [p0x, p0y, p0z, +1, seg.t0, 0, 1],
-        [p1x, p1y, p1z, -1, seg.t1, 1, 0],
-        [p1x, p1y, p1z, +1, seg.t1, 1, 1],
+      const verts: ReadonlyArray<[number, number, number, number, number, number, number, number]> = [
+        [p0x, p0y, p0z, -1, seg.width0, seg.t0, 0, 0],
+        [p0x, p0y, p0z, +1, seg.width0, seg.t0, 0, 1],
+        [p1x, p1y, p1z, -1, seg.width1, seg.t1, 1, 0],
+        [p1x, p1y, p1z, +1, seg.width1, seg.t1, 1, 1],
       ];
 
       for (let k = 0; k < 4; k++) {
         const vi = vBase + k;
-        const [vx, vy, vz, side, tVal, uCoord, vCoord] = verts[k];
+        const [vx, vy, vz, side, wVal, tVal, uCoord, vCoord] = verts[k];
         positions[vi * 3] = vx;
         positions[vi * 3 + 1] = vy;
         positions[vi * 3 + 2] = vz;
@@ -1328,7 +1348,7 @@ export class OpeningFlowchart3D {
         dirs[vi * 3 + 2] = segDir.z;
 
         sides[vi] = side;
-        widths[vi] = seg.width;
+        widths[vi] = wVal;
         times[vi] = tVal;
 
         colors[vi * 3] = seg.rgb[0];
@@ -1468,7 +1488,7 @@ export class OpeningFlowchart3D {
         pathIdx: i % Math.max(1, this.pulsePaths.length),
         u: rand(),
         speed: 0.22 + rand() * 0.24,
-        scale: (0.095 + rand() * 0.055) * unitScale,
+        scale: (0.056 + rand() * 0.034) * traceScale,
       });
       this.pulseMesh.setMatrixAt(i, _mat4);
       this.pulseMesh.setColorAt(i, _tmpCol);
@@ -1610,7 +1630,8 @@ export class OpeningFlowchart3D {
         _tmpPos.lerpVectors(path.points[idx0], path.points[idx0 + 1], frac);
 
         const edgeFade = Math.sin(Math.min(1, p.u) * Math.PI);
-        const s = p.scale * (0.65 + 0.45 * edgeFade);
+        const borderTaper = 0.76 + 0.24 * THREE.MathUtils.smoothstep(uCur, 0.0, 0.28);
+        const s = p.scale * (0.62 + 0.42 * edgeFade) * borderTaper;
         _scaleVec.setScalar(s);
         _mat4.compose(_tmpPos, cameraQuat, _scaleVec);
 

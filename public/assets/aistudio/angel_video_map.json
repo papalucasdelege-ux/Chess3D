@@ -104,6 +104,10 @@
       "point_you": "off",
       "point_me": "off"
     },
+    "calc_offer": {
+      "point_you": "off",
+      "point_me": "off"
+    },
     "calc_showing": {
       "point_me": "off"
     },
@@ -111,10 +115,6 @@
       "point_me": "off"
     },
     "checkmate_lose": {
-      "point_you": "off",
-      "point_me": "off"
-    },
-    "calc_offer": {
       "point_you": "off",
       "point_me": "off"
     },
@@ -765,7 +765,10 @@
     "case:trial_confirm_2": true,
     "case:calc_pure": true,
     "case:intro": true,
+    "case:opening": true,
     "case:castled": true,
+    "case:calc_offer": true,
+    "case:new_match": true,
     "case:tree_browse": false,
     "case:calc_showing": true,
     "case:warn_mate": true,
@@ -773,18 +776,15 @@
     "case:angel_modal_off": true,
     "case:wrong_distracted": true,
     "case:wrong_missed_tactic": true,
-    "case:new_match": true,
-    "case:calc_offer": true,
-    "case:opening": true,
     "case:hesitate_hint": true,
-    "case:thank_jan": true,
     "case:resign": true,
+    "case:thank_jan": true,
     "case:ask_promotion": true,
     "special:dog_run": true,
     "special:dance_stars": true
   },
-  "seductionAudioUrl": "/assets/aistudio/Chess_Angle__a_beautiful_queen_and_her_infinite_re_8a3d493b.mp3",
-  "seductionAudioDuration": 217.6,
+  "seductionAudioUrl": "/assets/aistudio/Chess_Angle_2f568dfd.mp3",
+  "seductionAudioDuration": 195.8,
   "seductionAudioVariants": {},
   "seductionAudioDurations": {},
   "seductionTriggerMode": "balanced",

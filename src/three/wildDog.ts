@@ -2080,8 +2080,8 @@ export class WildDogActor {
   }
 
   /**
-   * Animates Video Udo's joyful terrier bound, bouncing folded V-drop ears,
-   * spirited snowy-white carrot tail wag, cheerful open-mouth barking smile & pink tongue,
+   * Animates Video Udo's grounded, athletic adult Jack Russell run, natural V-drop ear motion,
+   * composed snowy-white carrot tail carriage, expressive barking jaw & pink tongue,
    * grounded contact shadow, paw puffs, and golden magical jump sparkles.
    */
   public update(
@@ -2094,56 +2094,60 @@ export class WildDogActor {
     cameraQuat?: THREE.Quaternion,
     moveTangent?: THREE.Vector3,
   ): void {
-    const scamperFreq = 25.0;
-    const phase = elapsedSec * scamperFreq;
+    const strideFreq = 16.5;
+    const phase = elapsedSec * strideFreq;
     const airHeight = Math.max(0, worldPos.y - groundY);
 
-    // During initial airborne leap from Chess Angel's arms, strike Video Udo's tucked-forepaw leaping pose!
-    const leapPoseFactor = THREE.MathUtils.clamp((airHeight - 0.18) * 0.9, 0, 1);
+    // During initial airborne descent from Chess Angel's arms, strike Video Udo's tucked-forepaw leaping pose,
+    // then transition smoothly into a level, grounded adult dog run once paws touch the board.
+    const leapPoseFactor = THREE.MathUtils.clamp((airHeight - 0.22) * 0.95, 0, 1);
 
-    // Springy terrier bound & shoulder roll
-    const strideBounce = Math.abs(Math.sin(phase)) * 0.15 * (1 - 0.45 * leapPoseFactor);
-    this.bodyPivot.position.y = 0.606 + strideBounce;
+    // Level, grounded adult canine topline (subtle 3cm suspension instead of puppy pogo-hopping)
+    const strideSuspension =
+      (0.5 - 0.5 * Math.cos(phase * 2)) * 0.032 * (1 - 0.65 * leapPoseFactor);
+    this.bodyPivot.position.y = 0.606 + strideSuspension;
     this.bodyPivot.rotation.x =
-      Math.cos(phase) * 0.22 * (1 - 0.55 * leapPoseFactor) - Math.min(0.28, airHeight * 0.17);
-    this.bodyPivot.rotation.z = Math.sin(phase * 0.5) * 0.085;
+      Math.cos(phase) * 0.042 * (1 - 0.65 * leapPoseFactor) - Math.min(0.22, airHeight * 0.14);
+    this.bodyPivot.rotation.z = Math.sin(phase) * 0.026;
 
-    // Athletic rotary terrier gallop kinematics + graceful tucked-paw mid-air leap pose (matches udo_leap_6_0.png!)
+    // Grounded 4-beat diagonal adult canine run (FL+BR diagonal pair, FR+BL diagonal pair — no paired front-paw puppy hops)
     const setLeg = (rig: TerrierLegRig, p: number, isBack: boolean) => {
-      const gallopHip = Math.sin(p) * (isBack ? 0.94 : 0.9);
-      const gallopShin = Math.max(0, -Math.cos(p)) * (isBack ? -0.7 : 0.94);
-      const leapHip = isBack ? 0.42 : -0.62;
-      const leapShin = isBack ? -0.52 : 1.08;
-      rig.hip.rotation.x = THREE.MathUtils.lerp(gallopHip, leapHip + gallopHip * 0.28, leapPoseFactor);
-      rig.shin.rotation.x = THREE.MathUtils.lerp(gallopShin, leapShin + gallopShin * 0.22, leapPoseFactor);
+      const runHip = Math.sin(p) * (isBack ? 0.68 : 0.64);
+      const swingLift = Math.max(0, -Math.cos(p));
+      const runShin = swingLift * (isBack ? -0.52 : 0.68);
+      const leapHip = isBack ? 0.38 : -0.56;
+      const leapShin = isBack ? -0.46 : 0.96;
+      rig.hip.rotation.x = THREE.MathUtils.lerp(runHip, leapHip + runHip * 0.22, leapPoseFactor);
+      rig.shin.rotation.x = THREE.MathUtils.lerp(runShin, leapShin + runShin * 0.18, leapPoseFactor);
     };
     setLeg(this.legFL, phase, false);
-    setLeg(this.legFR, phase + 0.46, false);
-    setLeg(this.legBL, phase + Math.PI, true);
-    setLeg(this.legBR, phase + Math.PI + 0.46, true);
+    setLeg(this.legBR, phase + 0.34, true);
+    setLeg(this.legFR, phase + Math.PI, false);
+    setLeg(this.legBL, phase + Math.PI + 0.34, true);
 
-    // Joyful terrier head carriage, expressive open-mouth smile (especially mid-leap!) & barking jaw
+    // Steady, forward-focused adult dog head carriage (no erratic side-to-side puppy wobble)
     const b = THREE.MathUtils.clamp(barkOpen01, 0, 1);
-    const leapSmile = Math.min(0.42, airHeight * 0.2);
+    const leapSmile = Math.min(0.38, airHeight * 0.18);
     const mouthOpen = Math.max(b, leapSmile);
-    this.headPivot.rotation.x = -0.08 - b * 0.18 + Math.sin(phase + 0.5) * 0.075;
-    this.headPivot.rotation.y = Math.sin(elapsedSec * 8.8) * 0.13;
-    this.headPivot.rotation.z = Math.sin(elapsedSec * 11.2) * 0.075;
-    this.jawPivot.rotation.x = 0.15 + mouthOpen * 0.52;
-    this.tongueMesh.position.z = 0.068 + mouthOpen * 0.03;
-    this.tongueMesh.rotation.x = 0.12 + mouthOpen * 0.24;
+    this.headPivot.rotation.x = -0.06 - b * 0.12 + Math.sin(phase * 2) * 0.022;
+    this.headPivot.rotation.y = Math.sin(elapsedSec * 4.2) * 0.024;
+    this.headPivot.rotation.z = Math.sin(phase) * 0.018;
+    this.jawPivot.rotation.x = 0.14 + mouthOpen * 0.48;
+    this.tongueMesh.position.z = 0.068 + mouthOpen * 0.028;
+    this.tongueMesh.rotation.x = 0.12 + mouthOpen * 0.22;
 
-    // Folded forward-drop V-ears bounce playfully outward/upward with each stride & leap
-    const earFlop = Math.abs(Math.sin(phase - 0.3)) * 0.25 + Math.min(0.28, airHeight * 0.18);
+    // Natural V-drop ear bob synced gently to stride
+    const earFlop =
+      (0.5 - 0.5 * Math.cos(phase * 2 - 0.3)) * 0.085 + Math.min(0.18, airHeight * 0.12);
     this.earLeftPivot.rotation.z = -0.03 - earFlop;
     this.earRightPivot.rotation.z = 0.03 + earFlop;
-    this.earLeftPivot.rotation.x = -0.03 - earFlop * 0.32 - b * 0.07;
-    this.earRightPivot.rotation.x = -0.03 - earFlop * 0.32 - b * 0.07;
+    this.earLeftPivot.rotation.x = -0.03 - earFlop * 0.24 - b * 0.05;
+    this.earRightPivot.rotation.x = -0.03 - earFlop * 0.24 - b * 0.05;
 
-    // Spirited rapid terrier carrot-tail wag
-    this.tailPivot.rotation.y = Math.sin(elapsedSec * 34.0) * 0.44;
-    this.tailPivot.rotation.z = Math.sin(elapsedSec * 34.0) * 0.28;
-    this.tailPivot.rotation.x = -0.04 + Math.cos(phase) * 0.14 - leapPoseFactor * 0.12;
+    // Composed, lively adult terrier carrot-tail carriage
+    this.tailPivot.rotation.y = Math.sin(elapsedSec * 19.0) * 0.24;
+    this.tailPivot.rotation.z = Math.sin(elapsedSec * 19.0) * 0.14;
+    this.tailPivot.rotation.x = -0.06 + Math.cos(phase * 2) * 0.045 - leapPoseFactor * 0.08;
 
     // Keep contact shadow flush on the board plane directly below Udo
     const dogScale = Math.max(0.5, this.root.scale.x);

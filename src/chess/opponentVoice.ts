@@ -2542,7 +2542,7 @@ function buildVoiceUrl(clipId: VoiceClipId): string {
     return (
       nextSeductionSlotAudioUrl ||
       seductionCustomAudioUrl ||
-      QUEEN_THEME_MUSIC_URL
+      CHESS_ANGEL_THEME_MUSIC_URL
     );
   }
   if (clipId.startsWith('thank_jan_')) {
@@ -2962,6 +2962,61 @@ class OpponentSpeechController {
     this.emitMusicState();
   }
 
+  public getActiveMusicTrackId(): string | null {
+    if (
+      !this.bgMusicAudio ||
+      this.bgMusicAudio.paused ||
+      this.bgMusicAudio.ended ||
+      this.musicTracks.length === 0
+    ) {
+      return null;
+    }
+    const safeIdx =
+      ((this.musicTrackIndex % this.musicTracks.length) + this.musicTracks.length) %
+      this.musicTracks.length;
+    return this.musicTracks[safeIdx]?.id ?? null;
+  }
+
+  /**
+   * Switches background music dynamically to a mood-appropriate track (e.g. "dark_angel",
+   * "angels_algorythm" when the player's position becomes hopeless, or "chess_angel_theme"
+   * when Chess Angel seduces) without overwriting the user's manual localStorage track choice.
+   */
+  public playDynamicMoodTrack(trackId: string, soundEnabled: boolean): boolean {
+    if (this.musicTracks.length === 0) return false;
+    const idx = this.musicTracks.findIndex((t) => t.id === trackId);
+    if (idx < 0) return false;
+    this.musicTrackIndex = idx;
+    this.musicPlaylistEnabled = true;
+    this.musicSoundAllowed = soundEnabled;
+    if (!soundEnabled) {
+      this.stopBackgroundMusicInternal(false);
+      this.emitMusicState();
+      return false;
+    }
+    const track = this.musicTracks[idx];
+    if (track) {
+      const sameTrackPlaying = Boolean(
+        this.bgMusicAudio &&
+          !this.bgMusicAudio.paused &&
+          !this.bgMusicAudio.ended &&
+          !this.bgMusicAudio.error &&
+          this.bgMusicAudio.readyState >= 2 &&
+          this.bgMusicAudio.currentTime > 0.05 &&
+          this.bgMusicUrl &&
+          stripAssetQuery(this.bgMusicUrl) === stripAssetQuery(track.url),
+      );
+      if (!sameTrackPlaying) {
+        this.stopBackgroundMusicInternal(false);
+        this.startBackgroundMusicUrl(track.url, 'direct');
+      } else {
+        this.updateBgMusicDucking(this.playbackState === 'speaking');
+      }
+    }
+    this.emitMusicState();
+    return true;
+  }
+
   private updateBgMusicDucking(isVoiceSpeaking: boolean): void {
     if (!this.bgMusicAudio || this.bgMusicAudio.paused || this.bgMusicAudio.ended) return;
     // Gently duck background music while Chess Angel speaks so her voice stays crystal clear,
@@ -3224,21 +3279,12 @@ class OpponentSpeechController {
   }
 
   private playSeductionBackgroundMusic(url: string): void {
-    // If continuous background music is already playing via the Music toggle, keep it flowing seamlessly
-    if (
-      this.musicPlaylistEnabled &&
-      this.bgMusicAudio &&
-      !this.bgMusicAudio.paused &&
-      !this.bgMusicAudio.ended
-    ) {
-      this.updateBgMusicDucking(this.playbackState === 'speaking');
-      return;
-    }
     const cleanUrl = stripAssetQuery(url);
     const matchedIdx = this.musicTracks.findIndex((t) => stripAssetQuery(t.url) === cleanUrl);
     if (matchedIdx >= 0) {
       this.musicTrackIndex = matchedIdx;
     }
+    this.musicPlaylistEnabled = true;
     this.startBackgroundMusicUrl(url, 'direct');
   }
 
@@ -3827,12 +3873,20 @@ class OpponentSpeechController {
 
   public invalidateSeductionCache(): void {
     for (const k of Array.from(this.rawBytesCache.keys())) {
-      if (k.includes('seduction.mp3') || k.includes('Chess_Angle__a_beautiful_queen')) {
+      if (
+        k.includes('seduction.mp3') ||
+        k.includes('Chess_Angle__a_beautiful_queen') ||
+        k.includes('Chess_Angle_2f568dfd')
+      ) {
         this.rawBytesCache.delete(k);
       }
     }
     for (const k of Array.from(this.bufferCache.keys())) {
-      if (k.includes('seduction.mp3') || k.includes('Chess_Angle__a_beautiful_queen')) {
+      if (
+        k.includes('seduction.mp3') ||
+        k.includes('Chess_Angle__a_beautiful_queen') ||
+        k.includes('Chess_Angle_2f568dfd')
+      ) {
         this.bufferCache.delete(k);
       }
     }

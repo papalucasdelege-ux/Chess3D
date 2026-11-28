@@ -558,6 +558,16 @@ export default function App() {
   });
   const musicEnabledRef = useRef<boolean>(musicEnabled);
   musicEnabledRef.current = musicEnabled;
+  const musicSwitchedOffRef = useRef<boolean>((() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return window.localStorage.getItem('chess_angel_music_enabled_v1') === '0';
+    } catch {
+      return false;
+    }
+  })());
+  const moodMusicStateRef = useRef<'neutral' | 'hopeless' | 'seduction'>('neutral');
+  const hopelessTrackCursorRef = useRef<number>(Math.random() < 0.5 ? 0 : 1);
   const [musicTracks, setMusicTracks] = useState<MusicTrack[]>([...DEFAULT_MUSIC_TRACKS]);
   const [activeMusicTrackIndex, setActiveMusicTrackIndex] = useState<number>(0);
   const [unavailableMusicIndices, setUnavailableMusicIndices] = useState<number[]>([]);
@@ -1010,6 +1020,7 @@ export default function App() {
   const handleToggleMusic = useCallback(() => {
     const nextMusic = !musicEnabledRef.current;
     musicEnabledRef.current = nextMusic;
+    musicSwitchedOffRef.current = !nextMusic;
     setMusicEnabled(nextMusic);
     try {
       window.localStorage.setItem('chess_angel_music_enabled_v1', nextMusic ? '1' : '0');
@@ -1029,7 +1040,46 @@ export default function App() {
     }
   }, []);
 
+  const handleTurnMusicOff = useCallback(() => {
+    musicSwitchedOffRef.current = true;
+    musicEnabledRef.current = false;
+    setMusicEnabled(false);
+    try {
+      window.localStorage.setItem('chess_angel_music_enabled_v1', '0');
+    } catch {
+      // ignore storage errors
+    }
+    opponentSpeech.setBackgroundMusicEnabled(false, soundEnabledRef.current);
+  }, []);
+
+  const triggerHopelessMoodMusic = useCallback(() => {
+    if (moodMusicStateRef.current === 'hopeless') return;
+    moodMusicStateRef.current = 'hopeless';
+    if (musicSwitchedOffRef.current || !soundEnabledRef.current) return;
+    const activeTrackId = opponentSpeech.getActiveMusicTrackId();
+    if (activeTrackId === 'dark_angel' || activeTrackId === 'angels_algorythm') {
+      return;
+    }
+    const hopelessTrackIds = ['dark_angel', 'angels_algorythm'] as const;
+    const chosenId = hopelessTrackIds[hopelessTrackCursorRef.current % hopelessTrackIds.length];
+    hopelessTrackCursorRef.current += 1;
+    musicEnabledRef.current = true;
+    setMusicEnabled(true);
+    opponentSpeech.unlock();
+    opponentSpeech.playDynamicMoodTrack(chosenId, true);
+  }, []);
+
+  const triggerSeductionMoodMusic = useCallback(() => {
+    moodMusicStateRef.current = 'seduction';
+    if (musicSwitchedOffRef.current || !soundEnabledRef.current) return;
+    musicEnabledRef.current = true;
+    setMusicEnabled(true);
+    opponentSpeech.unlock();
+    opponentSpeech.playDynamicMoodTrack('chess_angel_theme', true);
+  }, []);
+
   const handleSelectMusicTrack = useCallback((index: number) => {
+    musicSwitchedOffRef.current = false;
     if (!soundEnabledRef.current) {
       soundEnabledRef.current = true;
       setSoundEnabled(true);
@@ -1038,11 +1088,11 @@ export default function App() {
     if (!musicEnabledRef.current) {
       musicEnabledRef.current = true;
       setMusicEnabled(true);
-      try {
-        window.localStorage.setItem('chess_angel_music_enabled_v1', '1');
-      } catch {
-        // ignore storage errors
-      }
+    }
+    try {
+      window.localStorage.setItem('chess_angel_music_enabled_v1', '1');
+    } catch {
+      // ignore storage errors
     }
     opponentSpeech.unlock();
     opponentSpeech.selectBackgroundMusicTrack(index, true);
@@ -1059,6 +1109,7 @@ export default function App() {
       if (!res.ok) return false;
       const data = (await res.json()) as { ok?: boolean; url?: string };
       if (!data.url) return false;
+      musicSwitchedOffRef.current = false;
       if (!soundEnabledRef.current) {
         soundEnabledRef.current = true;
         setSoundEnabled(true);
@@ -1067,11 +1118,11 @@ export default function App() {
       if (!musicEnabledRef.current) {
         musicEnabledRef.current = true;
         setMusicEnabled(true);
-        try {
-          window.localStorage.setItem('chess_angel_music_enabled_v1', '1');
-        } catch {
-          // ignore storage errors
-        }
+      }
+      try {
+        window.localStorage.setItem('chess_angel_music_enabled_v1', '1');
+      } catch {
+        // ignore storage errors
       }
       opponentSpeech.unlock();
       const tracks = opponentSpeech.getMusicTracks();
@@ -1734,6 +1785,7 @@ export default function App() {
 
         // Chess Angel mathematical commentary & obligatory event videos (plays visually even if voice audio is off)
         let triggeredEventMessage = false;
+        let undoOfferPresentedOnMove = false;
         if (gameMode === 'engine' && angelVisibleRef.current) {
           const aiColor: PieceColor = humanColorActual === 'w' ? 'b' : 'w';
           if (record.color === humanColorActual) {
@@ -1767,7 +1819,9 @@ export default function App() {
               const prep = prepareHumanCommentaryPlayback(msg.clipId, `msg:${msg.id}`);
               setPreviewIdleUrl(null);
               setOpponentMessage(msg);
-              if (angelVoice === 'on') {
+              if (msg.clipId.startsWith('seduction_')) {
+                triggerSeductionMoodMusic();
+              } else if (angelVoice === 'on') {
                 opponentSpeech.playClip(msg.clipId, angelVoice, soundEnabled);
               }
               if (msg.clipId.startsWith('seduction_') && !over && angelVisibleRef.current) {
@@ -1782,6 +1836,7 @@ export default function App() {
                   450;
                 holdBotUntilRef.current = performance.now() + seductionHoldMs;
               } else if (msg.action?.kind === 'undo-offer' && !over && angelVisibleRef.current) {
+                undoOfferPresentedOnMove = true;
                 awaitingDistractionModalRef.current = false;
                 const undoMediaSec = Math.max(
                   prep.audioSec || 6.2,
@@ -1982,6 +2037,43 @@ export default function App() {
           holdBotUntilRef.current = 0;
         }
 
+        // Dynamic hopeless-match soundtrack: switch to "Dark Angel" or "Angels Algorythm" when the player's position gets hopeless (unless music is switched off)
+        if (gameMode === 'engine' && !over) {
+          const humanSignMood = humanColorActual === 'w' ? 1 : -1;
+          let postMoveHumanCp: number | null = null;
+          let forcedMateAgainstHuman = false;
+          if (record.color === humanColorActual) {
+            if (sharedAudit) {
+              postMoveHumanCp = Math.round(sharedAudit.afterPlayedCp * humanSignMood);
+              forcedMateAgainstHuman = Boolean(sharedAudit.walkedIntoMate);
+            }
+          } else if (botReport?.triedLines && botReport.triedLines.length > 0) {
+            const chosenBotLine =
+              botReport.triedLines.find((l) => l.bestMoveUci === record.uci) ||
+              botReport.triedLines[0];
+            postMoveHumanCp = Math.round(chosenBotLine.scoreCp * humanSignMood);
+            forcedMateAgainstHuman = Boolean(
+              chosenBotLine.mateIn !== null && chosenBotLine.mateIn * humanSignMood < 0,
+            );
+          }
+          const minHopelessPlies = initialMatchFen === INITIAL_FEN ? 6 : 1;
+          if (nextMoves.length >= minHopelessPlies && !undoOfferPresentedOnMove) {
+            const hopelessThresholdCp = record.color === humanColorActual ? -600 : -540;
+            const isHopelessNow =
+              forcedMateAgainstHuman ||
+              (postMoveHumanCp !== null && postMoveHumanCp <= hopelessThresholdCp);
+            if (isHopelessNow) {
+              triggerHopelessMoodMusic();
+            } else if (
+              postMoveHumanCp !== null &&
+              postMoveHumanCp > -300 &&
+              moodMusicStateRef.current === 'hopeless'
+            ) {
+              moodMusicStateRef.current = 'neutral';
+            }
+          }
+        }
+
         // Direct chess-game portrait pulse on quiet moves (no registered event message)
         // so Chess Angel never falls asleep and rotates idle animations without ever colliding
         // with a freshly-loaded event video on the same commit!
@@ -1997,6 +2089,7 @@ export default function App() {
     [
       localFen,
       localMoves,
+      initialMatchFen,
       timeControl,
       gameMode,
       angelVoice,
@@ -2005,6 +2098,8 @@ export default function App() {
       soundEnabled,
       clearForkArrowsTimer,
       showTemporaryForkArrows,
+      triggerHopelessMoodMusic,
+      triggerSeductionMoodMusic,
     ],
   );
 
@@ -3803,7 +3898,36 @@ export default function App() {
         [ply]: { ply, evalCp: postScore, quality, cpLoss },
       }));
     }
-  }, [analysis, clampedViewPly, activeMoves, gameMode, activePuzzle.fen, initialMatchFen]);
+
+    // Also catch hopeless positions discovered by deep continuous search (e.g. composed boards or forced mates)
+    if (
+      gameMode === 'engine' &&
+      ply === activeMoves.length &&
+      !localResult &&
+      activeMoves.length >= (initialMatchFen === INITIAL_FEN ? 6 : 1) &&
+      opponentMessageRef.current?.action?.kind !== 'undo-offer'
+    ) {
+      const humanSign = humanColorActual === 'w' ? 1 : -1;
+      const topLine = analysis.lines[0];
+      const humanCp = Math.round(topLine.scoreCp * humanSign);
+      const mateAgainstHuman = topLine.mateIn !== null && topLine.mateIn * humanSign < 0;
+      if (mateAgainstHuman || humanCp <= -580) {
+        triggerHopelessMoodMusic();
+      } else if (humanCp > -300 && moodMusicStateRef.current === 'hopeless') {
+        moodMusicStateRef.current = 'neutral';
+      }
+    }
+  }, [
+    analysis,
+    clampedViewPly,
+    activeMoves,
+    gameMode,
+    activePuzzle.fen,
+    initialMatchFen,
+    localResult,
+    humanColorActual,
+    triggerHopelessMoodMusic,
+  ]);
 
   // Trigger continuous position analysis when enabled (and not during active AI search)
   useEffect(() => {
@@ -4264,6 +4388,7 @@ export default function App() {
       holdBotUntilRef.current = 0;
       goodMoveStreakRef.current = 0;
       lastSeductionPlyRef.current = -99;
+      moodMusicStateRef.current = 'neutral';
       noUndoOfferGuardRef.current = null;
       autoSelectedByArrowRef.current = null;
       turnStartedAtRef.current = performance.now();
@@ -4627,6 +4752,9 @@ export default function App() {
     opponentSpeech.stop();
     turnStartedAtRef.current = performance.now();
     hesitationStageRef.current = 0;
+    if (moodMusicStateRef.current === 'hopeless') {
+      moodMusicStateRef.current = 'neutral';
+    }
 
     const currentTurn = (tryCreateChess(localFen)?.turn() ?? 'w') as PieceColor;
     const stepsBack =
@@ -5375,6 +5503,9 @@ export default function App() {
       setCalcPreview(null);
       turnStartedAtRef.current = performance.now();
       hesitationStageRef.current = 0;
+      if (moodMusicStateRef.current === 'hopeless') {
+        moodMusicStateRef.current = 'neutral';
+      }
 
       // Rewind back to the human's pre-blunder turn (1 ply if AI hasn't moved yet, 2 plies if AI already replied)
       const currentTurn = (tryCreateChess(localFen)?.turn() ?? 'w') as PieceColor;
@@ -6649,6 +6780,7 @@ export default function App() {
         }}
         musicEnabled={musicEnabled}
         onToggleMusic={handleToggleMusic}
+        onTurnMusicOff={handleTurnMusicOff}
         musicTracks={musicTracks}
         activeMusicTrackIndex={activeMusicTrackIndex}
         unavailableMusicIndices={unavailableMusicIndices}
@@ -7227,6 +7359,10 @@ export default function App() {
                 action: previewAction,
               });
               opponentSpeech.unlock();
+              if (clipId.startsWith('seduction_') && soundEnabled) {
+                musicEnabledRef.current = true;
+                setMusicEnabled(true);
+              }
               opponentSpeech.playClip(clipId, 'on', soundEnabled);
             }}
             onPreviewIdle={(specificIdleUrl) => {

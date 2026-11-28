@@ -2510,29 +2510,35 @@ export class ChessScene3D {
         const lo = Math.floor(piecePoints.length * fromFrac);
         const hi = Math.max(lo + 1, Math.floor(piecePoints.length * toFrac));
         const slice = piecePoints.slice(lo, hi);
-        if (slice.length > 0) {
-          const picked = slice[Math.floor(Math.random() * slice.length)];
+        const centralSlice = slice.filter((p) => Math.abs(p.pos.z) <= 2.35);
+        const pool = centralSlice.length > 0 ? centralSlice : slice;
+        if (pool.length > 0) {
+          const picked = pool[Math.floor(Math.random() * pool.length)];
           return new THREE.Vector3(
-            THREE.MathUtils.clamp(picked.pos.x, -3.5, 3.5),
+            THREE.MathUtils.clamp(picked.pos.x, -3.3, 3.3),
             BOARD_TOP_Y,
-            THREE.MathUtils.clamp(picked.pos.z, -3.5, 3.5),
+            THREE.MathUtils.clamp(picked.pos.z, -2.1, 2.1),
           );
         }
       }
       return new THREE.Vector3(fallbackX, BOARD_TOP_Y, fallbackZ);
     };
 
-    const wpRight = pickZonePoint(0.05, 0.36, 2.4, -1.1);
-    const wpCenter = pickZonePoint(0.36, 0.68, 0.1, 1.35);
-    const wpLeft = pickZonePoint(0.68, 0.96, -2.5, -0.75);
+    const wpRight = pickZonePoint(0.05, 0.36, 2.35, -0.45);
+    const wpCenter = pickZonePoint(0.36, 0.68, 0.05, 0.25);
+    const wpLeft = pickZonePoint(0.68, 0.96, -2.4, -0.2);
 
-    // Ensure lively zig-zag across the board so the path feels wild and hits plenty of pieces
-    if (Math.abs(wpCenter.z - wpRight.z) < 0.7) {
-      wpCenter.z = THREE.MathUtils.clamp(wpCenter.z + (wpCenter.z >= 0 ? -1.45 : 1.45), -3.2, 3.2);
-    }
-    if (Math.abs(wpLeft.z - wpCenter.z) < 0.7) {
-      wpLeft.z = THREE.MathUtils.clamp(wpLeft.z + (wpCenter.z >= 0 ? -1.35 : 1.35), -3.2, 3.2);
-    }
+    // Keep waypoints along a smooth, natural adult-dog run curve without erratic zig-zag reversals
+    wpCenter.z = THREE.MathUtils.clamp(
+      wpCenter.z,
+      Math.max(-2.0, wpRight.z - 0.85),
+      Math.min(2.0, wpRight.z + 0.85),
+    );
+    wpLeft.z = THREE.MathUtils.clamp(
+      wpLeft.z,
+      Math.max(-2.0, wpCenter.z - 0.75),
+      Math.min(2.0, wpCenter.z + 0.75),
+    );
 
     // 2. Compute exact camera-projected world scale & elevated 3D launch position so 3D Udo
     //    matches the exact pixel size and jump height of Udo leaping out of Chess Angel's arms!
@@ -2602,8 +2608,9 @@ export class ChessScene3D {
     const exitWorld = raycastClientToBoardPlane(
       exitClientX,
       exitClientY,
-      new THREE.Vector3(-10.8, BOARD_TOP_Y, 0.8),
+      new THREE.Vector3(-10.8, BOARD_TOP_Y, THREE.MathUtils.clamp(wpLeft.z * 0.75, -1.6, 1.6)),
     );
+    exitWorld.z = THREE.MathUtils.clamp(exitWorld.z, wpLeft.z - 1.4, wpLeft.z + 1.4);
 
     const leftRim = new THREE.Vector3().lerpVectors(wpLeft, exitWorld, 0.42);
     leftRim.y = BOARD_TOP_Y;
@@ -2617,7 +2624,7 @@ export class ChessScene3D {
 
     this.wildDogPhase = 'running';
     this.wildDogElapsed = 0;
-    this.wildDogDuration = 3.65;
+    this.wildDogDuration = 3.35;
     this.wildDogPhaseTimer = 0;
     this.wildDogNextBarkAt = 0.04;
     this.wildDogBarkEnv = 0;
@@ -2745,27 +2752,22 @@ export class ChessScene3D {
       this.wildDogCurve.getPoint(u, _dogPos);
       this.wildDogCurve.getTangent(u, _dogTan);
 
-      // Ballistic jump-down arc from Chess Angel's elevated arms onto the chessboard, plus playful exit hop
+      // Smooth descent from Chess Angel's elevated arms onto the chessboard, then solidly grounded across the board
       let jumpArcY = 0;
-      if (u < 0.27) {
-        const leapT = u / 0.27;
-        const fallFactor = (1 - leapT) * (1 + 0.42 * leapT);
-        const hopBoost = Math.sin(leapT * Math.PI) * 0.22;
-        jumpArcY = this.wildDogLaunchLiftY * fallFactor + hopBoost;
-      } else if (u > 0.78 && u < 0.94) {
-        const exitHopT = (u - 0.78) / 0.16;
-        jumpArcY = Math.sin(exitHopT * Math.PI) * (0.48 * Math.min(1.4, this.wildDogScale));
+      if (u < 0.24) {
+        const leapT = u / 0.24;
+        jumpArcY = this.wildDogLaunchLiftY * Math.pow(1 - leapT, 1.65);
       }
       _dogPos.y = BOARD_TOP_Y + jumpArcY;
 
       this.wildDog.root.position.copy(_dogPos);
 
-      // Smoothly steer puppy forward along its velocity tangent
+      // Smoothly steer Udo forward along his velocity tangent without twitchy puppy snaps
       const targetYaw = Math.atan2(_dogTan.x, _dogTan.z);
       let deltaYaw = targetYaw - this.wildDog.root.rotation.y;
       while (deltaYaw > Math.PI) deltaYaw -= Math.PI * 2;
       while (deltaYaw < -Math.PI) deltaYaw += Math.PI * 2;
-      this.wildDog.root.rotation.y += deltaYaw * Math.min(1, dt * 14);
+      this.wildDog.root.rotation.y += deltaYaw * Math.min(1, dt * 9.5);
 
       // Stereo-panned barks synced to Udo's snapping jaw (continuous loop if custom Udo bark audio is uploaded)
       this.wildDogBarkEnv = Math.max(0, this.wildDogBarkEnv - dt * 4.6);

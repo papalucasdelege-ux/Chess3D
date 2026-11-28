@@ -1478,9 +1478,9 @@ export function AngelVideoStudioModal({
               : 'bg-black border-white/15'
           }`}
         >
-          <div className="flex items-center justify-between gap-2">
+          <div className="space-y-2">
             <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-xs font-semibold text-[#f7f1e5]">
                   Default Speaking Lip-Movement Fallback
                 </span>
@@ -1494,16 +1494,16 @@ export function AngelVideoStudioModal({
                   </span>
                 )}
                 {renderVideoSizeBadge(defaultSpeakUrl, 'Default Speaking Lip Fallback')}
-                {renderPlayToEndFlagButton(
-                  'default:speaking_default',
-                  'Default Speaking Lip Fallback',
-                )}
               </div>
               <div className="text-[11px] text-[#9aa3b2] truncate mt-0.5">
                 {defaultSpeakUrl.split('?')[0]}
               </div>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              {renderPlayToEndFlagButton(
+                'default:speaking_default',
+                'Default Speaking Lip Fallback',
+              )}
               <button
                 type="button"
                 onClick={() =>
@@ -1535,7 +1535,7 @@ export function AngelVideoStudioModal({
                   )
                 }
                 title="Preview Default Speaking Video on Chess Angel"
-                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#151c28] border border-white/16 text-[11px] text-[#cbd5e1] cursor-pointer"
+                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#151c28] border border-white/16 text-[11px] text-[#cbd5e1] cursor-pointer whitespace-nowrap"
               >
                 <Play className="w-3 h-3 text-[#7dd3fc]" />
                 Test
@@ -1624,22 +1624,22 @@ export function AngelVideoStudioModal({
                         dragOverSlot === `case:${slot.caseId}` ? 'bg-[#162538]' : 'bg-black'
                       }`}
                     >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="min-w-0 flex-1">
+                      <div className="space-y-2">
+                        <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="text-xs font-semibold text-[#f7f1e5]">
                               {slot.title}
                             </span>
                             <span
-                              className={`font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border ${slot.badgeColorClass}`}
+                              className={`font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border whitespace-nowrap ${slot.badgeColorClass}`}
                             >
                               {slot.caseId}
                             </span>
-                            <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/45 bg-emerald-950/40 text-emerald-300 font-medium">
+                            <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/45 bg-emerald-950/40 text-emerald-300 font-medium whitespace-nowrap">
                               {customUrl ? '✓ Active (Custom .mp4)' : '✓ Active (.mp4)'}
                             </span>
                             {clipSec !== null && (
-                              <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200">
+                              <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200 whitespace-nowrap">
                                 Video: {formatSec(clipSec)}
                               </span>
                             )}
@@ -1650,21 +1650,21 @@ export function AngelVideoStudioModal({
                               {activeUrl.split('?')[0]}
                             </div>
                           )}
-                          <div className="text-[11px] text-[#8e98a8] mt-0.5">
+                          <div className="text-[11px] text-[#8e98a8] leading-snug mt-0.5">
                             {slot.subtitle}
                           </div>
-                          <div className="text-[11px] text-[#cbd5e1] italic mt-0.5">
+                          <div className="text-[11px] text-[#cbd5e1] italic leading-snug break-words mt-0.5">
                             &ldquo;{sampleText}&rdquo;
                           </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
                           {renderMaxPlaysControl(`case:${slot.caseId}`, slot.title)}
                           {renderPlayToEndFlagButton(`case:${slot.caseId}`, slot.title)}
                           <button
                             type="button"
                             onClick={previewSlot}
-                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#151c28] border border-white/16 text-[11px] text-[#cbd5e1] cursor-pointer"
+                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#151c28] border border-white/16 text-[11px] text-[#cbd5e1] cursor-pointer whitespace-nowrap"
                           >
                             <Play className="w-3 h-3 text-[#7dd3fc]" />
                             Test
@@ -1725,17 +1725,17 @@ export function AngelVideoStudioModal({
                   dragOverSlot === 'case:thank_jan' ? 'bg-[#261c0c]' : 'bg-black'
                 }`}
               >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="min-w-0 flex-1">
+                <div className="space-y-2">
+                  <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-xs font-semibold text-[#f7f1e5]">
                         Title / Version Click — Chess Angel to Jan
                       </span>
-                      <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-[#d6ae63]/50 bg-[#241b0c] text-[#f3d38b]">
+                      <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-[#d6ae63]/50 bg-[#241b0c] text-[#f3d38b] whitespace-nowrap">
                         thank_jan
                       </span>
                       {clipSec !== null && (
-                        <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200">
+                        <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200 whitespace-nowrap">
                           Video: {formatSec(clipSec)}
                         </span>
                       )}
@@ -1746,17 +1746,17 @@ export function AngelVideoStudioModal({
                         {activeUrl.split('?')[0]}
                       </div>
                     )}
-                    <div className="text-[11px] text-[#e8dcc2] italic mt-1">
+                    <div className="text-[11px] text-[#e8dcc2] italic leading-snug break-words mt-1">
                       &ldquo;{sampleText}&rdquo;
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
                     {renderPlayToEndFlagButton('case:thank_jan', 'Thank You, Jan')}
                     <button
                       type="button"
                       onClick={previewSlot}
-                      className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#1c160b] border border-[#d6ae63]/40 text-[11px] text-[#f3d38b] cursor-pointer"
+                      className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#1c160b] border border-[#d6ae63]/40 text-[11px] text-[#f3d38b] cursor-pointer whitespace-nowrap"
                     >
                       <Play className="w-3 h-3 text-[#f3d38b]" />
                       Test
@@ -1816,21 +1816,21 @@ export function AngelVideoStudioModal({
                   dragOverSlot === 'special:dog_run' ? 'bg-[#2a1520]' : 'bg-black'
                 }`}
               >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="min-w-0 flex-1">
+                <div className="space-y-2">
+                  <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-xs font-semibold text-[#f7f1e5]">
-                        Angel Modal Puppy Video &amp; 3D Board Rampage
+                        Angel Modal Udo Video &amp; 3D Board Run
                       </span>
-                      <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-rose-400/45 bg-[#26121b] text-rose-200">
+                      <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-rose-400/45 bg-[#26121b] text-rose-200 whitespace-nowrap">
                         special:dog_run
                       </span>
                       {dogClipSec !== null && (
-                        <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200">
+                        <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200 whitespace-nowrap">
                           Video: {formatSec(dogClipSec)}
                         </span>
                       )}
-                      {renderVideoSizeBadge(dogVideoUrl || undefined, 'Special Event — Puppy Rampage')}
+                      {renderVideoSizeBadge(dogVideoUrl || undefined, 'Special Event — Udo Run')}
                     </div>
                     {dogVideoUrl && (
                       <div className="font-mono-tabular text-[10px] text-emerald-300/90 truncate mt-0.5">
@@ -1839,18 +1839,18 @@ export function AngelVideoStudioModal({
                     )}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-                    {renderPlayToEndFlagButton('special:dog_run', 'Fluffy Puppy Rampage')}
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    {renderPlayToEndFlagButton('special:dog_run', 'Udo 3D Board Run')}
                     <button
                       type="button"
                       onClick={previewFullEvent}
                       disabled={!onTriggerDogEvent}
                       title={
                         dogVideoUrl
-                          ? `Play Chess Angel's puppy video and launch the 3D fluffy puppy at ${jumpSec.toFixed(1)}s`
-                          : 'Test the 3D fluffy white puppy leaping out of Chess Angel modal now'
+                          ? `Play Chess Angel's Udo video and launch 3D Udo at ${jumpSec.toFixed(1)}s`
+                          : 'Test 3D Udo leaping out of Chess Angel modal now'
                       }
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-[#26121b] hover:bg-[#381928] border border-rose-400/55 text-[11px] font-semibold text-rose-100 cursor-pointer disabled:opacity-45"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-[#26121b] hover:bg-[#381928] border border-rose-400/55 text-[11px] font-semibold text-rose-100 cursor-pointer whitespace-nowrap disabled:opacity-45"
                     >
                       <Play className="w-3 h-3 text-rose-300" />
                       {dogVideoUrl ? 'Test Full Event' : 'Test Event'}
@@ -1859,11 +1859,11 @@ export function AngelVideoStudioModal({
                       type="button"
                       onClick={preview3DPuppyOnly}
                       disabled={!onTriggerDogEvent}
-                      title="Immediately launch the 3D small white fluffy puppy across the chessboard"
-                      className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#1c1619] border border-white/20 text-[11px] text-[#f3e6ec] cursor-pointer disabled:opacity-45"
+                      title="Immediately launch 3D Udo across the chessboard"
+                      className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#1c1619] border border-white/20 text-[11px] text-[#f3e6ec] cursor-pointer whitespace-nowrap disabled:opacity-45"
                     >
                       <Zap className="w-3 h-3 text-amber-300" />
-                      3D Puppy Now
+                      3D Udo Now
                     </button>
                     {renderUploadButton('special', 'dog_run', Boolean(dogVideoUrl), () =>
                       previewFullEvent(),
@@ -2191,13 +2191,13 @@ export function AngelVideoStudioModal({
                 })()}
 
                 {/* Custom Looping Barking Audio for Udo's 3D Animation */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/10">
-                  <div className="min-w-0 flex-1">
+                <div className="space-y-2 pt-2 border-t border-white/10">
+                  <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[#e6cbd5]">
                       <Music className="w-3.5 h-3.5 text-rose-300 shrink-0" />
                       <span className="font-medium">Udo 3D Barking Sound (Loops while running):</span>
                       <span
-                        className={`font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border ${
+                        className={`font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border whitespace-nowrap ${
                           overrides.udoBarkAudioUrl
                             ? 'border-emerald-500/45 bg-emerald-950/40 text-emerald-200'
                             : 'border-white/15 bg-white/5 text-[#b7a7ae]'
@@ -2212,17 +2212,17 @@ export function AngelVideoStudioModal({
                       </div>
                     )}
                   </div>
-                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
                     <button
                       type="button"
                       onClick={() => soundEngine.previewUdoBarkAudio(2600)}
                       title="Preview Udo's looping barking audio"
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-black hover:bg-[#221018] border border-rose-400/40 text-[11px] text-rose-200 cursor-pointer"
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-black hover:bg-[#221018] border border-rose-400/40 text-[11px] text-rose-200 cursor-pointer whitespace-nowrap"
                     >
                       <Play className="w-3 h-3 text-rose-300" />
                       Test Bark
                     </button>
-                    <label className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#26121b] hover:bg-[#381928] border border-rose-400/55 text-[11px] font-semibold text-rose-100 cursor-pointer">
+                    <label className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#26121b] hover:bg-[#381928] border border-rose-400/55 text-[11px] font-semibold text-rose-100 cursor-pointer whitespace-nowrap">
                       <Upload className="w-3 h-3 text-rose-300" />
                       <span>{overrides.udoBarkAudioUrl ? 'Replace Bark Audio' : 'Upload Bark Audio'}</span>
                       <input
@@ -2289,7 +2289,7 @@ export function AngelVideoStudioModal({
         {/* Special 3D Board Idle Event — Mini Hamsters Wild Chase */}
         <div className="rounded-xl border border-sky-400/45 bg-[#0c1118] overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#101824]">
-            <div className="min-w-0 flex-1">
+            <div className="min-w-[260px] flex-1">
               <div className="flex flex-wrap items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-sky-300 shrink-0" />
                 <span className="text-xs font-semibold text-[#eef6ff]">
@@ -2300,14 +2300,14 @@ export function AngelVideoStudioModal({
                 </span>
               </div>
               <p className="text-[11px] text-[#b4c4d8] mt-0.5 leading-snug">
-                A dark grey Russian mini hamster with a black dorsal line and a white mini hamster with a pink nose and pink claws chase each other wildly across the 3D chessboard, alternating with the Fluffy White Puppy during idle waiting states.
+                A dark grey Russian mini hamster with a black dorsal line and a white mini hamster with a pink nose and pink claws chase each other wildly across the 3D chessboard, alternating with Udo during idle waiting states.
               </p>
             </div>
             <button
               type="button"
               onClick={() => onTriggerHamsterChase?.()}
               disabled={!onTriggerHamsterChase}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[#132236] hover:bg-[#1a304d] border border-sky-400/55 text-[11px] font-semibold text-sky-100 cursor-pointer shrink-0 disabled:opacity-45"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[#132236] hover:bg-[#1a304d] border border-sky-400/55 text-[11px] font-semibold text-sky-100 cursor-pointer shrink-0 whitespace-nowrap disabled:opacity-45"
             >
               <Play className="w-3 h-3 text-sky-300" />
               Test 3D Hamsters Chase
@@ -2359,17 +2359,17 @@ export function AngelVideoStudioModal({
                   dragOverSlot === 'special:dance_stars' ? 'bg-[#2c210e]' : 'bg-black'
                 }`}
               >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="min-w-0 flex-1">
+                <div className="space-y-2">
+                  <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-xs font-semibold text-[#fdf5e0]">
                         Dance with Stars Portrait Video &amp; Gold Star Drift
                       </span>
-                      <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-amber-400/45 bg-[#251c0c] text-amber-200">
+                      <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-amber-400/45 bg-[#251c0c] text-amber-200 whitespace-nowrap">
                         special:dance_stars
                       </span>
                       {danceClipSec !== null && (
-                        <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200">
+                        <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-sky-500/35 bg-sky-950/35 text-sky-200 whitespace-nowrap">
                           Video: {formatSec(danceClipSec)}
                         </span>
                       )}
@@ -2386,14 +2386,14 @@ export function AngelVideoStudioModal({
                     )}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
                     {renderPlayToEndFlagButton('special:dance_stars', 'Dance with Stars')}
                     <button
                       type="button"
                       onClick={previewDanceStars}
                       disabled={!onTriggerDanceStarsEvent}
                       title="Play Dance with Stars with fine sparkling gold stars spreading left and fading to 0 at video end"
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-[#2a1f0b] hover:bg-[#3d2d10] border border-amber-400/55 text-[11px] font-semibold text-amber-100 cursor-pointer disabled:opacity-45"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-[#2a1f0b] hover:bg-[#3d2d10] border border-amber-400/55 text-[11px] font-semibold text-amber-100 cursor-pointer whitespace-nowrap disabled:opacity-45"
                     >
                       <Play className="w-3 h-3 text-amber-300" />
                       {danceStarsUrl ? 'Test Dance with Stars' : 'Preview Gold Stars'}
@@ -2417,7 +2417,7 @@ export function AngelVideoStudioModal({
           return (
             <div className="rounded-xl border border-violet-400/50 bg-[#0d0a16] overflow-hidden">
               <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#150f24] border-b border-violet-400/30">
-                <div className="min-w-0 flex-1">
+                <div className="min-w-[260px] flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-violet-300 shrink-0" />
                     <span className="text-xs font-semibold text-[#f3ecff]">
@@ -2540,7 +2540,7 @@ export function AngelVideoStudioModal({
           return (
             <div className="rounded-xl border border-emerald-400/50 bg-[#081312] overflow-hidden">
               <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#0c1e1c] border-b border-emerald-400/30">
-                <div className="min-w-0 flex-1">
+                <div className="min-w-[260px] flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
                     <span className="text-xs font-semibold text-[#e8fff7]">
@@ -3168,7 +3168,7 @@ export function AngelVideoStudioModal({
           return (
             <div className="rounded-xl border border-[#e3be78]/65 bg-[#141008] overflow-hidden">
               <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-[#241b0b] border-b border-[#e3be78]/35">
-                <div className="min-w-0 flex-1">
+                <div className="min-w-[260px] flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <Crown className="w-3.5 h-3.5 text-[#f7d78a] shrink-0" />
                     <span className="text-xs font-semibold text-[#fff7e0]">
@@ -3243,13 +3243,13 @@ export function AngelVideoStudioModal({
                           : 'bg-black hover:bg-[#110d06]'
                       }`}
                     >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="min-w-0 flex-1">
+                      <div className="space-y-2">
+                        <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="font-mono-tabular text-xs font-semibold text-[#f7d78a]">
                               {slot.slotLabel}
                             </span>
-                            <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-[#d6ae63]/40 bg-[#22190a] text-[#f3cf83]">
+                            <span className="font-mono-tabular text-[10px] px-1.5 py-0.5 rounded border border-[#d6ae63]/40 bg-[#22190a] text-[#f3cf83] whitespace-nowrap">
                               case:{slot.slotKey}
                             </span>
                             <span
@@ -3267,20 +3267,20 @@ export function AngelVideoStudioModal({
                               </span>
                             )}
                             {renderVideoSizeBadge(slot.slotUrl, slot.slotLabel)}
-                            {renderMaxPlaysControl(slot.quotaSlotId, slot.slotLabel)}
-                            {renderPlayToEndFlagButton(`case:${slot.slotKey}`, slot.slotLabel)}
                           </div>
                           <div className="font-mono-tabular text-[10px] text-[#9aa3b2] truncate mt-0.5">
                             {slot.slotUrl ? slot.slotUrl.split('?')[0] : slot.subCaption}
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1.5 shrink-0">
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                          {renderMaxPlaysControl(slot.quotaSlotId, slot.slotLabel)}
+                          {renderPlayToEndFlagButton(`case:${slot.slotKey}`, slot.slotLabel)}
                           <button
                             type="button"
                             onClick={() => previewEighthRowSlot(slot.slotUrl)}
                             title={`Preview ${slot.slotLabel} on Chess Angel`}
-                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#151c28] border border-white/16 text-[11px] text-[#cbd5e1] cursor-pointer"
+                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md bg-black hover:bg-[#151c28] border border-white/16 text-[11px] text-[#cbd5e1] cursor-pointer whitespace-nowrap"
                           >
                             <Play className="w-3 h-3 text-[#7dd3fc]" />
                             Test
