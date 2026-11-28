@@ -390,6 +390,8 @@ function ChessAngelPortraitVideo({
   const escapeUrlRef = useRef<string>('');
   const escapeBlobUrlRef = useRef<string | null>(null);
   const escapeRetryKeyRef = useRef<string>('');
+  const escapeBlobRecoveryTriedRef = useRef<string>('');
+  const escapeLastProgressMsRef = useRef<number>(0);
   const escapeAutoPlayRef = useRef<boolean>(false);
   const escapeTargetSeekSecRef = useRef<number>(0);
   const escapeLaunchSeekSecRef = useRef<number>(0);
@@ -688,6 +690,9 @@ function ChessAngelPortraitVideo({
 
     const vw = video.videoWidth;
     const vh = video.videoHeight;
+    if (video.seeking) {
+      return false;
+    }
     if (video.readyState < 2 || vw <= 0 || vh <= 0 || video.ended || escapeSafeEndedRef.current) {
       return escapeHasFrameRef.current;
     }
@@ -870,6 +875,9 @@ function ChessAngelPortraitVideo({
     escapeSeekAppliedRef.current = false;
     escapeHasFrameRef.current = false;
     escapeUrlRef.current = url;
+    escapeRetryKeyRef.current = '';
+    escapeBlobRecoveryTriedRef.current = '';
+    escapeLastProgressMsRef.current = performance.now();
     revokeObjectUrlSafely(escapeBlobUrlRef.current);
     escapeBlobUrlRef.current = null;
     video.preload = autoPlay || !IS_MOBILE_DEVICE ? 'auto' : 'metadata';
@@ -1050,6 +1058,7 @@ function ChessAngelPortraitVideo({
 
     slotHasFrameRef.current[slot] = false;
     slotUrlRef.current[slot] = url;
+    slotRetryKeyRef.current[slot] = '';
     slotBlobRecoveryTriedRef.current[slot] = '';
     revokeObjectUrlSafely(slotBlobUrlRef.current[slot]);
     slotBlobUrlRef.current[slot] = null;
@@ -1107,6 +1116,52 @@ function ChessAngelPortraitVideo({
         if (slotAutoPlayRef.current[slot]) {
           safePlayVideo(currentVid, true);
           armVideoFramePump(currentVid);
+        }
+        ensureRenderLoop();
+      });
+  };
+
+  /**
+   * Full-download Blob-URL recovery for the 3rd-layer Escape Overlay (`point_you`, `point_me`,
+   * `push_button` and all their `#2..#6` alternatives) so HTTP 206 Range stalls on iOS Safari,
+   * Android Chrome, Firefox, Edge, Windows, or macOS never drop alternative escape clips.
+   */
+  const recoverEscapeViaBlobFetch = (url: string) => {
+    if (!url || escapePhaseRef.current === 'inactive' || escapeUrlRef.current !== url) return;
+    if (escapeBlobRecoveryTriedRef.current === url) return;
+    escapeBlobRecoveryTriedRef.current = url;
+
+    const cleanRetryUrl = `${url}${url.includes('?') ? '&' : '?'}retry=1`;
+    void fetch(cleanRetryUrl, { credentials: 'same-origin' })
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (ct.includes('text/html')) return null;
+        const buf = await res.arrayBuffer();
+        if (buf.byteLength < 4096) return null;
+        return URL.createObjectURL(new Blob([buf], { type: 'video/mp4' }));
+      })
+      .catch(() => null)
+      .then((blobUrl) => {
+        if (escapePhaseRef.current === 'inactive' || escapeUrlRef.current !== url) {
+          revokeObjectUrlSafely(blobUrl);
+          return;
+        }
+        const currentEsc = escapeVideoRef.current;
+        if (!currentEsc) {
+          revokeObjectUrlSafely(blobUrl);
+          return;
+        }
+        revokeObjectUrlSafely(escapeBlobUrlRef.current);
+        escapeBlobUrlRef.current = blobUrl;
+        escapeSeekAppliedRef.current = false;
+        escapeLastProgressMsRef.current = performance.now();
+        currentEsc.preload = 'auto';
+        currentEsc.src = blobUrl || cleanRetryUrl;
+        currentEsc.load();
+        if (escapeAutoPlayRef.current) {
+          safePlayVideo(currentEsc, true);
+          armVideoFramePump(currentEsc);
         }
         ensureRenderLoop();
       });
@@ -1946,25 +2001,41 @@ function ChessAngelPortraitVideo({
         if (escapeWaitingFrameRef.current && escReady) {
           escapeWaitingFrameRef.current = false;
           escapeBlendStartAtRef.current = now;
-        } else if (
-          escapeWaitingFrameRef.current &&
-          !escReady &&
-          ((escapeWaitStartMsRef.current > 0 && now - escapeWaitStartMsRef.current > 4500) ||
-            Boolean(escVideo?.error))
-        ) {
-          // Escape overlay failed or timed out on mobile: release cleanly and resume base video!
-          escapeWaitingFrameRef.current = false;
-          playingPostVideoEscapeRef.current = false;
-          hasEscapePrevRef.current = false;
-          escapeCurrentAlphaRef.current = 0;
-          escapeStartAlphaRef.current = 0;
-          escapePhaseRef.current = 'inactive';
-          activeEscapeCueKeyRef.current = null;
-          if (escVideo && !escVideo.paused) {
-            escVideo.pause();
+        } else if (escapeWaitingFrameRef.current && !escReady) {
+          const escWaitedMs = escapeWaitStartMsRef.current > 0 ? now - escapeWaitStartMsRef.current : 0;
+          const escUrl = escapeUrlRef.current;
+          if (
+            escWaitedMs > 900 &&
+            escWaitedMs < 1700 &&
+            escVideo &&
+            escapeAutoPlayRef.current &&
+            escVideo.paused &&
+            !escVideo.error
+          ) {
+            safePlayVideo(escVideo, true);
+            armVideoFramePump(escVideo);
           }
-          releaseEscapeDecoderOnMobile();
-          resumePausedBaseVideoAfterEscape();
+          if (
+            (escWaitedMs > 1700 || Boolean(escVideo?.error)) &&
+            escUrl &&
+            escapeBlobRecoveryTriedRef.current !== escUrl
+          ) {
+            recoverEscapeViaBlobFetch(escUrl);
+          } else if (escWaitedMs > 5800 || (Boolean(escVideo?.error) && escapeBlobRecoveryTriedRef.current === escUrl && escWaitedMs > 2600)) {
+            // Escape overlay failed even after full Blob-URL download: release cleanly and resume base video!
+            escapeWaitingFrameRef.current = false;
+            playingPostVideoEscapeRef.current = false;
+            hasEscapePrevRef.current = false;
+            escapeCurrentAlphaRef.current = 0;
+            escapeStartAlphaRef.current = 0;
+            escapePhaseRef.current = 'inactive';
+            activeEscapeCueKeyRef.current = null;
+            if (escVideo && !escVideo.paused) {
+              escVideo.pause();
+            }
+            releaseEscapeDecoderOnMobile();
+            resumePausedBaseVideoAfterEscape();
+          }
         }
 
         // Keep previous escape frame visible while incoming chained escape decodes its first frame
@@ -3109,7 +3180,7 @@ function ChessAngelPortraitVideo({
     }
 
     // Still-frame portrait target (e.g. initial calm rest or post-speech rest):
-    // Nudge Android hardware MediaCodec to decode frame 0 so `loadeddata`/`seeked` fires reliably.
+    // Nudge hardware decoder (Android, iOS Safari, macOS Safari, Firefox) to decode frame 0 reliably.
     if (slot === activeSlotRef.current && !slotHasFrameRef.current[slot]) {
       try {
         if (el.currentTime === 0) {
@@ -3118,7 +3189,7 @@ function ChessAngelPortraitVideo({
       } catch {
         // ignore
       }
-      if (IS_MOBILE_DEVICE && el.readyState < 2 && !slotPrimingStillRef.current[slot]) {
+      if (el.readyState < 2 && !slotPrimingStillRef.current[slot]) {
         slotPrimingStillRef.current[slot] = true;
         safePlayVideo(el, true);
       }
@@ -3533,6 +3604,24 @@ function ChessAngelPortraitVideo({
           }
           if (escapeAutoPlayRef.current && el.paused) {
             safePlayVideo(el);
+            armVideoFramePump(el);
+          } else if (!escapeAutoPlayRef.current) {
+            sampleEscapeVideoFrame();
+          }
+          ensureRenderLoop();
+        }}
+        onTimeUpdate={(e) => {
+          const el = e.currentTarget;
+          escapeLastProgressMsRef.current = performance.now();
+          if (escapePhaseRef.current !== 'inactive' && !el.paused && !el.ended) {
+            ensureRenderLoop();
+          }
+        }}
+        onSeeked={(e) => {
+          const el = e.currentTarget;
+          silenceVideoElement(el);
+          if (escapeAutoPlayRef.current && !escapeSafeEndedRef.current && !el.ended) {
+            safePlayVideo(el, true);
             armVideoFramePump(el);
           } else if (!escapeAutoPlayRef.current) {
             sampleEscapeVideoFrame();

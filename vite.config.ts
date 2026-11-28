@@ -20,8 +20,10 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: [
+          'favicon.ico',
+          'favicon-16x16.png',
+          'favicon-32x32.png',
           'favicon.png',
-          'icon.svg',
           'apple-touch-icon.png',
           'pwa-192x192.png',
           'pwa-512x512.png',
@@ -32,14 +34,14 @@ export default defineConfig(() => {
           name: 'ChessAngel 3D',
           short_name: 'ChessAngel',
           description:
-            'Non-profit educational chess game by Jan Rom (jrom.eu/), creator of studentplatform.net, calctrain.studentplatform.net, and chess3d.studentplatform.net.',
+            'Play free 3D educational chess against ChessAngel (800–2400 Elo) with live 3D thinking trees, voiced coaching, and PGN analysis. Non-profit app by Jan Rom.',
           theme_color: '#000000',
           background_color: '#000000',
           display: 'standalone',
           orientation: 'any',
           start_url: '/',
           scope: '/',
-          categories: ['games', 'board', 'entertainment'],
+          categories: ['education', 'games', 'board'],
           icons: [
             {
               src: '/pwa-192x192.png',
@@ -76,6 +78,19 @@ export default defineConfig(() => {
               // Never cache authenticated or live API routes
               urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
               handler: 'NetworkOnly',
+            },
+            {
+              // Cache Udo's lightweight custom MP3 bark (fetched as a full ArrayBuffer/Audio asset)
+              // so it plays reliably online and offline across desktop, mobile, and installed PWAs.
+              urlPattern: ({ url }) => url.pathname === '/assets/aistudio/udo_bark.mp3',
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'chessangel-udo-bark-v4-7',
+                networkTimeoutSeconds: 4,
+                cacheableResponse: {
+                  statuses: [200],
+                },
+              },
             },
             {
               // Stream Chess Angel MP4 videos and full soundtrack MP3s directly via native browser
@@ -532,7 +547,21 @@ export default defineConfig(() => {
               fs.cpSync(srcSub, dstSub, { recursive: true, force: true });
             }
           }
-          for (const rootFile of ['seduction.mp3', '_headers', '_redirects', 'robots.txt']) {
+          for (const rootFile of [
+            'seduction.mp3',
+            '_headers',
+            '_redirects',
+            'robots.txt',
+            'sitemap.xml',
+            'favicon.ico',
+            'favicon-16x16.png',
+            'favicon-32x32.png',
+            'favicon.png',
+            'apple-touch-icon.png',
+            'pwa-192x192.png',
+            'pwa-512x512.png',
+            'pwa-maskable-512x512.png',
+          ]) {
             const srcFile = path.resolve(__dirname, 'public', rootFile);
             if (fs.existsSync(srcFile)) {
               fs.copyFileSync(srcFile, path.resolve(distDir, rootFile));

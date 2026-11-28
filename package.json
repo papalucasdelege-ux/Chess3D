@@ -2,6 +2,26 @@
   "name": "chessangel-3d",
   "private": true,
   "version": "4.7.0",
+  "description": "Play free 3D educational chess against ChessAngel (800–2400 Elo) with live 3D thinking trees, voiced coaching, and PGN analysis. Non-profit educational app by Jan Rom (jrom.eu/).",
+  "homepage": "https://chess3d.studentplatform.net/",
+  "author": {
+    "name": "Jan Rom",
+    "url": "https://jrom.eu/"
+  },
+  "keywords": [
+    "chess",
+    "3d-chess",
+    "educational-chess",
+    "chess-angel",
+    "thinking-tree",
+    "alpha-beta",
+    "threejs",
+    "webgl",
+    "pwa",
+    "pgn",
+    "studentplatform",
+    "non-profit"
+  ],
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",

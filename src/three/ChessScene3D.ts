@@ -2871,21 +2871,15 @@ export class ChessScene3D {
       while (deltaYaw < -Math.PI) deltaYaw += Math.PI * 2;
       this.wildDog.root.rotation.y += deltaYaw * Math.min(1, dt * 9.5);
 
-      // Stereo-panned barks synced to Udo's snapping jaw (continuous loop if custom Udo bark audio is uploaded)
+      // Stereo-panned barks synced to Udo's snapping jaw using the user's real MP3 dog bark
       this.wildDogBarkEnv = Math.max(0, this.wildDogBarkEnv - dt * 4.6);
-      const hasCustomBark = soundEngine.hasCustomUdoBarkAudio();
-      if (hasCustomBark && !this.wildDogSoundMuted && u < 0.96) {
+      if (!this.wildDogSoundMuted && u < 0.96) {
         _dogProj.copy(_dogPos).project(this.camera);
         soundEngine.updateWildDogBarkLoopPan(THREE.MathUtils.clamp(_dogProj.x, -0.92, 0.92));
       }
       if (this.wildDogElapsed >= this.wildDogNextBarkAt && u < 0.95) {
         this.wildDogBarkEnv = 1.0;
         this.wildDogNextBarkAt = this.wildDogElapsed + 0.3 + Math.random() * 0.17;
-        if (!this.wildDogSoundMuted && !hasCustomBark) {
-          _dogProj.copy(_dogPos).project(this.camera);
-          const stereoPan = THREE.MathUtils.clamp(_dogProj.x, -0.92, 0.92);
-          soundEngine.playWildDogBark(stereoPan, 0.95 + Math.random() * 0.15);
-        }
       }
 
       this.wildDog.update(

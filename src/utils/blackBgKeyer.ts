@@ -12,8 +12,8 @@
  * Automatically falls back to a lightweight 2D canvas blit if WebGL is unavailable.
  */
 
-const MASK_W = 70;
-const MASK_H = 94;
+const MASK_W = 64;
+const MASK_H = 128;
 const FLOOD_PASSES = 30;
 
 const QUAD_VERT = `
@@ -123,6 +123,7 @@ precision mediump float;
 uniform sampler2D uVideoTex;
 uniform sampler2D uExtMaskTex;
 uniform float uEnabled;
+uniform float uUseExtMask;
 uniform float uLowCut;
 uniform float uHighCut;
 uniform float uDeadLow;
@@ -137,17 +138,21 @@ void main() {
   }
 
   float metric = keyMetric(rgb);
-  float extMask = texture2D(uExtMaskTex, vUv).r;
-
-  // 1. Exterior silhouette luma-key: smooth anti-aliased edge around hair, shoulders & props
   float lumaAlpha = smoothstep(uLowCut, uHighCut, metric);
-  float extKeyAlpha = mix(1.0, lumaAlpha, smoothstep(0.05, 0.52, extMask));
-
-  // 2. Pure dead-black pocket key: removes literal studio-black voids inside enclosed flowchart loops
-  //    or arm gaps without ever touching illuminated skin/hair/eyes
   float deadBlackAlpha = smoothstep(uDeadLow, uDeadHigh, metric);
 
-  float alpha = min(extKeyAlpha, deadBlackAlpha);
+  float alpha = lumaAlpha;
+  if (uUseExtMask > 0.5) {
+    float extMask = texture2D(uExtMaskTex, vUv).r;
+    // 1. Exterior silhouette luma-key: smooth anti-aliased edge around hair, shoulders & props
+    float extKeyAlpha = mix(1.0, lumaAlpha, smoothstep(0.05, 0.52, extMask));
+    // 2. Pure dead-black pocket key: removes literal studio-black voids inside enclosed flowchart loops
+    //    or arm gaps without ever touching illuminated skin/hair/eyes
+    alpha = min(extKeyAlpha, deadBlackAlpha);
+  } else {
+    // 1-pass GPU fallback when FBO render-to-texture is unavailable on legacy mobile/VM drivers
+    alpha = deadBlackAlpha;
+  }
 
   // Premultiplied-alpha compositing over the 3D chessboard:
   // Original black-backed video pixel is already premultiplied (a * trueColor), so zero dark halo!
@@ -227,17 +232,51 @@ export class BlackBgKeyerGL {
     uVideoTex: WebGLUniformLocation | null;
     uExtMaskTex: WebGLUniformLocation | null;
     uEnabled: WebGLUniformLocation | null;
+    uUseExtMask: WebGLUniformLocation | null;
     uLowCut: WebGLUniformLocation | null;
     uHighCut: WebGLUniformLocation | null;
     uDeadLow: WebGLUniformLocation | null;
     uDeadHigh: WebGLUniformLocation | null;
   } | null = null;
 
+  private lastSourceCanvas: HTMLCanvasElement | null = null;
+  private lastStrength = 0;
   private disposed = false;
+
+  private readonly onContextLost = (e: Event) => {
+    e.preventDefault();
+  };
+
+  private readonly onContextRestored = () => {
+    if (this.disposed) return;
+    this.resetGlHandles();
+    this.initWebGL();
+    if (this.lastSourceCanvas) {
+      this.render(this.lastSourceCanvas, this.lastStrength);
+    }
+  };
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+    this.canvas.addEventListener('webglcontextlost', this.onContextLost, false);
+    this.canvas.addEventListener('webglcontextrestored', this.onContextRestored, false);
     this.initWebGL();
+  }
+
+  private resetGlHandles(): void {
+    this.gl = null;
+    this.quadBuf = null;
+    this.videoTex = null;
+    this.maskA = null;
+    this.maskB = null;
+    this.seedProg = null;
+    this.floodProg = null;
+    this.blurProg = null;
+    this.compProg = null;
+    this.seedLocs = null;
+    this.floodLocs = null;
+    this.blurLocs = null;
+    this.compLocs = null;
   }
 
   private createMaskTarget(gl: WebGLRenderingContext): MaskTarget | null {
@@ -285,20 +324,27 @@ export class BlackBgKeyerGL {
         return;
       }
 
-      const seedProg = createProgram(gl, QUAD_VERT, SEED_FRAG);
-      const floodProg = createProgram(gl, QUAD_VERT, FLOOD_FRAG);
-      const blurProg = createProgram(gl, QUAD_VERT, BLUR_MASK_FRAG);
       const compProg = createProgram(gl, QUAD_VERT, COMPOSITE_FRAG);
-      const maskA = this.createMaskTarget(gl);
-      const maskB = this.createMaskTarget(gl);
       const quadBuf = gl.createBuffer();
       const videoTex = gl.createTexture();
 
-      if (!seedProg || !floodProg || !blurProg || !compProg || !maskA || !maskB || !quadBuf || !videoTex) {
+      if (!compProg || !quadBuf || !videoTex) {
+        if (compProg) gl.deleteProgram(compProg);
+        if (quadBuf) gl.deleteBuffer(quadBuf);
+        if (videoTex) gl.deleteTexture(videoTex);
+        return;
+      }
+
+      const seedProg = createProgram(gl, QUAD_VERT, SEED_FRAG);
+      const floodProg = createProgram(gl, QUAD_VERT, FLOOD_FRAG);
+      const blurProg = createProgram(gl, QUAD_VERT, BLUR_MASK_FRAG);
+      const maskA = this.createMaskTarget(gl);
+      const maskB = this.createMaskTarget(gl);
+      const fboPipelineReady = Boolean(seedProg && floodProg && blurProg && maskA && maskB);
+      if (!fboPipelineReady) {
         if (seedProg) gl.deleteProgram(seedProg);
         if (floodProg) gl.deleteProgram(floodProg);
         if (blurProg) gl.deleteProgram(blurProg);
-        if (compProg) gl.deleteProgram(compProg);
         if (maskA) {
           gl.deleteFramebuffer(maskA.fbo);
           gl.deleteTexture(maskA.tex);
@@ -307,9 +353,6 @@ export class BlackBgKeyerGL {
           gl.deleteFramebuffer(maskB.fbo);
           gl.deleteTexture(maskB.tex);
         }
-        if (quadBuf) gl.deleteBuffer(quadBuf);
-        if (videoTex) gl.deleteTexture(videoTex);
-        return;
       }
 
       gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
@@ -329,31 +372,34 @@ export class BlackBgKeyerGL {
       this.gl = gl;
       this.quadBuf = quadBuf;
       this.videoTex = videoTex;
-      this.maskA = maskA;
-      this.maskB = maskB;
-      this.seedProg = seedProg;
-      this.floodProg = floodProg;
-      this.blurProg = blurProg;
+      this.maskA = fboPipelineReady ? maskA : null;
+      this.maskB = fboPipelineReady ? maskB : null;
+      this.seedProg = fboPipelineReady ? seedProg : null;
+      this.floodProg = fboPipelineReady ? floodProg : null;
+      this.blurProg = fboPipelineReady ? blurProg : null;
       this.compProg = compProg;
 
-      this.seedLocs = {
-        aPos: gl.getAttribLocation(seedProg, 'aPos'),
-        uVideoTex: gl.getUniformLocation(seedProg, 'uVideoTex'),
-        uFloodThresh: gl.getUniformLocation(seedProg, 'uFloodThresh'),
-      };
-      this.floodLocs = {
-        aPos: gl.getAttribLocation(floodProg, 'aPos'),
-        uMaskTex: gl.getUniformLocation(floodProg, 'uMaskTex'),
-      };
-      this.blurLocs = {
-        aPos: gl.getAttribLocation(blurProg, 'aPos'),
-        uMaskTex: gl.getUniformLocation(blurProg, 'uMaskTex'),
-      };
+      if (fboPipelineReady && seedProg && floodProg && blurProg) {
+        this.seedLocs = {
+          aPos: gl.getAttribLocation(seedProg, 'aPos'),
+          uVideoTex: gl.getUniformLocation(seedProg, 'uVideoTex'),
+          uFloodThresh: gl.getUniformLocation(seedProg, 'uFloodThresh'),
+        };
+        this.floodLocs = {
+          aPos: gl.getAttribLocation(floodProg, 'aPos'),
+          uMaskTex: gl.getUniformLocation(floodProg, 'uMaskTex'),
+        };
+        this.blurLocs = {
+          aPos: gl.getAttribLocation(blurProg, 'aPos'),
+          uMaskTex: gl.getUniformLocation(blurProg, 'uMaskTex'),
+        };
+      }
       this.compLocs = {
         aPos: gl.getAttribLocation(compProg, 'aPos'),
         uVideoTex: gl.getUniformLocation(compProg, 'uVideoTex'),
         uExtMaskTex: gl.getUniformLocation(compProg, 'uExtMaskTex'),
         uEnabled: gl.getUniformLocation(compProg, 'uEnabled'),
+        uUseExtMask: gl.getUniformLocation(compProg, 'uUseExtMask'),
         uLowCut: gl.getUniformLocation(compProg, 'uLowCut'),
         uHighCut: gl.getUniformLocation(compProg, 'uHighCut'),
         uDeadLow: gl.getUniformLocation(compProg, 'uDeadLow'),
@@ -369,29 +415,27 @@ export class BlackBgKeyerGL {
     if (this.disposed) return;
 
     const clamped = Number.isFinite(strength) ? Math.max(0, Math.min(1, strength)) : 0;
+    this.lastSourceCanvas = sourceCanvas;
+    this.lastStrength = clamped;
     const gl = this.gl;
 
-    if (
-      !gl ||
-      gl.isContextLost() ||
-      !this.quadBuf ||
-      !this.videoTex ||
-      !this.maskA ||
-      !this.maskB ||
-      !this.seedProg ||
-      !this.floodProg ||
-      !this.blurProg ||
-      !this.compProg ||
-      !this.seedLocs ||
-      !this.floodLocs ||
-      !this.blurLocs ||
-      !this.compLocs
-    ) {
+    if (!gl || gl.isContextLost() || !this.quadBuf || !this.videoTex || !this.compProg || !this.compLocs) {
       this.render2DFallback(sourceCanvas, clamped);
       return;
     }
 
     const enabled = clamped > 0.001;
+    const canUseExtMask = Boolean(
+      enabled &&
+        this.maskA &&
+        this.maskB &&
+        this.seedProg &&
+        this.floodProg &&
+        this.blurProg &&
+        this.seedLocs &&
+        this.floodLocs &&
+        this.blurLocs,
+    );
 
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
@@ -410,10 +454,20 @@ export class BlackBgKeyerGL {
     const deadLow = 0.004 + (0.045 - 0.004) * clamped;
     const deadHigh = deadLow + 0.022 + (0.065 - 0.022) * clamped;
 
-    let finalMaskTex = this.maskA.tex;
+    let finalMaskTex: WebGLTexture = this.videoTex;
 
-    if (enabled) {
-      // Pass 0: Seed exterior dark pixels along outer left/right/top borders on 70x94 FBO
+    if (
+      canUseExtMask &&
+      this.maskA &&
+      this.maskB &&
+      this.seedProg &&
+      this.floodProg &&
+      this.blurProg &&
+      this.seedLocs &&
+      this.floodLocs &&
+      this.blurLocs
+    ) {
+      // Pass 0: Seed exterior dark pixels along outer left/right/top borders on 64x128 POT FBO
       gl.viewport(0, 0, MASK_W, MASK_H);
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.maskA.fbo);
       gl.useProgram(this.seedProg);
@@ -469,6 +523,7 @@ export class BlackBgKeyerGL {
     gl.uniform1i(this.compLocs.uExtMaskTex, 1);
 
     gl.uniform1f(this.compLocs.uEnabled, enabled ? 1.0 : 0.0);
+    gl.uniform1f(this.compLocs.uUseExtMask, canUseExtMask ? 1.0 : 0.0);
     gl.uniform1f(this.compLocs.uLowCut, lowCut);
     gl.uniform1f(this.compLocs.uHighCut, highCut);
     gl.uniform1f(this.compLocs.uDeadLow, deadLow);
@@ -517,6 +572,8 @@ export class BlackBgKeyerGL {
 
   public dispose(): void {
     this.disposed = true;
+    this.canvas.removeEventListener('webglcontextlost', this.onContextLost, false);
+    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored, false);
     const gl = this.gl;
     if (gl) {
       if (this.quadBuf) gl.deleteBuffer(this.quadBuf);
@@ -534,7 +591,8 @@ export class BlackBgKeyerGL {
       if (this.blurProg) gl.deleteProgram(this.blurProg);
       if (this.compProg) gl.deleteProgram(this.compProg);
     }
-    this.gl = null;
+    this.resetGlHandles();
+    this.lastSourceCanvas = null;
     this.fallback2d = null;
   }
 }

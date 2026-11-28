@@ -673,6 +673,7 @@ export const ANGEL_LOCKED_CASES: Readonly<Partial<Record<AnyCaseSlotKey, string>
   seduction_4: '/assets/aistudio/builtin_seduction_4.mp4',
   seduction_5: '/assets/aistudio/builtin_seduction_5.mp4',
   seduction_6: '/assets/aistudio/builtin_seduction_6.mp4',
+  undo_done_2: '/assets/aistudio/angel_case_undo_done_2.mp4',
   warn_fork_2step_2: '/assets/aistudio/angel_case_warn_fork_2step_2.mp4',
 };
 
@@ -1376,6 +1377,8 @@ let runtimeOverrides: AngelVideoMapPayload = {
   musicTracks: DEFAULT_MUSIC_TRACKS.map((t) => ({ ...t })),
 };
 
+const VIDEO_ROTATION_STORAGE_KEY = 'chess_angel_video_rotation_v1';
+
 const listeners = new Set<() => void>();
 let initialFetchStarted = false;
 let idleRotationCursor = 0;
@@ -1396,6 +1399,59 @@ const lastPickedCaseUrl: Partial<Record<CommentaryCaseId, string>> = {};
 const lastCaseTriggerKey: Partial<Record<CommentaryCaseId, string>> = {};
 const primedCasePreviewUrl: Partial<Record<CommentaryCaseId, string>> = {};
 const lastGroupTriggerKey: Partial<Record<AngelExpressionGroup, string>> = {};
+
+// Hydrate rotation cursors across sessions so every alternative video (#2..#N, idle_2..8, escape #2..6)
+// is seen naturally even across fresh page visits and short matches on every browser/OS.
+function hydrateRotationCursors(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(VIDEO_ROTATION_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as {
+      idle?: unknown;
+      escapes?: Record<string, unknown>;
+      cases?: Record<string, unknown>;
+    };
+    if (typeof parsed.idle === 'number' && Number.isFinite(parsed.idle) && parsed.idle >= 0) {
+      idleRotationCursor = Math.floor(parsed.idle);
+    }
+    if (parsed.escapes && typeof parsed.escapes === 'object') {
+      for (const k of ALL_ESCAPE_CUE_KEYS) {
+        const v = parsed.escapes[k];
+        if (typeof v === 'number' && Number.isFinite(v) && v >= 0) {
+          escapeRotationCursor[k] = Math.floor(v);
+        }
+      }
+    }
+    if (parsed.cases && typeof parsed.cases === 'object') {
+      for (const [k, v] of Object.entries(parsed.cases)) {
+        if (k in CASE_TO_GROUP && typeof v === 'number' && Number.isFinite(v) && v >= 0) {
+          caseRotationCursor[k as CommentaryCaseId] = Math.floor(v);
+        }
+      }
+    }
+  } catch {
+    // ignore storage errors (e.g. strict Safari Private Mode / sandboxed iframes)
+  }
+}
+
+function persistRotationCursors(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      VIDEO_ROTATION_STORAGE_KEY,
+      JSON.stringify({
+        idle: idleRotationCursor,
+        escapes: escapeRotationCursor,
+        cases: caseRotationCursor,
+      }),
+    );
+  } catch {
+    // ignore storage errors
+  }
+}
+
+hydrateRotationCursors();
 
 // Per-game play counters for non-case video slots (secondary idles, escape slots, #1/#2 fork sub-slots)
 const gameSlotPlayCounts = new Map<string, number>();
@@ -1866,6 +1922,13 @@ export function resetAllAngelVideoState(): void {
   }
   for (const g of Object.keys(lastGroupTriggerKey) as AngelExpressionGroup[]) {
     delete lastGroupTriggerKey[g];
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.removeItem(VIDEO_ROTATION_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
   }
   setNextSeductionPlaybackAudio(null);
 }
@@ -3270,6 +3333,7 @@ export function pickNextAngelIdleVideo(avoidUrl?: string, commit = true): string
     if (candidateClean !== avoidClean && clipReady) {
       if (commit) {
         idleRotationCursor = (idx + 1) % secondaries.length;
+        persistRotationCursors();
         lastPickedIdleUrl = candidate;
         lastSecondaryIdleAtMs = now;
         secondaryIdleLastPlayedAt.set(candidateClean, now);
@@ -3281,13 +3345,14 @@ export function pickNextAngelIdleVideo(avoidUrl?: string, commit = true): string
     }
   }
 
-  // Fallback: if all secondaries are on short cooldown, pick the least-recently played one or primary
+  // Fallback: if all secondaries are on short cooldown, pick the next alternative in sequence or primary
   const fallbackCandidate =
     avoidClean === primaryClean ? secondaries[idleRotationCursor % secondaries.length] : primary;
   if (commit) {
     lastPickedIdleUrl = fallbackCandidate;
     if (stripAssetQuery(fallbackCandidate) !== primaryClean) {
       idleRotationCursor = (idleRotationCursor + 1) % secondaries.length;
+      persistRotationCursors();
       lastSecondaryIdleAtMs = now;
       secondaryIdleLastPlayedAt.set(stripAssetQuery(fallbackCandidate), now);
     }
@@ -3581,27 +3646,33 @@ function pickEscapeVideoForCue(
 ): string | null {
   const entries: Array<{ slotId: string; url: string }> = [];
   for (const item of getEscapeCueEntries(cueKey, map)) {
-    if (!entries.some((e) => e.url === item.url)) {
+    const cleanUrl = stripAssetQuery(item.url);
+    if (!entries.some((e) => stripAssetQuery(e.url) === cleanUrl)) {
       entries.push({ slotId: `escape:${item.slotKey}`, url: item.url });
     }
   }
   if (entries.length === 0) return null;
 
   const primed = primedEscapePreviewUrl[cueKey];
-  if (primed && entries.some((e) => e.url === primed)) {
-    if (advanceCursor) {
-      delete primedEscapePreviewUrl[cueKey];
-      const primedIdx = entries.findIndex((e) => e.url === primed);
-      escapeRotationCursor[cueKey] = (primedIdx + 1) % entries.length;
-      lastPickedEscapeUrl[cueKey] = primed;
+  if (primed) {
+    const primedClean = stripAssetQuery(primed);
+    const primedIdx = entries.findIndex((e) => stripAssetQuery(e.url) === primedClean);
+    if (primedIdx >= 0) {
+      const matchedUrl = entries[primedIdx].url;
+      if (advanceCursor) {
+        delete primedEscapePreviewUrl[cueKey];
+        escapeRotationCursor[cueKey] = (primedIdx + 1) % entries.length;
+        persistRotationCursors();
+        lastPickedEscapeUrl[cueKey] = matchedUrl;
+      }
+      return matchedUrl;
     }
-    return primed;
   }
 
-  const allowed = isStudioPreview
+  const quotaFiltered = isStudioPreview
     ? entries
     : entries.filter((e) => canPlayVideoSlotInGame(e.slotId, map));
-  if (allowed.length === 0) return null;
+  const allowed = quotaFiltered.length > 0 ? quotaFiltered : entries;
 
   if (allowed.length === 1) {
     if (advanceCursor) {
@@ -3615,17 +3686,23 @@ function pickEscapeVideoForCue(
 
   if (!advanceCursor) {
     const prev = lastPickedEscapeUrl[cueKey];
-    if (prev && allowed.some((e) => e.url === prev)) return prev;
+    if (prev) {
+      const prevClean = stripAssetQuery(prev);
+      const found = allowed.find((e) => stripAssetQuery(e.url) === prevClean);
+      if (found) return found.url;
+    }
     return allowed[escapeRotationCursor[cueKey] % allowed.length].url;
   }
 
   // Avoid playing the exact same escape clip twice in a row when rotating across #1..#N
   let idx = escapeRotationCursor[cueKey] % allowed.length;
-  if (allowed.length >= 2 && allowed[idx].url === lastPickedEscapeUrl[cueKey]) {
+  const lastClean = lastPickedEscapeUrl[cueKey] ? stripAssetQuery(lastPickedEscapeUrl[cueKey]!) : '';
+  if (allowed.length >= 2 && lastClean && stripAssetQuery(allowed[idx].url) === lastClean) {
     idx = (idx + 1) % allowed.length;
   }
   const chosen = allowed[idx];
   escapeRotationCursor[cueKey] = (idx + 1) % allowed.length;
+  persistRotationCursors();
   lastPickedEscapeUrl[cueKey] = chosen.url;
   if (!isStudioPreview) {
     recordVideoSlotPlayInGame(chosen.slotId);
@@ -3849,7 +3926,8 @@ function pickCaseVideoFromPool(
   const entries: Array<{ key: string; slotId: string; url: string; isSecondary: boolean }> = [];
 
   for (const entry of getCaseSlotEntries(caseId, map)) {
-    if (!entries.some((e) => e.url === entry.url)) {
+    const cleanUrl = stripAssetQuery(entry.url);
+    if (!entries.some((e) => stripAssetQuery(e.url) === cleanUrl)) {
       entries.push({
         key: entry.key,
         slotId: `case:${entry.key}`,
@@ -3865,33 +3943,43 @@ function pickCaseVideoFromPool(
   const hasMultiSlots = entries.length >= 2 || MULTI_SLOT_CASE_IDS.has(caseId);
 
   const primed = primedCasePreviewUrl[caseId];
-  if (primed && entries.some((e) => e.url === primed)) {
-    const primedEntry = entries.find((e) => e.url === primed)!;
-    if (caseId === 'seduction') {
-      applySeductionSlotAudioForKey(primedEntry.key, map);
-    }
-    if (!triggerKey || triggerKey !== lastCaseTriggerKey[caseId]) {
-      delete primedCasePreviewUrl[caseId];
-      const primedIdx = entries.findIndex((e) => e.url === primed);
-      caseRotationCursor[caseId] = (primedIdx + 1) % entries.length;
-      if (triggerKey) {
-        lastCaseTriggerKey[caseId] = triggerKey;
+  if (primed) {
+    const primedClean = stripAssetQuery(primed);
+    const primedIdx = entries.findIndex((e) => stripAssetQuery(e.url) === primedClean);
+    if (primedIdx >= 0) {
+      const primedEntry = entries[primedIdx];
+      if (caseId === 'seduction') {
+        applySeductionSlotAudioForKey(primedEntry.key, map);
       }
-      lastPickedCaseUrl[caseId] = primed;
+      if (!triggerKey || triggerKey !== lastCaseTriggerKey[caseId]) {
+        delete primedCasePreviewUrl[caseId];
+        caseRotationCursor[caseId] = (primedIdx + 1) % entries.length;
+        persistRotationCursors();
+        if (triggerKey) {
+          lastCaseTriggerKey[caseId] = triggerKey;
+        }
+        lastPickedCaseUrl[caseId] = primedEntry.url;
+      }
+      return primedEntry.url;
     }
-    return primed;
   }
 
   if (triggerKey && triggerKey === lastCaseTriggerKey[caseId]) {
     const prev = lastPickedCaseUrl[caseId];
-    if (prev && entries.some((e) => e.url === prev)) {
-      return prev;
+    if (prev) {
+      const prevClean = stripAssetQuery(prev);
+      const matched = entries.find((e) => stripAssetQuery(e.url) === prevClean);
+      if (matched) {
+        return matched.url;
+      }
     }
   }
 
   // Note: For single-slot cases, `case:<caseId>` is already gated at commentary creation time
   // (`canPlayCaseInGame`), so only enforce separate sub-slot quotas when multiple slots are used.
-  const allowed =
+  // If all sub-slots reach a soft cap while the case itself still triggers, keep rotating all attached
+  // alternatives rather than silently dropping back to generic lip-sync.
+  const quotaFiltered =
     isStudioPreview || !hasMultiSlots
       ? entries
       : entries.filter((e) =>
@@ -3901,8 +3989,7 @@ function pickCaseVideoFromPool(
               ? canPlayVideoSlotInGame(`${e.slotId}_primary`, map)
               : true,
         );
-
-  if (allowed.length === 0) return null;
+  const allowed = quotaFiltered.length > 0 ? quotaFiltered : entries;
 
   if (allowed.length === 1) {
     const only = allowed[0];
@@ -3929,6 +4016,7 @@ function pickCaseVideoFromPool(
   const idx = cursor % allowed.length;
   const chosen = allowed[idx];
   caseRotationCursor[caseId] = (idx + 1) % allowed.length;
+  persistRotationCursors();
   if (caseId === 'seduction') {
     applySeductionSlotAudioForKey(chosen.key, map);
   }
@@ -4036,6 +4124,7 @@ export function pickNextSeductionCaseVideo(currentUrl?: string | null): string {
   const curIdx = cleanCur ? pool.findIndex((u) => stripAssetQuery(u) === cleanCur) : -1;
   const nextIdx = curIdx >= 0 ? (curIdx + 1) % pool.length : (caseRotationCursor.seduction ?? 0) % pool.length;
   caseRotationCursor.seduction = (nextIdx + 1) % pool.length;
+  persistRotationCursors();
   return pool[nextIdx];
 }
 

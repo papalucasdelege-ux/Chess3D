@@ -1,6 +1,6 @@
 {
   "name": "ChessAngel 3D",
-  "description": "Non-profit educational chess game by Jan Rom (jrom.eu/), creator of studentplatform.net, calctrain.studentplatform.net, and chess3d.studentplatform.net.",
+  "description": "Play free 3D educational chess against ChessAngel (800–2400 Elo) with live 3D thinking trees, voiced coaching, and PGN analysis. Non-profit app by Jan Rom.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

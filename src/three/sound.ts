@@ -258,19 +258,186 @@ class ChessSoundEngine {
   private lastCheckIdx = -1;
   private udoBarkAudioUrl: string | null = withAssetBuildVersion(DEFAULT_BAKED_UDO_BARK_URL);
   private udoBarkRawBytes: ArrayBuffer | null = null;
+  private udoBarkBlobUrl: string | null = null;
   private udoBarkDecodedBuffer: AudioBuffer | null = null;
   private udoBarkFetchPromise: Promise<ArrayBuffer | null> | null = null;
+  private udoBarkDecodePromise: Promise<AudioBuffer | null> | null = null;
   private udoBarkLoopSource: AudioBufferSourceNode | null = null;
   private udoBarkLoopGain: GainNode | null = null;
   private udoBarkLoopPanner: StereoPannerNode | null = null;
+  private udoBarkReusableAudio: HTMLAudioElement | null = null;
+  private udoBarkReusableAudioUrl: string | null = null;
+  private udoBarkHtmlUnlocked = false;
   private udoBarkLoopHtmlAudio: HTMLAudioElement | null = null;
   private udoBarkLoopSeq = 0;
+  private udoBarkPendingLoop: { seq: number; pan: number } | null = null;
+  private gestureUnlockWired = false;
   public enabled = true;
 
-  public unlock(): void {
-    this.ensureContext();
-    if (this.udoBarkAudioUrl && !this.udoBarkRawBytes && typeof window !== 'undefined') {
+  constructor() {
+    this.wireGlobalAudioUnlock();
+  }
+
+  private wireGlobalAudioUnlock(): void {
+    if (this.gestureUnlockWired || typeof window === 'undefined') return;
+    this.gestureUnlockWired = true;
+
+    // Eagerly fetch the 336 KB MP3 bytes on startup so they are ready before Udo jumps out
+    if (this.udoBarkAudioUrl) {
       void this.preloadUdoBarkBytes(this.udoBarkAudioUrl);
+    }
+
+    const onUserGesture = () => {
+      this.unlock();
+      if (this.udoBarkPendingLoop && this.udoBarkPendingLoop.seq === this.udoBarkLoopSeq) {
+        const { pan } = this.udoBarkPendingLoop;
+        this.udoBarkPendingLoop = null;
+        this.startWildDogBarkLoop(pan);
+      }
+    };
+
+    const events = ['pointerdown', 'touchstart', 'mousedown', 'click', 'keydown'] as const;
+    for (const evt of events) {
+      window.addEventListener(evt, onUserGesture, { capture: true, passive: true });
+    }
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && this.ctx && this.ctx.state !== 'running') {
+          void this.ctx.resume().catch(() => {});
+        }
+      });
+    }
+  }
+
+  private primeReusableUdoBarkAudio(): void {
+    if (typeof window === 'undefined' || !this.udoBarkAudioUrl) return;
+    const preferredSrc = this.udoBarkBlobUrl || this.udoBarkAudioUrl;
+    if (!this.udoBarkReusableAudio) {
+      const el = new Audio();
+      el.preload = 'auto';
+      el.loop = true;
+      el.setAttribute('playsinline', '');
+      el.setAttribute('webkit-playsinline', 'true');
+      this.udoBarkReusableAudio = el;
+    }
+    const audio = this.udoBarkReusableAudio;
+    if (this.udoBarkReusableAudioUrl !== preferredSrc) {
+      // Only reassign src if not currently playing Udo's bark
+      if (this.udoBarkLoopHtmlAudio !== audio) {
+        audio.src = preferredSrc;
+        this.udoBarkReusableAudioUrl = preferredSrc;
+        try {
+          audio.load();
+        } catch {
+          // ignore
+        }
+      }
+    }
+    if (this.udoBarkHtmlUnlocked || this.udoBarkLoopHtmlAudio === audio) return;
+    try {
+      // Silent gesture-blessing play/pause so iOS Safari, macOS Safari, Android Chrome & Firefox
+      // allow this HTMLAudioElement to play later inside async timers / video cue callbacks!
+      audio.muted = true;
+      audio.volume = 0;
+      const playPromise = audio.play();
+      if (playPromise && typeof playPromise.then === 'function') {
+        void playPromise
+          .then(() => {
+            if (this.udoBarkLoopHtmlAudio !== audio) {
+              audio.pause();
+              try {
+                audio.currentTime = 0;
+              } catch {
+                // ignore
+              }
+            }
+            audio.muted = false;
+            audio.volume = 0.92;
+            this.udoBarkHtmlUnlocked = true;
+          })
+          .catch(() => {
+            audio.muted = false;
+            audio.volume = 0.92;
+          });
+      } else {
+        audio.pause();
+        audio.muted = false;
+        audio.volume = 0.92;
+        this.udoBarkHtmlUnlocked = true;
+      }
+    } catch {
+      audio.muted = false;
+      audio.volume = 0.92;
+    }
+  }
+
+  private decodeAudioBufferCompat(ctx: AudioContext, bytes: ArrayBuffer): Promise<AudioBuffer> {
+    return new Promise<AudioBuffer>((resolve, reject) => {
+      let settled = false;
+      const doneResolve = (buf: AudioBuffer) => {
+        if (settled) return;
+        settled = true;
+        resolve(buf);
+      };
+      const doneReject = (err: unknown) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      };
+      try {
+        const maybePromise = ctx.decodeAudioData(
+          bytes.slice(0),
+          doneResolve,
+          (err) => doneReject(err ?? new Error('decodeAudioData failed')),
+        );
+        if (maybePromise && typeof (maybePromise as Promise<AudioBuffer>).then === 'function') {
+          (maybePromise as Promise<AudioBuffer>).then(doneResolve, doneReject);
+        }
+      } catch (err) {
+        doneReject(err);
+      }
+    });
+  }
+
+  private async ensureUdoBarkDecoded(ctx: AudioContext, url: string): Promise<AudioBuffer | null> {
+    if (this.udoBarkDecodedBuffer && this.udoBarkAudioUrl === url) {
+      return this.udoBarkDecodedBuffer;
+    }
+    if (this.udoBarkDecodePromise && this.udoBarkAudioUrl === url) {
+      return this.udoBarkDecodePromise;
+    }
+    const p = (async () => {
+      const bytes = await this.preloadUdoBarkBytes(url);
+      if (!bytes || this.udoBarkAudioUrl !== url) return null;
+      try {
+        const decoded = await this.decodeAudioBufferCompat(ctx, bytes);
+        if (this.udoBarkAudioUrl === url) {
+          this.udoBarkDecodedBuffer = decoded;
+        }
+        return decoded;
+      } catch {
+        return null;
+      } finally {
+        if (this.udoBarkAudioUrl === url && !this.udoBarkDecodedBuffer) {
+          this.udoBarkDecodePromise = null;
+        }
+      }
+    })();
+    this.udoBarkDecodePromise = p;
+    return p;
+  }
+
+  public unlock(): void {
+    const ctx = this.ensureContext();
+    this.primeReusableUdoBarkAudio();
+    if (this.udoBarkAudioUrl && typeof window !== 'undefined') {
+      const url = this.udoBarkAudioUrl;
+      if (ctx) {
+        void this.ensureUdoBarkDecoded(ctx, url);
+      } else if (!this.udoBarkRawBytes) {
+        void this.preloadUdoBarkBytes(url);
+      }
     }
   }
 
@@ -278,10 +445,20 @@ class ChessSoundEngine {
     const clean = url && url.trim().length > 0 ? url.trim() : null;
     if (clean === this.udoBarkAudioUrl) return;
     this.stopWildDogBarkLoop();
+    if (this.udoBarkBlobUrl) {
+      try {
+        URL.revokeObjectURL(this.udoBarkBlobUrl);
+      } catch {
+        // ignore
+      }
+      this.udoBarkBlobUrl = null;
+    }
     this.udoBarkAudioUrl = clean;
     this.udoBarkRawBytes = null;
     this.udoBarkDecodedBuffer = null;
     this.udoBarkFetchPromise = null;
+    this.udoBarkDecodePromise = null;
+    this.udoBarkReusableAudioUrl = null;
     if (clean && typeof window !== 'undefined') {
       void this.preloadUdoBarkBytes(clean);
     }
@@ -308,7 +485,7 @@ class ChessSoundEngine {
     const p = (async () => {
       for (const candidateUrl of candidates) {
         try {
-          const res = await fetch(candidateUrl, { cache: 'default' });
+          const res = await fetch(candidateUrl, { cache: 'default', credentials: 'same-origin' });
           if (!res.ok) continue;
           const ct = (res.headers.get('content-type') || '').toLowerCase();
           if (ct.includes('text/html')) continue;
@@ -316,6 +493,13 @@ class ChessSoundEngine {
           if (bytes.byteLength < 64) continue;
           if (this.udoBarkAudioUrl === url) {
             this.udoBarkRawBytes = bytes;
+            if (!this.udoBarkBlobUrl && typeof URL !== 'undefined' && typeof Blob !== 'undefined') {
+              try {
+                this.udoBarkBlobUrl = URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }));
+              } catch {
+                // ignore Blob creation error
+              }
+            }
           }
           return bytes;
         } catch {
@@ -341,25 +525,68 @@ class ChessSoundEngine {
     const cleanFallbackUrl = url.split('?')[0];
     const clampedPan = Math.max(-0.95, Math.min(0.95, initialPan));
 
-    const startHtmlLoop = (srcUrl = url, allowCleanFallback = true) => {
+    const startHtmlLoop = (srcCandidateIdx = 0) => {
       if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
+      const srcCandidates: string[] = [];
+      if (this.udoBarkBlobUrl) srcCandidates.push(this.udoBarkBlobUrl);
+      srcCandidates.push(url);
+      if (cleanFallbackUrl !== url) srcCandidates.push(cleanFallbackUrl);
+      const srcUrl = srcCandidates[srcCandidateIdx];
+      if (!srcUrl) {
+        // Every source blocked before first user gesture: arm instant replay on next tap/click while Udo runs
+        this.udoBarkPendingLoop = { seq, pan: clampedPan };
+        return;
+      }
+
       try {
-        const audio = new Audio(srcUrl);
+        // Prefer the pre-unlocked persistent HTMLAudioElement (bypasses iOS/macOS Safari & Android autoplay lock!)
+        const useReusable = Boolean(this.udoBarkReusableAudio);
+        const audio = this.udoBarkReusableAudio || new Audio();
         audio.loop = true;
         audio.preload = 'auto';
+        audio.muted = false;
         audio.volume = 0.92;
+        if (!useReusable || this.udoBarkReusableAudioUrl !== srcUrl) {
+          audio.src = srcUrl;
+          if (useReusable) {
+            this.udoBarkReusableAudioUrl = srcUrl;
+          }
+          try {
+            audio.load();
+          } catch {
+            // ignore
+          }
+        }
+        try {
+          audio.currentTime = 0;
+        } catch {
+          // ignore if metadata not yet loaded
+        }
         this.udoBarkLoopHtmlAudio = audio;
-        void audio.play().catch(() => {
-          if (this.udoBarkLoopHtmlAudio === audio) {
-            this.udoBarkLoopHtmlAudio = null;
-          }
-          if (allowCleanFallback && cleanFallbackUrl !== srcUrl) {
-            startHtmlLoop(cleanFallbackUrl, false);
-          }
-        });
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+          void playPromise
+            .then(() => {
+              this.udoBarkHtmlUnlocked = true;
+              this.udoBarkPendingLoop = null;
+            })
+            .catch(() => {
+              if (seq !== this.udoBarkLoopSeq) return;
+              if (this.udoBarkLoopHtmlAudio === audio) {
+                this.udoBarkLoopHtmlAudio = null;
+              }
+              if (srcCandidateIdx + 1 < srcCandidates.length) {
+                startHtmlLoop(srcCandidateIdx + 1);
+              } else {
+                this.udoBarkPendingLoop = { seq, pan: clampedPan };
+              }
+            });
+        }
       } catch {
-        if (allowCleanFallback && cleanFallbackUrl !== srcUrl) {
-          startHtmlLoop(cleanFallbackUrl, false);
+        if (srcCandidateIdx + 1 < srcCandidates.length) {
+          startHtmlLoop(srcCandidateIdx + 1);
+        } else {
+          this.udoBarkPendingLoop = { seq, pan: clampedPan };
         }
       }
     };
@@ -389,9 +616,10 @@ class ChessSoundEngine {
         this.udoBarkLoopSource = src;
         this.udoBarkLoopGain = gain;
         this.udoBarkLoopPanner = panner;
+        this.udoBarkPendingLoop = null;
         src.start(0);
       } catch {
-        startHtmlLoop();
+        startHtmlLoop(0);
       }
     };
 
@@ -403,42 +631,29 @@ class ChessSoundEngine {
 
     if (ctx) {
       void (async () => {
-        if (ctx.state === 'suspended') {
+        if (ctx.state !== 'running') {
           try {
             await ctx.resume();
           } catch {
-            // Fall through to HTMLAudio loop if AudioContext cannot resume
+            // Fall through to pre-unlocked HTMLAudio loop if AudioContext cannot resume
           }
         }
         if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
 
         if (ctx.state === 'running') {
-          if (this.udoBarkDecodedBuffer && this.udoBarkAudioUrl === url) {
-            startWebAudioLoop(ctx, this.udoBarkDecodedBuffer);
+          const decoded = await this.ensureUdoBarkDecoded(ctx, url);
+          if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
+          if (decoded) {
+            startWebAudioLoop(ctx, decoded);
             return;
           }
-          const bytes = await this.preloadUdoBarkBytes(url);
-          if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
-          if (bytes) {
-            try {
-              const decoded = await ctx.decodeAudioData(bytes.slice(0));
-              if (seq !== this.udoBarkLoopSeq || !this.enabled) return;
-              if (this.udoBarkAudioUrl === url) {
-                this.udoBarkDecodedBuffer = decoded;
-              }
-              startWebAudioLoop(ctx, decoded);
-              return;
-            } catch {
-              // Fall through to HTMLAudio loop (never synthesize over user's MP3)
-            }
-          }
         }
-        startHtmlLoop();
+        startHtmlLoop(0);
       })();
       return true;
     }
 
-    startHtmlLoop();
+    startHtmlLoop(0);
     return true;
   }
 
@@ -454,6 +669,7 @@ class ChessSoundEngine {
 
   public stopWildDogBarkLoop(): void {
     this.udoBarkLoopSeq++;
+    this.udoBarkPendingLoop = null;
     const src = this.udoBarkLoopSource;
     const gain = this.udoBarkLoopGain;
     const panner = this.udoBarkLoopPanner;
@@ -500,8 +716,8 @@ class ChessSoundEngine {
   }
 
   public previewUdoBarkAudio(durationMs = 2600): void {
+    this.unlock();
     if (!this.hasCustomUdoBarkAudio()) {
-      this.playWildDogBark(0, 1);
       return;
     }
     this.startWildDogBarkLoop(0);
@@ -524,8 +740,8 @@ class ChessSoundEngine {
       this.ctx = new Ctx();
       this.noiseBuffer = null;
     }
-    if (this.ctx.state === 'suspended') {
-      void this.ctx.resume();
+    if (this.ctx.state !== 'running') {
+      void this.ctx.resume().catch(() => {});
     }
     return this.ctx;
   }
